@@ -1,12 +1,14 @@
 use std::pin::Pin;
 use tokio_stream::{Stream, StreamExt};
-use crate::core::{AgentError, Message, Role, ToolCall, LlmConfig};
-use crate::core::agent::spec::AgentSpec;
-use crate::core::agent::registry::AgentRegistry;
-use crate::core::llm::LlmProvider;
+use crate::base::{AgentError, Role, ToolCall, LlmConfig};
+use crate::base::llm::Message;
+use crate::base::llm::MessageRole;
+use crate::base::agent::spec::AgentSpec;
+use crate::base::agent::registry::AgentRegistry;
+use crate::base::llm::LlmProvider;
 
 /// 智能体执行器，负责执行智能体的思考-行动-观察循环
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AgentExecutor {
     registry: AgentRegistry,
     llm_provider: Box<dyn LlmProvider>,
@@ -44,11 +46,13 @@ impl AgentExecutor {
 
         // 添加系统提示
         messages.push(Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            role: Role::System,
+            role: match Role::System {
+                Role::System => MessageRole::System,
+                Role::User => MessageRole::User,
+                Role::Assistant => MessageRole::Assistant,
+                Role::Tool => MessageRole::Assistant, // 或其他适当的映射
+            },
             content: agent_spec.system_prompt.clone(),
-            tool_calls: vec![],
-            timestamp: chrono::Utc::now().timestamp(),
         });
 
         // 添加用户输入
@@ -60,7 +64,7 @@ impl AgentExecutor {
     /// 运行思考-行动-观察循环
     async fn run_think_act_observe_loop(
         &self,
-        mut messages: Vec<Message>,
+        messages: Vec<Message>,
         agent_spec: AgentSpec,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>, AgentError> {
         // 配置 LLM
@@ -71,10 +75,21 @@ impl AgentExecutor {
         };
 
         // 执行 LLM 调用
-        let stream = self.llm_provider.chat_stream(messages.clone(), config).await?;
+        let chat_stream = self.llm_provider.chat_stream(messages.clone(), config).await?;
+        
+        // 将 ChatResponseChunk 流转换为 String 流
+        let string_stream = Box::pin(chat_stream.map(|result| {
+            match result {
+                Ok(chunk) => {
+                    match chunk.content {
+                        Some(content) => Ok(content),
+                        None => Ok("".to_string()),
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }));
 
-        // 处理 LLM 响应
-        // 这里简化处理，实际实现需要处理工具调用和多轮对话
-        Ok(stream)
+        Ok(string_stream)
     }
 }

@@ -1,13 +1,22 @@
-mod llm;
-mod agent;
-mod tool;
+// 👇 必须公开模块！否则外部(main.rs)无法访问
+pub mod llm;
+pub mod agent;
+pub mod tool;
 
+// 导出所有子模块内容
 pub use llm::*;
 pub use agent::*;
 pub use tool::*;
 
+// 导出通用依赖（方便全局使用）
+pub use serde::{Deserialize, Serialize};
+pub use serde_json;
+pub use std::collections::HashMap;
+pub use uuid;
+pub use chrono;
+
 // 通用类型定义
-type MessageId = String;
+pub type MessageId = String; // 👈 必须加 pub，否则外部无法使用
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Role {
@@ -33,10 +42,3 @@ pub enum AgentError {
     #[error("Task error: {0}")]
     TaskError(String),
 }
-
-// 导出必要的依赖
-pub use serde::{Deserialize, Serialize};
-pub use serde_json;
-pub use std::collections::HashMap;
-pub use uuid;
-pub use chrono;

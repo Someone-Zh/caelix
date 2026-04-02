@@ -3,8 +3,11 @@ use std::io::prelude::*;
 use std::path::Path;
 use serde_json::json;
 use super::Tool;
+use crate::base::AgentError;
+use serde::{Deserialize, Serialize};
 
 // 文件写入工具（包括创建路径）
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileWriteTool;
 
 impl FileWriteTool {
@@ -60,9 +63,14 @@ impl Tool for FileWriteTool {
             "message": format!("File written successfully: {}", file_path)
         }))
     }
+    
+    fn clone_box(&self) -> Box<dyn Tool> {
+        Box::new(FileWriteTool)
+    }
 }
 
 // 文件读取工具
+#[derive(Debug, Clone)]
 pub struct FileReadTool;
 
 impl FileReadTool {
@@ -106,9 +114,14 @@ impl Tool for FileReadTool {
             "content": content
         }))
     }
+    
+    fn clone_box(&self) -> Box<dyn Tool> {
+        Box::new(FileReadTool)
+    }
 }
 
 // 文件修改工具
+#[derive(Debug, Clone)]
 pub struct FileModifyTool;
 
 impl FileModifyTool {
@@ -161,5 +174,9 @@ impl Tool for FileModifyTool {
             "status": "success",
             "message": format!("File modified successfully: {}", file_path)
         }))
+    }
+    
+    fn clone_box(&self) -> Box<dyn Tool> {
+        Box::new(FileModifyTool)
     }
 }

@@ -3,10 +3,29 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use super::Tool;
 
-#[derive(Debug, Default)]
 pub struct ToolManager {
     tools: RwLock<HashMap<String, Arc<dyn Tool>>>,
 }
+
+impl std::fmt::Debug for ToolManager {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Only show the structure and tool names, not the tools themselves since they don't implement Debug
+            let tool_names = self.tools.try_read()
+                .map(|lock| lock.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            f.debug_struct("ToolManager")
+                .field("tool_names", &tool_names)
+                .finish()
+        }
+    }
+
+    impl Default for ToolManager {
+        fn default() -> Self {
+            Self {
+                tools: RwLock::new(HashMap::new()),
+            }
+        }
+    }
 
 impl ToolManager {
     pub fn new() -> Self {

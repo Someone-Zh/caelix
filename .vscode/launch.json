@@ -1,0 +1,25 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug executable 'caelix'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=caelix"
+                ],
+            },
+            "env": {
+                    "LLM_API_KEY": "sk-91fc2eba784440a8a8da6d2853378308",
+                    "LLM_API_BASE": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                    "LLM_API_MODEL": "qwen3.5-flash-2026-02-23",
+                },
+            "args": []
+        }
+    ]
+}
