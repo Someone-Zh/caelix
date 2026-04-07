@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::base::agent::spec::AgentSpec;
+use crate::base::agent::traits::AgentSpec;
 
 /// 智能体注册中心，负责维护所有智能体蓝图的索引
 #[derive(Debug, Clone)]

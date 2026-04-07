@@ -1,18 +1,24 @@
 use async_trait::async_trait;
-use crate::base::AgentError;
 use serde_json::Value as JsonValue;
 use serde::{Deserialize, Serialize};
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub output: String,
+    pub error: Option<String>,
+}
 
 #[async_trait]
 pub trait Tool: Send + Sync + std::fmt::Debug + 'static {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> JsonValue;
-    async fn execute(&self, input: JsonValue) -> Result<JsonValue, AgentError>;
+    async fn execute(&self, input: JsonValue) -> ToolResult;
 
     // 克隆方法（必须手动实现，但我们有简化写法）
     fn clone_box(&self) -> Box<dyn Tool>;
-    
+
     fn to_definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),

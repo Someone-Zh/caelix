@@ -2,7 +2,7 @@ use std::pin::Pin;
 use tokio_stream::{Stream, StreamExt};
 use crate::base::{AgentError, LlmConfig};
 use crate::base::llm::ChatMessage;
-use crate::base::agent::spec::AgentSpec;
+use crate::base::agent::traits::AgentSpec;
 use crate::base::agent::registry::AgentRegistry;
 use crate::base::llm::LlmProvider;
 use crate::base::tool::ToolDefinition;

@@ -1,6 +1,6 @@
 mod base;
 use base::llm::*;
-use base::tool::*;
+use base::tool::DiffEditTool;
 use std::env;
 use tokio_stream::StreamExt;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ async fn main() {
         model_name: model_name,
     };
     
-    TOOL_MANAGER.register(Arc::new(FileWriteTool::new())).await;
+    TOOL_MANAGER.register(Arc::new(DiffEditTool)).await;
     let tools = TOOL_MANAGER.list().await.into_iter().map(|tool| tool.to_definition()).collect::<Vec<_>>();
 
     // 调用流式接口（修复所有参数/语法/异步错误）
