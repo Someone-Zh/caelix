@@ -3,43 +3,82 @@ use std::pin::Pin;
 use tokio_stream::Stream;
 use serde::{Deserialize, Serialize};
 use crate::base::AgentError;
+use crate::base::tool::{ToolCall,ToolDefinition};
 /// LLM (Large Language Model) 相关的核心数据结构和接口定义
 /// 对应架构：第一层 - 核心层
 /// 该模块定义了与LLM交互所需的基本数据类型和抽象接口
 
+
 /// 消息角色枚举
 /// 定义了在对话中不同参与者的角色
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MessageRole {
-    /// 用户角色，代表用户输入的消息
-    User,
-    /// 助手角色，代表AI助手的回复
-    Assistant,
-    /// 系统角色，代表系统级别的指令或上下文信息
-    System,
-}
-
-/// 消息结构体
-/// 表示对话中的一条消息，包含角色和内容
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    /// 消息发送者的角色
-    pub role: MessageRole,
-    /// 消息的具体内容
+pub struct ChatMessage {
+    pub role: String,
     pub content: String,
 }
 
-/// 工具调用结构体
-/// 表示LLM请求调用外部工具的指令
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    /// 工具调用的唯一标识符
-    pub id: String,
-    /// 要调用的工具名称
-    pub name: String,
-    /// 调用工具时传递的参数，以JSON格式表示
-    pub arguments: serde_json::Value,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")] 
+pub enum MessageRole {
+    System,
+    User,
+    Assistant,
+    Tool,
 }
+impl MessageRole {
+    // 枚举转字符串（核心方法）
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MessageRole::System => "system",
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "tool",
+        }
+    }
+
+    // 可选：字符串转枚举（校验用，防止非法值）
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "system" => Some(MessageRole::System),
+            "user" => Some(MessageRole::User),
+            "assistant" => Some(MessageRole::Assistant),
+            "tool" => Some(MessageRole::Tool),
+            _ => None,
+        }
+    }
+}
+
+impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System.as_str().into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::User.as_str().into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::Assistant.as_str().into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn tool(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::Tool.as_str().into(),
+            content: content.into(),
+        }
+    }
+}
+
+
 
 /// 聊天响应结构体
 /// 表示LLM的完整响应，包含生成的内容或工具调用
@@ -47,10 +86,23 @@ pub struct ToolCall {
 pub struct ChatResponse {
     /// 生成的文本内容，可能为None（当响应仅包含工具调用时）
     pub content: Option<String>,
+    /// 思考过程，可能为None
+    pub reasoning_content: Option<String>,
     /// 响应的唯一标识符
     pub id: String,
     /// 工具调用列表，可能为None（当响应仅包含文本内容时）
-    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_calls: Vec<ToolCall>,
+}
+impl ChatResponse {
+    /// 判断是否有工具调用列表
+    pub fn has_tool_calls(&self) -> bool {
+        !self.tool_calls.is_empty()
+    }
+
+    /// 获取生成的文本内容，若为空则返回空字符串
+    pub fn get_content(&self) -> &str {
+        self.content.as_deref().unwrap_or("")
+    }
 }
 
 /// 聊天响应块结构体
@@ -74,33 +126,13 @@ pub struct ChatResponseChunk {
 pub trait LlmProvider: Send + Sync + std::fmt::Debug {
     /// 流式对话接口
     /// 用于实时获取LLM的生成结果，提供更好的用户体验
-    /// 
-    /// # 参数
-    /// - `messages`: 对话历史消息列表
-    /// - `config`: LLM配置参数
-    /// 
-    /// # 返回值
-    /// - `Result`: 包含流式响应的结果，每个流项是一个`ChatResponseChunk`
     async fn chat_stream(
         &self,
-        messages: Vec<Message>,
+        messages: &[ChatMessage],
+        _tools: &[ToolDefinition],
         config: LlmConfig,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>, AgentError>;
     
-    /// 非流式对话接口
-    /// 用于一次性获取LLM的完整响应
-    /// 
-    /// # 参数
-    /// - `messages`: 对话历史消息列表
-    /// - `config`: LLM配置参数
-    /// 
-    /// # 返回值
-    /// - `Result`: 包含完整`ChatResponse`的结果
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        config: LlmConfig,
-    ) -> Result<ChatResponse, AgentError>;
 }
 
 /// LLM配置结构体

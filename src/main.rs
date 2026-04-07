@@ -1,6 +1,11 @@
 mod base;
 use base::llm::*;
+use base::tool::*;
 use std::env;
+use tokio_stream::StreamExt;
+use std::sync::Arc;
+
+use crate::base::tool::manager::TOOL_MANAGER;
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +21,7 @@ async fn main() {
     // 创建LLM提供者配置
     let config = LlmProviderConfig {
         name: "openai".to_string(),
-        r#type: LlmType::OpenAI,
+        llm_type: LlmType::OpenAI,
         api_key,
         base_url,
         models: std::collections::HashMap::from([
@@ -37,33 +42,42 @@ async fn main() {
 
     // 构建测试消息
     let messages = vec![
-        Message {
-            role: MessageRole::User,
-            content: "Hello, what's your name?".to_string(),
-        }
+        ChatMessage::user("今天天气怎么样"),
     ];
 
     // 构建LLM配置
     let llm_config = LlmConfig {
         temperature: 0.7,
-        max_tokens: Some(100),
-        model_name: "default".to_string(),
+        max_tokens: Some(1000),
+        model_name: model_name,
     };
+    
+    TOOL_MANAGER.register(Arc::new(FileWriteTool::new())).await;
+    let tools = TOOL_MANAGER.list().await.into_iter().map(|tool| tool.to_definition()).collect::<Vec<_>>();
 
-    // 调用LLM
-    match provider.chat(messages, llm_config).await {
-        Ok(response) => {
-            println!("Response ID: {}", response.id);
-            if let Some(content) = response.content {
-                println!("Response content: {}", content);
-            } else {
-                println!("No content in response");
+    // 调用流式接口（修复所有参数/语法/异步错误）
+    let mut stream = provider.chat_stream(&messages, &tools, llm_config).await.expect("Failed to start chat stream");
+
+    // 遍历并打印流式响应
+    println!("AI 回复：");
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(chunk) => {
+                // 打印文本内容
+                if let Some(content) = chunk.content {
+                    print!("{}", content);
+                    std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                }
+                // 打印工具调用
+                if let Some(tool_calls) = chunk.tool_calls {
+                    println!("\n[工具调用] {:?}", tool_calls);
+                }
             }
-        }
-        Err(e) => {
-            println!("Error calling LLM: {:?}", e);
+            Err(e) => {
+                eprintln!("\n流式响应错误: {}", e);
+            }
         }
     }
 
-    println!("\nLLM test completed!");
+    println!("\n\nLLM test completed!");
 }

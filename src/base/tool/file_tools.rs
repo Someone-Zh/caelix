@@ -5,6 +5,7 @@ use serde_json::json;
 use super::Tool;
 use crate::base::AgentError;
 use serde::{Deserialize, Serialize};
+use std::fs;
 
 // 文件写入工具（包括创建路径）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,4 +180,107 @@ impl Tool for FileModifyTool {
     fn clone_box(&self) -> Box<dyn Tool> {
         Box::new(FileModifyTool)
     }
+}
+
+// 文件列表工具
+#[derive(Debug, Clone)]
+pub struct FileListTool;
+
+impl FileListTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for FileListTool {
+    fn name(&self) -> &str {
+        "file_list"
+    }
+
+    fn description(&self) -> &str {
+        "List files and directories in a folder with depth parameter. Default depth is 1."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path to the directory to list"
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "The depth to traverse, default is 1",
+                    "default": 1
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value, AgentError> {
+        let path = input["path"].as_str().unwrap_or(".");
+        let depth = input["depth"].as_i64().unwrap_or(1) as usize;
+
+        let entries = list_directory_contents(path, depth)?;
+
+        Ok(json!({
+            "status": "success",
+            "path": path,
+            "depth": depth,
+            "entries": entries
+        }))
+    }
+    
+    fn clone_box(&self) -> Box<dyn Tool> {
+        Box::new(FileListTool)
+    }
+}
+
+// 辅助函数：递归列出目录内容
+fn list_directory_contents(path: &str, max_depth: usize) -> Result<Vec<serde_json::Value>, AgentError> {
+    let mut entries = Vec::new();
+    
+    if max_depth == 0 {
+        return Ok(entries);
+    }
+    
+    let dir_entries = fs::read_dir(path).map_err(|e| AgentError::ToolError(format!("Failed to read directory {}: {}", path, e)))?;
+    
+    for entry in dir_entries {
+        let entry = entry.map_err(|e| AgentError::ToolError(format!("Failed to read entry: {}", e)))?;
+        let file_type = entry.file_type().map_err(|e| AgentError::ToolError(format!("Failed to get file type: {}", e)))?;
+        let file_name = entry.file_name();
+        
+        let entry_info = if file_type.is_file() {
+            json!({
+                "name": file_name.to_string_lossy(),
+                "type": "file",
+                "path": entry.path().to_string_lossy()
+            })
+        } else if file_type.is_dir() {
+            let sub_entries = list_directory_contents(
+                &entry.path().to_string_lossy(), 
+                max_depth - 1
+            )?;
+            json!({
+                "name": file_name.to_string_lossy(),
+                "type": "directory",
+                "path": entry.path().to_string_lossy(),
+                "contents": sub_entries
+            })
+        } else {
+            json!({
+                "name": file_name.to_string_lossy(),
+                "type": "other",
+                "path": entry.path().to_string_lossy()
+            })
+        };
+        
+        entries.push(entry_info);
+    }
+    
+    Ok(entries)
 }

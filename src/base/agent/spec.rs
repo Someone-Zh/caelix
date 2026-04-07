@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use crate::base::tool::traits::ToolDefinition;
 use crate::base::Tool;
 
 // ==============================
@@ -13,12 +14,7 @@ pub struct AgentSpec {
     pub tool_definitions: Vec<ToolDefinition>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters_schema: JsonValue,
-}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMetadata {

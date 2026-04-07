@@ -22,7 +22,7 @@ pub struct LlmProviderConfig {
     /// 提供者名称，用于在管理器中标识
     pub name: String,
     /// LLM服务类型
-    pub r#type: LlmType,
+    pub llm_type: LlmType,
     /// API密钥，用于验证身份
     pub api_key: String,
     /// 基础URL，用于自定义API端点
@@ -61,12 +61,11 @@ impl LlmProviderManager {
     /// # 返回值
     /// - `Result<(), AgentError>`: 操作结果
     pub fn add_provider(&mut self, config: LlmProviderConfig) -> Result<(), AgentError> {
-        let provider: Box<dyn LlmProvider> = match config.r#type {
+        let provider: Box<dyn LlmProvider> = match config.llm_type {
             LlmType::OpenAI => {
                 Box::new(OpenAIProvider::new(
                     config.api_key,
                     config.base_url,
-                    config.models,
                 ))
             }
         };
