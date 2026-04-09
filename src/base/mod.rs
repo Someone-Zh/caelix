@@ -1,10 +1,11 @@
 // 👇 必须公开模块！否则外部(main.rs)无法访问
-pub mod llm;
 pub mod agent;
 pub mod tool;
+pub mod provider;
+
 
 // 导出所有子模块内容
-pub use llm::*;
+pub use provider::*;
 pub use agent::*;
 pub use tool::*;
 

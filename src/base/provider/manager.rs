@@ -18,7 +18,7 @@ pub enum LlmType {
 /// LLM提供者配置结构体
 /// 定义了LLM提供者的配置信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmProviderConfig {
+pub struct ProviderConfig {
     /// 提供者名称，用于在管理器中标识
     pub name: String,
     /// LLM服务类型
@@ -28,6 +28,8 @@ pub struct LlmProviderConfig {
     /// 基础URL，用于自定义API端点
     /// 为None时使用默认URL
     pub base_url: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f64>,
     /// 模型映射，将通用模型名称映射到具体服务的模型名称
     pub models: HashMap<String, String>,
     /// 额外选项，以JSON格式存储
@@ -37,12 +39,12 @@ pub struct LlmProviderConfig {
 /// LLM提供者管理器
 /// 用于管理和访问不同的LLM提供者
 #[derive(Debug)]
-pub struct LlmProviderManager {
+pub struct ProviderManager {
     /// 存储提供者的哈希映射，键为提供者名称
     providers: HashMap<String, Box<dyn LlmProvider>>,
 }
 
-impl LlmProviderManager {
+impl ProviderManager {
     /// 创建新的LLM提供者管理器
     /// 
     /// # 返回值
@@ -60,7 +62,7 @@ impl LlmProviderManager {
     /// 
     /// # 返回值
     /// - `Result<(), AgentError>`: 操作结果
-    pub fn add_provider(&mut self, config: LlmProviderConfig) -> Result<(), AgentError> {
+    pub fn add_provider(&mut self, config: ProviderConfig) -> Result<(), AgentError> {
         let provider: Box<dyn LlmProvider> = match config.llm_type {
             LlmType::OpenAI => {
                 Box::new(OpenAIProvider::new(

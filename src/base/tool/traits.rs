@@ -28,6 +28,7 @@ pub trait Tool: Send + Sync + std::fmt::Debug + 'static {
     }
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,

@@ -1,7 +1,7 @@
 mod traits;
-mod registry;
+mod manager;
 mod executor;
 
 pub use traits::AgentSpec;
-pub use registry::AgentRegistry;
+pub use manager::AgentManager;
 pub use executor::AgentExecutor;
