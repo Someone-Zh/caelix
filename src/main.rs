@@ -5,12 +5,14 @@ use tokio_stream::StreamExt;
 use std::sync::Arc;
 mod config;
 use crate::config::CaelixContext;
+mod enhancement;
+use enhancement::agents;
 
 #[tokio::main]
 async fn main() {
     // 使用CaelixContext初始化
     let context = CaelixContext::new();
-    
+    agents::register_all_agents(&context).await.expect("Failed to register all agents");
     // 初始化提供商配置
     context.init_provider().await.expect("Failed to initialize provider");
     

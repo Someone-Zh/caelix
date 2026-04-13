@@ -1,4 +1,3 @@
-// 👇 必须公开模块！否则外部(main.rs)无法访问
 pub mod agent;
 pub mod tool;
 pub mod provider;
@@ -11,13 +10,9 @@ pub use tool::*;
 
 // 导出通用依赖（方便全局使用）
 pub use serde::{Deserialize, Serialize};
-pub use serde_json;
-pub use std::collections::HashMap;
-pub use uuid;
-pub use chrono;
 
 // 通用类型定义
-pub type MessageId = String; // 👈 必须加 pub，否则外部无法使用
+pub type MessageId = String; 
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Role {

@@ -1,40 +1,10 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::fs::read_to_string;
 use tokio::process::Command;
 use walkdir::WalkDir;
-
-// ====================== 你已有的定义 ======================
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    pub output: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters_schema: JsonValue,
-}
-
-#[async_trait]
-pub trait Tool: Send + Sync + std::fmt::Debug + 'static {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn parameters_schema(&self) -> JsonValue;
-    async fn execute(&self, input: JsonValue) -> ToolResult;
-    fn clone_box(&self) -> Box<dyn Tool>;
-
-    fn to_definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            parameters_schema: self.parameters_schema(),
-        }
-    }
-}
+use crate::base::tool::ToolResult;
+use crate::base::tool::Tool;
 
 // ====================== 智能搜索工具（零新增依赖） ======================
 /// 全局文件搜索：优先使用ripgrep，无rg时自动降级为原生搜索

@@ -1,11 +1,11 @@
-use super::spec::AgentSpec;
-use super::spec::AgentMetadata;
-use crate::core::tool::file_tools::FileReadTool;
-use crate::core::tool::file_tools::FileWriteTool;
-use crate::core::tool::file_tools::FileModifyTool;
+
+use crate::base::agent::AgentRegistryError;
+use crate::base::agent::AgentSpec;
+use crate::config::CaelixContext;
+use crate::base::ToolManager;
 
 /// 创建规划专家智能体
-pub fn create_planner_agent() -> AgentSpec {
+pub async  fn create_planner_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的规划专家，擅长将复杂任务拆解为可执行的子任务。
 
@@ -24,30 +24,24 @@ pub fn create_planner_agent() -> AgentSpec {
 - 为不同类型的子任务选择合适的执行者
 - 提供清晰的任务描述和执行顺序
 "#;
-
+    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
+    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
+    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
     let tools = vec![
-        Box::new(FileReadTool::new()),
-        Box::new(FileWriteTool::new()),
-        Box::new(FileModifyTool::new()),
+        diff_edit_tool,
+        global_file_search_tool,
+        directory_tree_tool,
     ];
-
-    let metadata = AgentMetadata {
-        description: "规划专家，负责将任务拆分为多个原子的子任务，并根据任务复杂度分配给不同的专家处理".to_string(),
-        version: "1.0.0".to_string(),
-        author: Some("Caelix Team".to_string()),
-        tags: vec!["planner", "task分解", "任务规划"],
-    };
 
     AgentSpec::new(
         "planner_agent".to_string(),
-        metadata,
         system_prompt.to_string(),
         tools,
     )
 }
 
 /// 创建收集专家智能体
-pub fn create_collector_agent() -> AgentSpec {
+pub async fn create_collector_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的收集专家，擅长根据任务信息收集相关的外部信息。
 
@@ -64,27 +58,24 @@ pub fn create_collector_agent() -> AgentSpec {
 - 确保信息的时效性和可靠性
 "#;
 
+    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
+    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
+    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
     let tools = vec![
-        Box::new(FileReadTool::new()),
+        diff_edit_tool,
+        global_file_search_tool,
+        directory_tree_tool,
     ];
-
-    let metadata = AgentMetadata {
-        description: "收集专家，负责根据任务信息收集相关的代码、文档等外部信息".to_string(),
-        version: "1.0.0".to_string(),
-        author: Some("Caelix Team".to_string()),
-        tags: vec!["collector", "信息收集", "数据获取"],
-    };
 
     AgentSpec::new(
         "collector_agent".to_string(),
-        metadata,
         system_prompt.to_string(),
         tools,
     )
 }
 
 /// 创建架构专家智能体
-pub fn create_architecture_agent() -> AgentSpec {
+pub async fn create_architecture_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的架构专家，擅长为大型任务设计架构图和具体的子任务。
 
@@ -104,27 +95,24 @@ pub fn create_architecture_agent() -> AgentSpec {
 - 确保子任务的粒度适当，便于执行和管理
 "#;
 
+    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
+    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
+    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
     let tools = vec![
-        Box::new(FileWriteTool::new()),
+        diff_edit_tool,
+        global_file_search_tool,
+        directory_tree_tool,
     ];
-
-    let metadata = AgentMetadata {
-        description: "架构专家，负责为大型任务设计架构图和具体的子任务分解".to_string(),
-        version: "1.0.0".to_string(),
-        author: Some("Caelix Team".to_string()),
-        tags: vec!["architecture", "架构设计", "任务分解"],
-    };
 
     AgentSpec::new(
         "architecture_agent".to_string(),
-        metadata,
         system_prompt.to_string(),
         tools,
     )
 }
 
 /// 创建代码操作执行者智能体
-pub fn create_code_executor_agent() -> AgentSpec {
+pub async fn create_code_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的代码操作执行者，擅长执行与代码相关的任务。
 
@@ -141,29 +129,23 @@ pub fn create_code_executor_agent() -> AgentSpec {
 - 提供清晰的执行结果反馈
 "#;
 
+    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
+    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
+    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
     let tools = vec![
-        Box::new(FileReadTool::new()),
-        Box::new(FileWriteTool::new()),
-        Box::new(FileModifyTool::new()),
+        diff_edit_tool,
+        global_file_search_tool,
+        directory_tree_tool,
     ];
-
-    let metadata = AgentMetadata {
-        description: "代码操作执行者，负责执行与代码相关的任务，拥有文件系统权限和工具".to_string(),
-        version: "1.0.0".to_string(),
-        author: Some("Caelix Team".to_string()),
-        tags: vec!["executor", "code", "文件操作"],
-    };
-
     AgentSpec::new(
         "code_executor_agent".to_string(),
-        metadata,
         system_prompt.to_string(),
         tools,
     )
 }
 
 /// 创建浏览器操作执行者智能体
-pub fn create_browser_executor_agent() -> AgentSpec {
+pub async  fn create_browser_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的浏览器操作执行者，擅长执行与浏览器相关的任务。
 
@@ -180,25 +162,24 @@ pub fn create_browser_executor_agent() -> AgentSpec {
 - 提供清晰的执行结果反馈
 "#;
 
-    let tools = vec![];
-
-    let metadata = AgentMetadata {
-        description: "浏览器操作执行者，负责执行与浏览器相关的任务".to_string(),
-        version: "1.0.0".to_string(),
-        author: Some("Caelix Team".to_string()),
-        tags: vec!["executor", "browser", "网页操作"],
-    };
+    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
+    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
+    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
+    let tools = vec![
+        diff_edit_tool,
+        global_file_search_tool,
+        directory_tree_tool,
+    ];
 
     AgentSpec::new(
         "browser_executor_agent".to_string(),
-        metadata,
         system_prompt.to_string(),
         tools,
     )
 }
 
 /// 创建UI操作执行者智能体
-pub fn create_ui_executor_agent() -> AgentSpec {
+pub  fn create_ui_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的UI操作执行者，擅长执行与UI相关的任务。
 
@@ -217,28 +198,22 @@ pub fn create_ui_executor_agent() -> AgentSpec {
 
     let tools = vec![];
 
-    let metadata = AgentMetadata {
-        description: "UI操作执行者，负责执行与UI相关的任务".to_string(),
-        version: "1.0.0".to_string(),
-        author: Some("Caelix Team".to_string()),
-        tags: vec!["executor", "ui", "界面操作"],
-    };
-
     AgentSpec::new(
         "ui_executor_agent".to_string(),
-        metadata,
         system_prompt.to_string(),
         tools,
     )
 }
 
 /// 注册所有角色智能体到注册中心
-pub async fn register_all_agents(registry: &crate::core::agent::AgentRegistry) -> Result<(), crate::core::agent::registry::AgentRegistryError> {
-    registry.register(create_planner_agent()).await?;
-    registry.register(create_collector_agent()).await?;
-    registry.register(create_architecture_agent()).await?;
-    registry.register(create_code_executor_agent()).await?;
-    registry.register(create_browser_executor_agent()).await?;
-    registry.register(create_ui_executor_agent()).await?;
+pub async fn register_all_agents(context: &CaelixContext) -> Result<(), AgentRegistryError> {
+    let agent_manager = context.agent_manager.clone();
+    let tool_manager = context.tool_manager.clone();
+    agent_manager.register(create_planner_agent(&tool_manager).await).await?;
+    agent_manager.register(create_collector_agent(&tool_manager).await).await?;
+    agent_manager.register(create_architecture_agent(&tool_manager).await).await?;
+    agent_manager.register(create_code_executor_agent(&tool_manager).await).await?;
+    agent_manager.register(create_browser_executor_agent(&tool_manager).await).await?;
+    agent_manager.register(create_ui_executor_agent(&tool_manager)).await?;
     Ok(())
 }
