@@ -2,6 +2,7 @@ use crate::base::provider::*;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::base::AgentError;
+use std::sync::Arc;
 
 /// LLM提供者管理器模块
 /// 对应架构：第一层 - 核心层
@@ -42,6 +43,8 @@ pub struct ProviderConfig {
 pub struct ProviderManager {
     /// 存储提供者的哈希映射，键为提供者名称
     providers: HashMap<String, Box<dyn LlmProvider>>,
+    configs: HashMap<String, Arc<ProviderConfig>>,
+
 }
 
 impl ProviderManager {
@@ -52,6 +55,7 @@ impl ProviderManager {
     pub fn new() -> Self {
         Self {
             providers: HashMap::new(),
+            configs: HashMap::new(),
         }
     }
     
@@ -63,16 +67,19 @@ impl ProviderManager {
     /// # 返回值
     /// - `Result<(), AgentError>`: 操作结果
     pub fn add_provider(&mut self, config: ProviderConfig) -> Result<(), AgentError> {
+        let name = config.name.clone();
+        let api_key = config.api_key.clone();
+        let base_url = config.base_url.clone();
         let provider: Box<dyn LlmProvider> = match config.llm_type {
             LlmType::OpenAI => {
                 Box::new(OpenAIProvider::new(
-                    config.api_key,
-                    config.base_url,
+                    api_key,
+                    base_url,
                 ))
             }
         };
-        
-        self.providers.insert(config.name, provider);
+        self.configs.insert(name.clone(), config.into());
+        self.providers.insert(name, provider);
         Ok(())
     }
     
@@ -86,15 +93,7 @@ impl ProviderManager {
     pub fn get_provider(&self, name: &str) -> Option<&Box<dyn LlmProvider>> {
         self.providers.get(name)
     }
-    
-    /// 获取LLM提供者（可变引用）
-    /// 
-    /// # 参数
-    /// - `name`: 提供者名称
-    /// 
-    /// # 返回值
-    /// - `Option<&mut Box<dyn LlmProvider>>`: 提供者的可变引用，如不存在则为None
-    pub fn get_provider_mut(&mut self, name: &str) -> Option<&mut Box<dyn LlmProvider>> {
-        self.providers.get_mut(name)
+    pub fn get_config(&self, name: &str) -> Option<&Arc<ProviderConfig>> {
+        self.configs.get(name)
     }
 }

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use crate::base::Tool;
@@ -7,8 +6,6 @@ use crate::base::Tool;
 pub struct ToolManager {
     tools: RwLock<HashMap<String, Arc<dyn Tool>>>,
 }
-
-pub static TOOL_MANAGER: LazyLock<ToolManager> = LazyLock::new(|| ToolManager::new());
 
 impl std::fmt::Debug for ToolManager {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

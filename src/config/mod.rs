@@ -1,5 +1,5 @@
 pub mod provider_loader;
 pub mod context;
-
-pub use provider_loader::*;
+mod tools_loader;
+mod agents_loader;
 pub use context::*;
