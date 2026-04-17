@@ -1,4 +1,5 @@
 mod base;
+mod manager;
 use base::provider::*;
 use base::tool::DiffEditTool;
 use tokio_stream::StreamExt;

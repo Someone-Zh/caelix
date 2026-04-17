@@ -1,4 +1,4 @@
-use super::*;
+use crate::base::provider::*;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::base::AgentError;

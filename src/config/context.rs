@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::base::AgentManager;
-use crate::base::ToolManager;
-use crate::base::ProviderManager;
+use crate::manager::AgentManager;
+use crate::manager::ToolManager;
+use crate::manager::ProviderManager;
 use crate::config::provider_loader::load_provider_configs;
 
 /// 项目上下文对象

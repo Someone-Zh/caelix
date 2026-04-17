@@ -1,8 +1,8 @@
 
-use crate::base::agent::AgentRegistryError;
+use crate::manager::AgentRegistryError;
 use crate::base::agent::AgentSpec;
 use crate::config::CaelixContext;
-use crate::base::ToolManager;
+use crate::manager::ToolManager;
 
 /// 创建规划专家智能体
 pub async  fn create_planner_agent(tool_manager: &ToolManager) -> AgentSpec {
@@ -179,7 +179,7 @@ pub async  fn create_browser_executor_agent(tool_manager: &ToolManager) -> Agent
 }
 
 /// 创建UI操作执行者智能体
-pub  fn create_ui_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
+pub async fn create_ui_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的UI操作执行者，擅长执行与UI相关的任务。
 
@@ -195,9 +195,14 @@ pub  fn create_ui_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
 - 处理执行过程中遇到的问题
 - 提供清晰的执行结果反馈
 "#;
-
-    let tools = vec![];
-
+    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
+    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
+    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
+    let tools = vec![
+        diff_edit_tool,
+        global_file_search_tool,
+        directory_tree_tool,
+    ];
     AgentSpec::new(
         "ui_executor_agent".to_string(),
         system_prompt.to_string(),
@@ -214,6 +219,6 @@ pub async fn register_all_agents(context: &CaelixContext) -> Result<(), AgentReg
     agent_manager.register(create_architecture_agent(&tool_manager).await).await?;
     agent_manager.register(create_code_executor_agent(&tool_manager).await).await?;
     agent_manager.register(create_browser_executor_agent(&tool_manager).await).await?;
-    agent_manager.register(create_ui_executor_agent(&tool_manager)).await?;
+    agent_manager.register(create_ui_executor_agent(&tool_manager).await).await?;
     Ok(())
 }

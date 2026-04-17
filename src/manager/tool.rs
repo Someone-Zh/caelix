@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use super::Tool;
+use crate::base::Tool;
 
 pub struct ToolManager {
     tools: RwLock<HashMap<String, Arc<dyn Tool>>>,

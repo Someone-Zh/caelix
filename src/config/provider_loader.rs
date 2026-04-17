@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use crate::base::provider::ProviderConfig;
+use crate::manager::ProviderConfig;
 /// Provider配置结
 
 /// 从环境变量或默认位置获取CAELIX_HOME路径

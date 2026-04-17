@@ -1,6 +1,3 @@
-mod traits;
-mod manager;
+pub mod traits;
 
 pub use traits::AgentSpec;
-pub use manager::AgentManager;
-pub use manager::AgentRegistryError;
