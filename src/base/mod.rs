@@ -5,7 +5,6 @@ pub mod provider;
 
 // 导出所有子模块内容
 pub use provider::*;
-pub use agent::*;
 pub use tool::*;
 
 // 导出通用依赖（方便全局使用）

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use crate::manager::ProviderConfig;
+use crate::base::ProviderConfig;
 /// Provider配置结
 
 /// 从环境变量或默认位置获取CAELIX_HOME路径
@@ -35,7 +35,13 @@ pub fn load_provider_configs() -> Result<HashMap<String, ProviderConfig>, Box<dy
     
     // 读取配置文件
     let content = fs::read_to_string(provider_config_path)?;
-    let configs: HashMap<String, ProviderConfig> = serde_json::from_str(&content)?;
+    let configs: HashMap<String, ProviderConfig> = match serde_json::from_str(&content) {
+        Ok(configs) => configs,
+        Err(e) =>{
+            eprintln!("❌ 解析 provider.json 失败: {}", e);
+            return Err(Box::new(e));
+        }
+    }; 
     
     Ok(configs)
 }

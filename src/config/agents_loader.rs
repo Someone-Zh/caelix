@@ -127,6 +127,7 @@ pub async fn create_code_executor_agent(tool_manager: &ToolManager) -> AgentSpec
 - 确保代码操作符合要求
 - 处理执行过程中遇到的问题
 - 提供清晰的执行结果反馈
+- 当工具执行失败时，可以尝试别的方法但是最多3次都失败则结束
 "#;
 
     let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();

@@ -37,7 +37,10 @@ impl CaelixContext {
         let configs = load_provider_configs()?;
         
         let mut provider_manager = self.llm_provider_manager.write().await;
-        for (_, config) in configs {
+        for (key,mut config) in configs {
+            if config.name.is_empty() {
+                config.name = key
+            }
             provider_manager.add_provider(config)?;
         }
         

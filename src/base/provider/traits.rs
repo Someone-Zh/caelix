@@ -4,6 +4,9 @@ use tokio_stream::Stream;
 use serde::{Deserialize, Serialize};
 use crate::base::AgentError;
 use crate::base::tool::{ToolCall,ToolDefinition};
+use std::sync::Arc;
+use std::collections::HashMap;
+
 /// LLM (Large Language Model) 相关的核心数据结构和接口定义
 /// 对应架构：第一层 - 核心层
 /// 该模块定义了与LLM交互所需的基本数据类型和抽象接口
@@ -109,6 +112,8 @@ impl ChatResponse {
 /// 用于流式输出时的部分响应，包含增量内容或工具调用
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponseChunk {
+    /// 思考信息
+    pub reasoning_content: Option<String>,
     /// 增量生成的文本内容，可能为None
     pub content: Option<String>,
     /// 响应的唯一标识符（与完整响应相同）
@@ -124,27 +129,65 @@ pub struct ChatResponseChunk {
 /// 对应架构：第一层 - 核心层
 #[async_trait]
 pub trait LlmProvider: Send + Sync + std::fmt::Debug {
+
+    fn config(&self) -> Arc<ProviderConfig>;
+
     /// 流式对话接口
     /// 用于实时获取LLM的生成结果，提供更好的用户体验
     async fn chat_stream(
         &self,
         messages: &[ChatMessage],
         _tools: &[ToolDefinition],
-        config: LlmConfig,
+        config: &LlmConfig,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>, AgentError>;
     
+}
+
+
+/// LLM类型枚举
+/// 定义了支持的LLM服务类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LlmType {
+    /// OpenAI服务
+    OpenAI,
+}
+
+/// LLM提供者配置结构体
+/// 定义了LLM提供者的配置信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// 提供者名称，用于在管理器中标识
+    pub name: String,
+    /// LLM服务类型
+    pub llm_type: LlmType,
+    /// API密钥，用于验证身份
+    pub api_key: String,
+    /// 基础URL，用于自定义API端点
+    /// 为None时使用默认URL
+    pub base_url: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    /// 模型映射，将通用模型名称映射到具体服务的模型名称
+    pub models: HashMap<String, String>,
+    /// 额外选项，以JSON格式存储
+    pub options: serde_json::Value,
+}
+
+impl ProviderConfig {
+
+    pub fn default_model(&self) -> &str {
+        self.models
+            .values()
+            .next()
+            .map(|s| s.as_str())
+            .unwrap_or("")
+    }
 }
 
 /// LLM配置结构体
 /// 定义了与LLM交互时的配置参数
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// 生成文本的温度参数，控制输出的随机性
-    /// 值越高，输出越随机；值越低，输出越确定
-    pub temperature: f32,
-    /// 最大生成令牌数，限制输出长度
-    /// 为None时使用模型默认值
-    pub max_tokens: Option<u32>,
     /// 使用的模型名称
     pub model_name: String,
 }
