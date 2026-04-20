@@ -134,7 +134,7 @@ pub async fn create_code_executor_agent(tool_manager: &ToolManager) -> AgentSpec
     let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
     let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
     let tools = vec![
-        diff_edit_tool,
+        // diff_edit_tool,
         global_file_search_tool,
         directory_tree_tool,
     ];

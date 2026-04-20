@@ -1,7 +1,8 @@
 use crate::base::{AgentError, LlmConfig};
 use crate::base::agent::traits::Agent;
-use crate::base::agent::types::{AgentSpec, AgentOutputChunk};
+use crate::base::agent::types::{AgentOutputChunk, AgentSpec};
 use crate::base::provider::{ChatMessage, LlmProvider};
+use crate::base::tool::{ToolCall};
 use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -37,14 +38,16 @@ pub async fn run_agent_loop(
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(chunk) => {
-                        // 实时输出思考内容
+                        // 安全处理思考内容
                         if let Some(r) = &chunk.reasoning_content {
-                            let _ = tx.send(Ok(AgentOutputChunk::Reasoning {
-                                content: r.clone(),
-                            })).await;
+                            if !r.is_empty() {
+                                let _ = tx.send(Ok(AgentOutputChunk::Reasoning {
+                                    content: r.clone(),
+                                })).await;
+                            }
                         }
 
-                        // 实时输出文本内容
+                        // 安全处理文本内容
                         if let Some(c) = &chunk.content {
                             full_content.push_str(c);
                             let _ = tx.send(Ok(AgentOutputChunk::Content {
@@ -52,22 +55,18 @@ pub async fn run_agent_loop(
                             })).await;
                         }
 
-                        // 工具调用拼接：完全适配 Qwen 格式（index 匹配 + 空 ID 兼容）
+                        // 工具调用分片拼接
                         if let Some(tcs) = &chunk.tool_calls {
                             for tc in tcs {
                                 let index = tc.index as usize;
-
-                                // 按 index 匹配工具（Qwen 核心规则）
                                 let existing = tool_calls_buffer
                                     .iter_mut()
                                     .find(|(i, _, _, _)| *i == index);
 
                                 if let Some((_, _, _, args)) = existing {
-                                    // 后续 chunk：只拼参数
                                     args.push_str(tc.arguments.as_str().unwrap_or(""));
                                 } else {
-                                    // 第一个 chunk：保存 id + name
-                                    let id = if tc.id.is_empty() {
+                                    let id = if tc.id.trim().is_empty() {
                                         format!("call_{index}")
                                     } else {
                                         tc.id.clone()
@@ -95,11 +94,19 @@ pub async fn run_agent_loop(
                 }
             }
 
-            // 发送所有工具
+            // 发送工具调用并构建 ToolCall 列表
             let mut final_tool_calls = Vec::new();
             for (_idx, id, name, args) in tool_calls_buffer.drain(..) {
                 let clean_args = args.trim().to_string();
-                final_tool_calls.push((id.clone(), name.clone(), clean_args.clone()));
+                
+                // 拼接成 ToolCall 结构体（适配你的 ChatMessage::assistant_tool_calls）
+                let tool_call = ToolCall {
+                    id: id.clone(),
+                    index: _idx as u32,
+                    name: name.clone(),
+                    arguments: serde_json::Value::String(clean_args.clone()),
+                };
+                final_tool_calls.push(tool_call);
 
                 let _ = tx.send(Ok(AgentOutputChunk::ToolCall {
                     tool_call_id: id,
@@ -108,17 +115,22 @@ pub async fn run_agent_loop(
                 })).await;
             }
 
-            // 无工具则结束
+            // 无工具则退出
             if final_tool_calls.is_empty() {
                 break;
             }
 
-            // 批量执行工具（唯一阻塞点）
+            // 执行工具
             let mut tool_results = Vec::new();
-            for (tc_id, tc_name, tc_args) in final_tool_calls {
-                match execute_tool(&agent.tools, tc_name, tc_args, &tx).await {
+            for tc in &final_tool_calls {
+                match execute_tool(
+                    &agent.tools,
+                    tc.name.clone(),
+                    tc.arguments.to_string(),
+                    &tx
+                ).await {
                     Ok((name, result)) => {
-                        tool_results.push((tc_id, name, result));
+                        tool_results.push((tc.id.clone(), name, result));
                     }
                     Err(e) => {
                         let _ = tx.send(Err(e)).await;
@@ -126,9 +138,12 @@ pub async fn run_agent_loop(
                     }
                 }
             }
+            current_messages.push(ChatMessage::assistant_tool_calls(
+                full_content,
+                final_tool_calls,
+            ));
 
-            // 更新上下文
-            current_messages.push(ChatMessage::assistant(full_content));
+            // 追加工具返回结果
             for (tc_id, _, result) in tool_results {
                 current_messages.push(ChatMessage::tool(tc_id, result));
             }

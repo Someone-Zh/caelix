@@ -5,8 +5,8 @@ mod config;
 use crate::config::CaelixContext;
 mod enhancement;
 use futures::StreamExt;
-use std::sync::Arc;
 use base::agent::Agent;
+use base::agent::AgentOutputChunk;
 
 #[tokio::main]
 async fn main() {
@@ -40,8 +40,26 @@ async fn main() {
     
     while let Some(item) = stream.next().await {
         match item {
-            Ok(text) => {
-                // print!("{text}"); 
+            Ok(chunk) => {
+
+                match chunk {
+                    AgentOutputChunk::Content { content } => {
+                        print!("{}", content);
+                    }
+                    AgentOutputChunk::Reasoning { content } => {
+                        // 可选：不打印思考过程
+                        // print!("[思考]{}", content);
+                    }
+                    AgentOutputChunk::ToolCall { name, arguments, .. } => {
+                        println!("\n🛠️ 调用工具：{}({})", name, arguments);
+                    }
+                    AgentOutputChunk::ToolResult { tool_name, result, .. } => {
+                        println!("\n✅ 工具返回：{}", result);
+                    }
+                    AgentOutputChunk::Finish { .. } => {
+                        println!("\n✅ 回答完成");
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("错误：{:?}", e);

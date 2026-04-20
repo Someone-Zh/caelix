@@ -13,5 +13,7 @@ pub fn create_all_builtin_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(crate::base::tool::DirectoryTreeTool),
         // 文件搜索工具
         Arc::new(crate::base::tool::SmartSearchTool),
+        // 文件读取工具
+        Arc::new(crate::base::tool::ReadFileTool),
     ]
 }

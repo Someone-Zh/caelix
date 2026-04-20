@@ -30,6 +30,8 @@ impl SmartSearchTool {
         let search_filename = input["search_type"].as_str() == Some("filename");
         let empty = vec![];
         let modes = input["modes"].as_array().unwrap_or(&empty);
+
+        // 基础参数校验
         if path.is_empty() || keyword.is_empty() {
             return ToolResult {
                 output: String::new(),
@@ -38,9 +40,23 @@ impl SmartSearchTool {
         }
 
         let mut cmd = Command::new("rg");
-        cmd.arg(keyword).arg(path).arg("--recursive");
-        for m in modes { cmd.arg(m.as_str().unwrap_or_default()); }
-        if search_filename { cmd.arg("--files-with-matches"); }
+
+        // ✅ 修复：rg 命令顺序必须是：rg [选项] 关键词 路径
+        // 先加所有模式参数
+        for m in modes {
+            let s = m.as_str().unwrap_or_default();
+            if !s.is_empty() {
+                cmd.arg(s);
+            }
+        }
+
+        // 文件名搜索模式
+        if search_filename {
+            cmd.arg("--files-with-matches");
+        }
+
+        // 最后加：关键词 + 路径
+        cmd.arg(keyword).arg(path);
 
         let output = match cmd
             .stdout(std::process::Stdio::piped())
@@ -57,8 +73,8 @@ impl SmartSearchTool {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
         if output.status.success() {
             ToolResult {
@@ -68,13 +84,13 @@ impl SmartSearchTool {
         } else {
             ToolResult {
                 output: stdout,
-                error: Some(format!("搜索失败：{}", stderr)),
+                error: Some(format!("搜索执行失败：{}", stderr.trim())),
             }
         }
     }
 
     /// 方案2：原生降级搜索（纯标准库，无 regex，无依赖）
-    fn search_native(&self, input: &JsonValue) -> ToolResult {
+    fn search_native(input: JsonValue) -> ToolResult {
         let path = input["path"].as_str().unwrap_or_default();
         let keyword = input["keyword"].as_str().unwrap_or_default();
         let search_filename = input["search_type"].as_str() == Some("filename");
@@ -91,42 +107,60 @@ impl SmartSearchTool {
             };
         }
 
-        let keyword_lower = if ignore_case { keyword.to_lowercase() } else { keyword.to_string() };
+        let keyword = if ignore_case {
+            keyword.to_lowercase()
+        } else {
+            keyword.to_string()
+        };
+
         let mut output = String::new();
 
-        // 使用你已有的 walkdir
-        for entry in WalkDir::new(path).follow_links(false).into_iter() {
-            let entry = match entry { Ok(e) => e, Err(_) => continue };
+        // 遍历目录，跳过错误
+        for entry in WalkDir::new(path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let file_path = entry.path();
-            if !file_path.is_file() { continue; }
+            if !file_path.is_file() {
+                continue;
+            }
 
             // 文件名搜索
             if search_filename {
-                if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
-                    let matched = if ignore_case {
-                        name.to_lowercase().contains(&keyword_lower)
-                    } else {
-                        name.contains(keyword)
-                    };
-                    if matched {
-                        output.push_str(&format!("{}\n", file_path.display()));
-                    }
+                let Some(name) = file_path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+
+                let matched = if ignore_case {
+                    name.to_lowercase().contains(&keyword)
+                } else {
+                    name.contains(&keyword)
+                };
+
+                if matched {
+                    output.push_str(&format!("{}\n", file_path.display()));
                 }
                 continue;
             }
 
-            // 内容搜索
-            let content = match read_to_string(file_path) { Ok(c) => c, Err(_) => continue };
-            for (line_num, line) in content.lines().enumerate() {
-                let matched = if ignore_case {
-                    line.to_lowercase().contains(&keyword_lower)
+            // 内容搜索：跳过无法读取的文件
+            let content = match read_to_string(file_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // 逐行匹配
+            for (idx, line) in content.lines().enumerate() {
+                let line_match = if ignore_case {
+                    line.to_lowercase().contains(&keyword)
                 } else {
-                    line.contains(keyword)
+                    line.contains(&keyword)
                 };
 
-                if matched {
+                if line_match {
                     if show_line_num {
-                        output.push_str(&format!("{}:{}: {}\n", file_path.display(), line_num + 1, line));
+                        output.push_str(&format!("{}:{}: {}\n", file_path.display(), idx + 1, line));
                     } else {
                         output.push_str(&format!("{}: {}\n", file_path.display(), line));
                     }
@@ -145,7 +179,7 @@ impl Tool for SmartSearchTool {
     }
 
     fn description(&self) -> &str {
-        "全局文件搜索工具，优先使用系统 ripgrep(rg)，未安装时自动降级；支持忽略大小写、显示行号、内容/文件名搜索"
+        "全局文件搜索工具，支持忽略大小写、显示行号、内容/文件名搜索"
     }
 
     /// 完整版AI工具提示
@@ -153,7 +187,7 @@ impl Tool for SmartSearchTool {
         json!({
             "type": "object",
             "required": ["path", "keyword"],
-            "description": "全局文件搜索，自动降级",
+            "description": "全局文件搜索",
             "properties": {
                 "path": {
                     "type": "string",
@@ -185,14 +219,12 @@ impl Tool for SmartSearchTool {
         if self.has_ripgrep().await {
             self.search_with_ripgrep(&input).await
         } else {
-            let this = self.clone();
-            let result = tokio::task::spawn_blocking(move || this.search_native(&input)).await;
-
-            match result {
+            // ✅ 修复：阻塞任务 + 所有权传递，无生命周期错误
+            match tokio::task::spawn_blocking(move || Self::search_native(input)).await {
                 Ok(res) => res,
                 Err(e) => ToolResult {
                     output: String::new(),
-                    error: Some(format!("原生搜索异常：{}", e)),
+                    error: Some(format!("原生搜索执行异常：{}", e)),
                 },
             }
         }
@@ -202,3 +234,6 @@ impl Tool for SmartSearchTool {
         Box::new(self.clone())
     }
 }
+
+
+

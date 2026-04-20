@@ -23,7 +23,6 @@ pub async fn execute_tool(
         serde_json::json!({})
     });
 
-    println!("=== 执行工具: {} 参数: {:?}", tool.name(), args_json);
     let result = tool.execute(args_json).await;
 
     let result_str = match result.error {

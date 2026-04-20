@@ -1,5 +1,6 @@
 use super::{ChatMessage, LlmProvider, ChatResponseChunk, LlmConfig};
 use crate::base::{ToolCall, AgentError};
+use crate::base::tool::ApiToolCall; // 新增
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio_stream::{Stream, StreamExt};
@@ -34,6 +35,7 @@ struct ToolCallBuffer {
     arguments: String,
 }
 
+/// 🔥 修复：用于发送的消息结构
 #[derive(Debug, Serialize)]
 struct LlmChatMessage {
     role: String,
@@ -42,7 +44,7 @@ struct LlmChatMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<ToolDefinition>>,
+    tool_calls: Option<Vec<ApiToolCall>>, // 🔥 关键修改
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
 }
@@ -75,16 +77,26 @@ impl OpenAIProvider {
     }
 
     // ------------------------------
-    // 消息格式映射
+    // 🔥 修复：消息格式映射（核心修复）
     // ------------------------------
     fn map_messages(&self, messages: &[ChatMessage]) -> Vec<Value> {
         messages
             .iter()
-            .map(|msg| {
-                json!({
-                    "role": msg.role,
-                    "content": msg.content
-                })
+            .map(|m| {
+                // 转换 tool_calls 为 API 格式
+                let api_tool_calls = m.tool_calls.as_ref().map(|tcs| {
+                    tcs.iter().map(|tc| tc.to_api_format()).collect::<Vec<_>>()
+                });
+
+                let llm_msg = LlmChatMessage {
+                    role: m.role.clone(),
+                    content: if m.content.is_empty() { None } else { Some(m.content.clone()) },
+                    tool_call_id: m.tool_call_id.clone(),
+                    tool_calls: api_tool_calls,
+                    reasoning_content: None,
+                };
+
+                serde_json::to_value(llm_msg).unwrap()
             })
             .collect()
     }
@@ -161,7 +173,6 @@ impl OpenAIProvider {
         tool_buffer: &mut Vec<ToolCallBuffer>,
         response_id: &mut String,
     ) -> Result<Option<ChatResponseChunk>, AgentError> {
-        // 读取 ID
         if response_id.is_empty() {
             if let Some(id) = json["id"].as_str() {
                 *response_id = id.to_string();
@@ -176,18 +187,15 @@ impl OpenAIProvider {
         let delta = &choice["delta"];
         let finish_reason = choice["finish_reason"].as_str().map(|s| s.to_string());
 
-        // 处理工具调用分片
         if let Some(tool_calls) = delta["tool_calls"].as_array() {
             for call in tool_calls {
                 self.merge_tool_call_chunk(tool_buffer, call);
             }
         }
 
-        // 提取内容
         let reasoning_content = delta["reasoning_content"].as_str().map(|s| s.to_string());
         let content = delta["content"].as_str().map(|s| s.to_string());
 
-        // 构建返回块
         let mut chunk = ChatResponseChunk {
             reasoning_content,
             content,
@@ -196,7 +204,6 @@ impl OpenAIProvider {
             finish_reason: None,
         };
 
-        // 结束时返回完整工具调用
         if finish_reason.is_some() && !tool_buffer.is_empty() {
             chunk.tool_calls = Some(self.buffer_to_tool_calls(tool_buffer));
             chunk.finish_reason = finish_reason;
@@ -217,7 +224,6 @@ impl OpenAIProvider {
     ) {
         let mut start = 0;
         while start < buffer.len() {
-            // 按换行切割
             let line_end = match buffer[start..].iter().position(|&b| b == b'\n') {
                 Some(p) => start + p + 1,
                 None => break,
@@ -226,24 +232,20 @@ impl OpenAIProvider {
             let line = &buffer[start..line_end];
             start = line_end;
 
-            // 修复：兼容低版本 Rust，判断空行
             let is_empty = line.iter().all(|&b| b.is_ascii_whitespace());
             if is_empty {
                 continue;
             }
 
-            // 只处理 data: 开头
             if !line.starts_with(b"data: ") {
                 continue;
             }
 
-            // 截取 data 内容
             let data = &line[6..line.len() - 1];
             if data == b"[DONE]" {
                 break;
             }
-            print!("{}\n ", String::from_utf8_lossy(data));
-            // 解析 JSON
+
             let json = match serde_json::from_slice::<JsonValue>(data) {
                 Ok(j) => j,
                 Err(e) => {
@@ -252,7 +254,6 @@ impl OpenAIProvider {
                 }
             };
 
-            // 生成响应块
             match self.parse_sse_chunk(&json, tool_buffer, response_id) {
                 Ok(Some(chunk)) => {
                     let _ = tx.send(Ok(chunk)).await;
@@ -264,7 +265,6 @@ impl OpenAIProvider {
             }
         }
 
-        // 保留未处理完的字节
         *buffer = buffer[start..].to_vec();
     }
 }
@@ -281,15 +281,13 @@ impl LlmProvider for OpenAIProvider {
         tools: &[ToolDefinition],
         config: &LlmConfig,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>, AgentError> {
-        // 1. 构建请求
         let request_body = self.build_request_body(messages, tools, config);
         let base_url = self.config.base_url.as_ref().ok_or_else(|| {
             AgentError::LlmError(format!("{}: base_url 未配置", self.config.name))
         })?;
         let api_key = self.config.api_key.clone();
         let url = format!("{}/chat/completions", base_url);
-
-        // 2. 发送请求
+        
         let response = self
             .client
             .post(&url)
@@ -300,13 +298,11 @@ impl LlmProvider for OpenAIProvider {
             .await
             .map_err(|e| AgentError::LlmError(format!("请求发送失败: {}", e)))?;
 
-        // 3. 检查状态
         if !response.status().is_success() {
             let err = response.text().await.unwrap_or_default();
             return Err(AgentError::LlmError(format!("API响应失败: {}", err)));
         }
 
-        // 4. 流式处理
         let (tx, rx) = mpsc::channel(100);
         let mut byte_stream = response.bytes_stream();
         let this = self.clone();
