@@ -79,7 +79,7 @@ impl Tool for DirectoryTreeTool {
 // ====================== 核心：walkdir 生成树形结构 ======================
 fn generate_tree(root: &str, max_depth: usize) -> anyhow::Result<String> {
     let mut lines = Vec::new();
-    lines.push(format!("📂 {} (目录)", root));
+    lines.push(format!(" {} (目录)", root));
 
     // walkdir 遍历：高性能、流式、低内存
     let walker = WalkDir::new(root)
@@ -98,9 +98,9 @@ fn generate_tree(root: &str, max_depth: usize) -> anyhow::Result<String> {
         // 构建前缀缩进
         let prefix = "│  ".repeat(depth - 1);
         let icon = if entry.file_type().is_dir() {
-            "├─ 📂 目录"
+            "├─ 目录"
         } else {
-            "├─ 📄 文件"
+            "├─ 文件"
         };
 
         let name = entry.file_name().to_string_lossy();

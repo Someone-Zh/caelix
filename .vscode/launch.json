@@ -17,7 +17,8 @@
             "env": {
                     "RUST_BACKTRACE": "1"
                 },
-            "args": []
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart",
         }
     ]
 }

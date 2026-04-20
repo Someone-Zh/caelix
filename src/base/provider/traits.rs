@@ -18,6 +18,10 @@ use std::collections::HashMap;
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +60,8 @@ impl ChatMessage {
         Self {
             role: MessageRole::System.as_str().into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -63,6 +69,8 @@ impl ChatMessage {
         Self {
             role: MessageRole::User.as_str().into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -70,13 +78,28 @@ impl ChatMessage {
         Self {
             role: MessageRole::Assistant.as_str().into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
-    pub fn tool(content: impl Into<String>) -> Self {
+    // 👇 新增：助手调用工具（关键）
+    pub fn assistant_tool_calls(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
-            role: MessageRole::Tool.as_str().into(),
+            role: MessageRole::Assistant.as_str().to_string(),
             content: content.into(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
+    }
+
+    // 👇 新增：你返回工具结果（最关键！）
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::Tool.as_str().to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 }

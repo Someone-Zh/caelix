@@ -17,3 +17,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 walkdir = "2.5.0"
 anyhow = "1.0.102"
 futures = "0.3.32"
+
+[profile.dev]
+debug = 2        # 完整调试符号（关键）
+opt-level = 0    # 关闭优化
+panic = "unwind" # 不要 abort
+strip = false     # 不剥离符号

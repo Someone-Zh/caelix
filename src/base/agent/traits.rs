@@ -107,7 +107,6 @@ impl AgentSpec {
                                 full_content.push_str(c);
                             }
 
-                            // ✅ 正确处理 Value 类型的 arguments
                             if let Some(tcs) = &chunk.tool_calls {
                                 for tc in tcs {
                                     if tool_call_buffer.is_none() {
@@ -193,8 +192,8 @@ impl AgentSpec {
 
                 // 更新上下文
                 current_messages.push(ChatMessage::assistant(full_content));
-                for (_, _, result) in tool_results {
-                    current_messages.push(ChatMessage::tool(result));
+                for (tc_id, _, result) in tool_results {
+                    current_messages.push(ChatMessage::tool(tc_id, result));
                 }
             }
         });
