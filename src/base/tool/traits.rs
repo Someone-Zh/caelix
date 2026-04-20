@@ -42,6 +42,8 @@ pub struct ToolDefinition {
 pub struct ToolCall {
     /// 工具调用的唯一标识符
     pub id: String,
+    #[serde(default)]
+    pub index: u32,
     /// 要调用的工具名称
     pub name: String,
     /// 调用工具时传递的参数，以JSON格式表示

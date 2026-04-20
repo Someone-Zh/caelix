@@ -6,6 +6,7 @@ use crate::config::CaelixContext;
 mod enhancement;
 use futures::StreamExt;
 use std::sync::Arc;
+use base::agent::Agent;
 
 #[tokio::main]
 async fn main() {

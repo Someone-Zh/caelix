@@ -145,6 +145,7 @@ impl OpenAIProvider {
             .iter()
             .map(|b| ToolCall {
                 id: b.id.clone(),
+                index: b.index,
                 name: b.name.clone(),
                 arguments: JsonValue::String(b.arguments.clone()),
             })
