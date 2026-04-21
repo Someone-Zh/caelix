@@ -1,5 +1,16 @@
-mod manager;
-mod bus;
+pub mod bus;
+pub mod manager;
+pub mod storage;
+pub mod types;
 
-pub use manager::MessageManager;
-pub use bus::{MessageBus, MessageSubscriber};
+// 便捷导出
+pub use bus::MessageBus;
+pub use manager::SessionManager;
+pub use storage::{FileStorage, StorageBackend};
+pub use types::{
+    ActiveSpanInfo, Message, MessageError, MessageMeta, MessageType, Role, SessionState,
+    Status,
+};
+
+#[cfg(test)]
+pub mod test;

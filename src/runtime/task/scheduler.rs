@@ -1,165 +1,127 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
-use crate::core::agent::executor::AgentExecutor;
-use crate::core::AgentError;
-use crate::runtime::message::{MessageBus, Message};
-use super::{Task, TaskStatus, TaskType, AgentTaskContext};
+// src/runtime/task/scheduler.rs
+use crate::runtime::task::types::{TaskId, TaskKind, TaskMeta};
+use chrono::{DateTime, Utc};
+use cron::Schedule;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::sync::Arc;
+use tokio::sync::Notify;
 
-/// 任务调度器
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct ScheduledTask {
+    pub task_id: TaskId,
+    pub meta: TaskMeta,
+    pub next_run: DateTime<Utc>,
+}
+
+impl PartialEq for ScheduledTask {
+    fn eq(&self, other: &Self) -> bool {
+        self.next_run == other.next_run
+    }
+}
+
+impl Eq for ScheduledTask {}
+
+impl PartialOrd for ScheduledTask {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScheduledTask {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse for min-heap (earliest time first)
+        other.next_run.cmp(&self.next_run)
+    }
+}
+
 pub struct TaskScheduler {
-    /// 任务映射
-    tasks: Arc<Mutex<HashMap<String, Task>>>,
-    /// 待执行任务队列
-    pending_tasks: Arc<Mutex<VecDeque<String>>>,
-    /// 并发控制信号量
-    semaphore: Arc<Semaphore>,
-    /// Agent 执行器
-    agent_executor: AgentExecutor,
-    /// 消息总线
-    message_bus: Option<Arc<MessageBus>>,
+    heap: Arc<tokio::sync::Mutex<BinaryHeap<ScheduledTask>>>,
+    notify: Arc<Notify>,
 }
 
 impl TaskScheduler {
-    /// 创建新的任务调度器
-    pub fn new(concurrency_limit: usize, agent_executor: AgentExecutor) -> Self {
+    pub fn new() -> Self {
         Self {
-            tasks: Arc::new(Mutex::new(HashMap::new())),
-            pending_tasks: Arc::new(Mutex::new(VecDeque::new())),
-            semaphore: Arc::new(Semaphore::new(concurrency_limit)),
-            agent_executor,
-            message_bus: None,
+            heap: Arc::new(tokio::sync::Mutex::new(BinaryHeap::new())),
+            notify: Arc::new(Notify::new()),
         }
     }
-    
-    /// 设置消息总线
-    pub fn set_message_bus(&mut self, message_bus: Arc<MessageBus>) {
-        self.message_bus = Some(message_bus);
+
+    pub async fn schedule(&self, meta: TaskMeta) {
+        if let Some(next_run) = Self::calculate_next_run(&meta.kind) {
+            let task = ScheduledTask {
+                task_id: meta.task_id,
+                meta,
+                next_run,
+            };
+            let mut heap = self.heap.lock().await;
+            heap.push(task);
+            self.notify.notify_one();
+        }
     }
 
-    /// 添加任务
-    pub fn add_task(&mut self, task: Task) -> Result<(), AgentError> {
-        // 检查依赖任务是否存在
-        if let Some(parent_id) = &task.parent_id {
-            let tasks = self.tasks.lock().unwrap();
-            if !tasks.contains_key(parent_id) {
-                return Err(AgentError::TaskError(format!("Parent task {} not found", parent_id)));
+    pub async fn cancel(&self, task_id: TaskId) {
+        let mut heap = self.heap.lock().await;
+        // 简单的重建堆来移除元素
+        let mut new_heap = BinaryHeap::new();
+        while let Some(task) = heap.pop() {
+            if task.task_id != task_id {
+                new_heap.push(task);
             }
         }
-
-        let task_id = task.id.clone();
-        {
-            let mut tasks = self.tasks.lock().unwrap();
-            tasks.insert(task_id.clone(), task);
-        }
-
-        // 将任务加入待执行队列
-        let mut pending_tasks = self.pending_tasks.lock().unwrap();
-        pending_tasks.push_back(task_id);
-
-        Ok(())
+        *heap = new_heap;
     }
 
-    /// 开始执行任务
-    pub async fn start(&self) -> Vec<JoinHandle<()>> {
-        let mut handles = Vec::new();
-        let pending_tasks = self.pending_tasks.lock().unwrap().clone();
+    pub async fn next_ready(&self) -> Option<ScheduledTask> {
+        loop {
+            {
+                let mut heap = self.heap.lock().await;
+                let now = Utc::now();
 
-        for task_id in pending_tasks {
-            let tasks = self.tasks.clone();
-            let semaphore = self.semaphore.clone();
-            let agent_executor = self.agent_executor.clone();
-            let message_bus = self.message_bus.clone();
-
-            let handle = tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
-                
-                // 更新任务状态为运行中
-                {
-                    let mut tasks = tasks.lock().unwrap();
-                    if let Some(task) = tasks.get_mut(&task_id) {
-                        task.status = TaskStatus::Running;
-                    }
-                }
-
-                // 执行任务
-                let result = Self::execute_task(&tasks, &agent_executor, &task_id).await;
-
-                // 更新任务状态
-                {
-                    let mut tasks = tasks.lock().unwrap();
-                    if let Some(task) = tasks.get_mut(&task_id) {
-                        task.status = match result {
-                            Ok(_) => TaskStatus::Completed,
-                            Err(_) => TaskStatus::Failed,
-                        };
+                if let Some(task) = heap.peek() {
+                    if task.next_run <= now {
+                        return heap.pop();
+                    } else {
+                        // 计算需要等待的时间
+                        let duration = task.next_run.signed_duration_since(now);
+                        let notify = self.notify.clone();
                         
-                        // 发布任务完成消息
-                        if let Some(message_bus) = &message_bus {
-                            let task_clone = task.clone();
-                            let status_str = format!("{:?}", task.status);
-                            let content = format!("Task {} completed with status: {}", task.id, status_str);
-                            
-                            let message = Message {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                role: crate::core::llm::MessageRole::System,
-                                content,
-                                tool_calls: vec![],
-                                timestamp: chrono::Utc::now().timestamp(),
-                                session_id: task.session_id.clone(),
-                                belongs_to: Some(task.id.clone()),
-                            };
-                            
-                            let bus_clone = message_bus.clone();
-                            tokio::spawn(async move {
-                                bus_clone.publish(&task_clone.session_id, message).await;
-                            });
+                        // 释放锁后等待
+                        drop(heap);
+                        
+                        tokio::select! {
+                            _ = tokio::time::sleep(duration.to_std().unwrap_or(std::time::Duration::from_secs(0))) => {},
+                            _ = notify.notified() => {},
                         }
                     }
-                }
-            });
-
-            handles.push(handle);
-        }
-
-        handles
-    }
-
-    /// 执行单个任务
-    async fn execute_task(
-        tasks: &Arc<Mutex<HashMap<String, Task>>>,
-        agent_executor: &AgentExecutor,
-        task_id: &str,
-    ) -> Result<(), AgentError> {
-        let task = {
-            let tasks = tasks.lock().unwrap();
-            tasks.get(task_id).cloned().ok_or(AgentError::TaskError(format!("Task {} not found", task_id)))?
-        };
-
-        match task.task_type {
-            TaskType::Agent => {
-                // 执行 Agent 任务
-                if let Some(agent_context) = task.context.downcast_ref::<AgentTaskContext>() {
-                    let _ = agent_executor.execute(&agent_context.agent_name, agent_context.messages.clone()).await?;
                 } else {
-                    return Err(AgentError::TaskError("Invalid agent task context".to_string()));
+                    // 堆为空，无限等待
+                    let notify = self.notify.clone();
+                    drop(heap);
+                    notify.notified().await;
                 }
             }
         }
-
-        Ok(())
     }
 
-    /// 获取任务状态
-    pub fn get_task_status(&self, task_id: &str) -> Option<TaskStatus> {
-        let tasks = self.tasks.lock().unwrap();
-        tasks.get(task_id).map(|task| task.status.clone())
+    pub fn calculate_next_run(kind: &TaskKind) -> Option<DateTime<Utc>> {
+        match kind {
+            TaskKind::Once(time) => Some(*time),
+            TaskKind::Cron(expr) => {
+                if let Ok(schedule) = expr.parse::<Schedule>() {
+                    schedule.upcoming(Utc).next()
+                } else {
+                    None
+                }
+            }
+            TaskKind::Async => None,
+        }
     }
+}
 
-    /// 获取所有任务
-    pub fn get_all_tasks(&self) -> HashMap<String, Task> {
-        self.tasks.lock().unwrap().clone()
+impl Default for TaskScheduler {
+    fn default() -> Self {
+        Self::new()
     }
 }
