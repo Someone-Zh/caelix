@@ -3,9 +3,10 @@ use crate::manager::AgentRegistryError;
 use crate::base::agent::AgentSpec;
 use crate::config::CaelixContext;
 use crate::manager::ToolManager;
+use std::sync::Arc;
 
 /// 创建规划专家智能体
-pub async  fn create_planner_agent(tool_manager: &ToolManager) -> AgentSpec {
+pub async  fn create_planner_agent(tool_manager: &ToolManager, context: &CaelixContext) -> AgentSpec {
     let system_prompt = r#"
 你是一名专业的规划专家，擅长将复杂任务拆解为可执行的子任务。
 
@@ -27,10 +28,17 @@ pub async  fn create_planner_agent(tool_manager: &ToolManager) -> AgentSpec {
     let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
     let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
     let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
+    let delegate_task_tool = crate::config::tools_loader::create_delegate_task_tool(
+        Arc::new(context.clone()),
+        None,
+        None,
+    );
+    
     let tools = vec![
         diff_edit_tool,
         global_file_search_tool,
         directory_tree_tool,
+        delegate_task_tool,
     ];
 
     AgentSpec::new(
@@ -215,7 +223,7 @@ pub async fn create_ui_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
 pub async fn register_all_agents(context: &CaelixContext) -> Result<(), AgentRegistryError> {
     let agent_manager = context.agent_manager.clone();
     let tool_manager = context.tool_manager.clone();
-    agent_manager.register(create_planner_agent(&tool_manager).await).await?;
+    agent_manager.register(create_planner_agent(&tool_manager, context).await).await?;
     agent_manager.register(create_collector_agent(&tool_manager).await).await?;
     agent_manager.register(create_architecture_agent(&tool_manager).await).await?;
     agent_manager.register(create_code_executor_agent(&tool_manager).await).await?;

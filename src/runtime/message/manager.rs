@@ -1,6 +1,6 @@
 use crate::runtime::message::bus::MessageBus;
 use crate::runtime::message::storage::StorageBackend;
-use crate::runtime::message::types::{ActiveSpanInfo, Message, SessionState, Status};
+use crate::runtime::message::types::{ActiveSpanInfo, Message, SessionState, SessionConfig, Status};
 use anyhow::Result;
 use futures::Stream;
 use futures::StreamExt;
@@ -20,6 +20,14 @@ pub struct SessionManager {
     states: Arc<tokio::sync::RwLock<HashMap<String, SessionState>>>,
     // 存储消费者任务句柄
     _store_handle: JoinHandle<()>,
+}
+
+impl std::fmt::Debug for SessionManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionManager")
+            .field("states", &self.states)
+            .finish()
+    }
 }
 
 impl SessionManager {
@@ -123,5 +131,83 @@ impl SessionManager {
     pub async fn get_session_state(&self, session_id: &str) -> SessionState {
         let states = self.states.read().await;
         states.get(session_id).cloned().unwrap_or_default()
+    }
+
+    // ========== 会话配置管理方法 ==========
+
+    /// 创建新会话配置
+    pub async fn create_session_config(&self, session_id: String) -> Result<String> {
+        let config = SessionConfig::new(session_id.clone());
+        
+        {
+            let mut states = self.states.write().await;
+            let state = states.entry(session_id.clone()).or_default();
+            state.config = Some(config);
+        }
+        
+        Ok(session_id)
+    }
+
+    /// 获取会话配置
+    pub async fn get_session_config(&self, session_id: &str) -> Option<SessionConfig> {
+        let states = self.states.read().await;
+        states.get(session_id).and_then(|state| state.config.clone())
+    }
+
+    /// 设置会话的提供者
+    pub async fn set_session_provider(&self, session_id: &str, provider: &str) -> Result<()> {
+        let mut states = self.states.write().await;
+        if let Some(state) = states.get_mut(session_id) {
+            if let Some(ref mut config) = state.config {
+                config.provider = Some(provider.to_string());
+                Ok(())
+            } else {
+                anyhow::bail!("Session {} has no config", session_id);
+            }
+        } else {
+            anyhow::bail!("Session {} not found", session_id);
+        }
+    }
+
+    /// 设置会话的模型
+    pub async fn set_session_model(&self, session_id: &str, model: &str) -> Result<()> {
+        let mut states = self.states.write().await;
+        if let Some(state) = states.get_mut(session_id) {
+            if let Some(ref mut config) = state.config {
+                config.model = Some(model.to_string());
+                Ok(())
+            } else {
+                anyhow::bail!("Session {} has no config", session_id);
+            }
+        } else {
+            anyhow::bail!("Session {} not found", session_id);
+        }
+    }
+
+    /// 设置会话的 agent
+    pub async fn set_session_agent(&self, session_id: &str, agent: &str) -> Result<()> {
+        let mut states = self.states.write().await;
+        if let Some(state) = states.get_mut(session_id) {
+            if let Some(ref mut config) = state.config {
+                config.agent = Some(agent.to_string());
+                Ok(())
+            } else {
+                anyhow::bail!("Session {} has no config", session_id);
+            }
+        } else {
+            anyhow::bail!("Session {} not found", session_id);
+        }
+    }
+
+    /// 检查会话是否存在
+    pub async fn session_exists(&self, session_id: &str) -> bool {
+        let states = self.states.read().await;
+        states.contains_key(session_id)
+    }
+
+    /// 获取所有会话 ID
+    pub async fn list_sessions(&self) -> Vec<String> {
+        let states = self.states.read().await;
+        states.keys().cloned().collect()
     }
 }

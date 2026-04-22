@@ -4,10 +4,11 @@ use crate::manager::AgentManager;
 use crate::manager::ToolManager;
 use crate::manager::ProviderManager;
 use crate::config::provider_loader::load_provider_configs;
-use crate::config::tools_loader::create_all_builtin_tools;
+use crate::config::tools_loader::{create_all_builtin_tools, create_delegate_task_tool};
 use crate::config::agents_loader::register_all_agents;
+use crate::runtime::message::{SessionManager, MessageBus, FileStorage};
 /// 项目上下文对象
-/// 统一管理 AgentManager、ToolManager 和 LlmProviderManager 实例
+/// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
 #[derive(Debug, Clone)]
 pub struct CaelixContext {
     /// Agent 管理器实例
@@ -16,15 +17,23 @@ pub struct CaelixContext {
     pub tool_manager: Arc<ToolManager>,
     /// LLM 提供者管理器实例
     pub llm_provider_manager: Arc<RwLock<ProviderManager>>,
+    /// 会话管理器实例
+    pub session_manager: Arc<SessionManager>,
 }
 
 impl CaelixContext {
     /// 创建新的应用上下文实例
     pub fn new() -> Self {
+        // 初始化消息总线和存储
+        let bus = MessageBus::new(1024);
+        let storage = Arc::new(FileStorage::new("./sessions".to_string()));
+        let session_manager = Arc::new(SessionManager::new(bus, storage));
+        
         Self {
             agent_manager: Arc::new(AgentManager::new()),
             tool_manager: Arc::new(ToolManager::new()),
             llm_provider_manager: Arc::new(RwLock::new(ProviderManager::new())),
+            session_manager,
         }
         
     }
@@ -58,6 +67,10 @@ impl CaelixContext {
         for tool in tools {
             tool_manager.register(tool).await;
         }
+
+        // 注册委派任务工具（暂不配置 message_bus 和 task_manager）
+        let delegate_tool = create_delegate_task_tool(Arc::new(self.clone()), None, None);
+        tool_manager.register(delegate_tool).await;
 
         Ok(())
     }

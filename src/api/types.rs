@@ -1,0 +1,70 @@
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// API 错误类型
+#[derive(Debug, Error)]
+pub enum ApiError {
+    #[error("Session not found: {0}")]
+    SessionNotFound(String),
+    
+    #[error("Provider not found: {0}")]
+    ProviderNotFound(String),
+    
+    #[error("Model not found: {0}")]
+    ModelNotFound(String),
+    
+    #[error("Agent not found: {0}")]
+    AgentNotFound(String),
+    
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
+    
+    #[error("Internal error: {0}")]
+    InternalError(String),
+    
+    #[error("Stream error: {0}")]
+    StreamError(String),
+}
+
+impl ApiError {
+    pub fn session_not_found(session_id: &str) -> Self {
+        ApiError::SessionNotFound(session_id.to_string())
+    }
+    
+    pub fn provider_not_found(provider: &str) -> Self {
+        ApiError::ProviderNotFound(provider.to_string())
+    }
+    
+    pub fn agent_not_found(agent: &str) -> Self {
+        ApiError::AgentNotFound(agent.to_string())
+    }
+}
+
+/// 聊天请求
+#[derive(Debug, Deserialize, Clone)]
+pub struct ChatRequest {
+    pub session_id: String,
+    pub message: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub agent: Option<String>,
+}
+
+/// 会话创建响应
+#[derive(Debug, Serialize)]
+pub struct CreateSessionResponse {
+    pub session_id: String,
+}
+
+/// 默认配置响应
+#[derive(Debug, Serialize)]
+pub struct DefaultConfigResponse {
+    pub default_provider: String,
+    pub default_model: String,
+}
+
+/// Agent 列表响应
+#[derive(Debug, Serialize)]
+pub struct AgentListResponse {
+    pub agents: Vec<String>,
+}

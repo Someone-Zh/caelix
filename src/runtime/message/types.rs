@@ -102,6 +102,55 @@ impl Message {
         }
     }
     
+    /// 从当前 RuntimeContext 自动创建消息
+    /// 
+    /// 自动从运行时上下文获取 session_id 和 span_id
+    /// 
+    /// # Panics
+    /// 如果在不存在的上下文中调用，会 panic
+    /// 
+    /// # Example
+    /// ```no_run
+    /// use caelix::runtime::message::{Message, Role, MessageType, Status};
+    /// 
+    /// let msg = Message::from_context(
+    ///     None,
+    ///     Role::User,
+    ///     "user".to_string(),
+    ///     MessageType::Chunk,
+    ///     "Hello".to_string(),
+    ///     Status::Running,
+    /// );
+    /// ```
+    pub fn from_context(
+        parent_span_id: Option<String>,
+        role: Role,
+        name: String,
+        r#type: MessageType,
+        content: String,
+        status: Status,
+    ) -> Self {
+        use crate::runtime::context::RuntimeContext as Ctx;
+        
+        let session_id = Ctx::session_id();
+        let span_id = Ctx::span_id();
+        
+        Self {
+            session_id,
+            span_id,
+            parent_span_id,
+            seq: 0, // 占位，由 Bus 填充
+            role,
+            name,
+            r#type,
+            content,
+            status,
+            timestamp: Utc::now(),
+            error: None,
+            meta: None,
+        }
+    }
+    
     pub fn generate_span_id() -> String {
         Uuid::new_v4().to_string()
     }
@@ -111,6 +160,34 @@ impl Message {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionState {
     pub active_spans: std::collections::HashMap<String, ActiveSpanInfo>,
+    /// 会话配置信息
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<SessionConfig>,
+}
+
+/// 会话配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfig {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl SessionConfig {
+    pub fn new(session_id: String) -> Self {
+        Self {
+            session_id,
+            provider: None,
+            model: None,
+            agent: None,
+            created_at: Utc::now(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
