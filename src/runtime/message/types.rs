@@ -138,6 +138,7 @@ impl Message {
     ///     Status::Running,
     /// );
     /// ```
+    #[allow(dead_code)] // 为将来使用 RuntimeContext 预留
     pub fn from_context(
         parent_span_id: Option<String>,
         role: Role,

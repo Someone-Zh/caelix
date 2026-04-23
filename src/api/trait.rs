@@ -1,3 +1,6 @@
+//! API Trait 定义
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};

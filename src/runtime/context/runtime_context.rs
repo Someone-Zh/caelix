@@ -1,3 +1,6 @@
+//! Runtime Context 模块
+#![allow(dead_code)] // 部分API为将来扩展预留
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;

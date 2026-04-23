@@ -1,4 +1,5 @@
 //! Agent 核心模块
+#![allow(dead_code)] // 部分API为将来扩展预留
 
 // 导出所有子模块
 mod types;

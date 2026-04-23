@@ -10,5 +10,6 @@ pub trait AgentHook: Send + Sync {
     
     /// 在Agent执行前增强AgentSpec
     /// 可以修改系统提示词、添加工具等
+    #[allow(dead_code)] // trait方法，由实现者使用
     fn enhance_agent(&self, agent_spec: &mut AgentSpec);
 }

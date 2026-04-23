@@ -8,6 +8,7 @@ use crate::manager::SkillManager;
 /// 自动为Agent添加可用技能列表和get_skill_detail工具
 #[derive(Debug)]
 pub struct SkillHook {
+    #[allow(dead_code)] // 在trait方法中使用
     skill_manager: Arc<SkillManager>,
 }
 

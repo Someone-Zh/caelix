@@ -37,6 +37,7 @@ impl HookRegistry {
     }
 
     /// 应用所有钩子到AgentSpec
+    #[allow(dead_code)] // 为将来使用预留
     pub async fn apply_hooks(&self, agent_spec: &mut AgentSpec) {
         let hooks = self.hooks.read().await;
         for hook in hooks.iter() {

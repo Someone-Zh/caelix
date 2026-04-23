@@ -8,7 +8,7 @@ use crate::config::CaelixContext;
 use crate::base::agent::Agent;
 use crate::base::provider::ChatMessage;
 use crate::base::LlmConfig;
-use crate::runtime::{Message, Role, MessageType, Status, MessageBus, TaskManager, TaskKind, Runnable, TaskId};
+use crate::runtime::{Message, Role, MessageType, Status, MessageBus, TaskManager, TaskKind, Runnable};
 
 /// 委派任务工具
 /// 允许一个 agent 委派任务给另一个 agent 执行

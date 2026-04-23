@@ -24,6 +24,7 @@ impl CaelixApiImpl {
     }
     
     /// 获取消息总线引用
+    #[allow(dead_code)] // 为将来外部访问预留
     pub fn message_bus(&self) -> &Arc<crate::runtime::message::MessageBus> {
         &self.context.message_bus
     }
@@ -254,8 +255,8 @@ impl CaelixApi for CaelixApiImpl {
             };
 
             // 逐块推送流式内容
-            let mut chunk_count = 0u64;
-            let mut full_content = String::new();
+            let mut _chunk_count = 0u64;
+            let mut _full_content = String::new();
             
             let mut stream = stream;
             while let Some(chunk_result) = stream.next().await {
@@ -263,8 +264,8 @@ impl CaelixApi for CaelixApiImpl {
                     Ok(chunk) => {
                         match chunk {
                             AgentOutputChunk::Content { content } => {
-                                full_content.push_str(&content);
-                                chunk_count += 1;
+                                _full_content.push_str(&content);
+                                _chunk_count += 1;
                                 
                                 // 发送流式内容块
                                 let chunk_msg = Message {

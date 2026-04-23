@@ -1,3 +1,7 @@
+//! API 类型定义
+//! 这些类型是公共API的一部分，可能被外部使用
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use chrono::{DateTime, Utc};

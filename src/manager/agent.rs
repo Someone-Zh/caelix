@@ -40,6 +40,7 @@ impl AgentManager {
     }
 
     /// 移除智能体蓝图
+    #[allow(dead_code)] // 公共API，为将来使用预留
     pub async fn remove(&self, name: &str) -> Option<Arc<AgentSpec>> {
         let mut agents = self.agents.write().await;
         agents.remove(name)

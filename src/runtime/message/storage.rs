@@ -1,3 +1,6 @@
+//! Storage 模块
+#![allow(dead_code)] // 部分API为将来扩展预留
+
 use crate::runtime::message::types::{Message, SessionState};
 use anyhow::Result;
 use async_trait::async_trait;

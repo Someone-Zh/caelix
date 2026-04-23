@@ -60,7 +60,7 @@ impl CaelixContext {
         
         // 初始化任务管理器
         let task_persistence = Arc::new(FilePersistence::new("./tasks".to_string()));
-        let mut runnable_factory = RunnableFactory::new();
+        let runnable_factory = RunnableFactory::new();
         // TODO: 在这里注册具体的 Runnable 构造函数
         let task_manager = Arc::new(TaskManager::new(
             Arc::new(bus.clone()),

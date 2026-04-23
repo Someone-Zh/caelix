@@ -35,6 +35,7 @@ pub fn parse_yaml_markdown_file<T: for<'de> Deserialize<'de>>(
 /// Skill 配置的 YAML 部分
 #[derive(Debug, Deserialize)]
 struct SkillConfig {
+    #[allow(dead_code)] // 从YAML解析，但当前未直接使用
     name: String,
     description: String,
 }
@@ -63,7 +64,6 @@ async fn load_skills_recursive(
     current_dir: &Path,
     skills: &mut Vec<Skill>,
 ) -> Result<(), String> {
-    use futures::future::BoxFuture;
     
     let mut entries = Vec::new();
     for entry in fs::read_dir(current_dir)

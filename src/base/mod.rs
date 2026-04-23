@@ -7,22 +7,9 @@ pub mod provider;
 pub use provider::*;
 pub use tool::*;
 
-// 导出通用依赖（方便全局使用）
-pub use serde::{Deserialize, Serialize};
-
-// 通用类型定义
-pub type MessageId = String; 
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum Role {
-    System,
-    User,
-    Assistant,
-    Tool,
-}
-
 // 错误定义
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // 部分变体为将来扩展预留
 pub enum AgentError {
     #[error("LLM error: {0}")]
     LlmError(String),

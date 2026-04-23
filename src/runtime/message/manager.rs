@@ -1,3 +1,6 @@
+//! Session Manager 模块
+#![allow(dead_code)] // 部分API为将来扩展预留
+
 use crate::runtime::message::bus::MessageBus;
 use crate::runtime::message::storage::StorageBackend;
 use crate::runtime::message::types::{ActiveSpanInfo, Message, SessionState, SessionConfig, Status, MessageType};
