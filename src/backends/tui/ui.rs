@@ -33,7 +33,7 @@ fn render_welcome_view(frame: &mut Frame, app: &App) {
 
     // 标题 - 居中显示 "Caelix"
     let title = Paragraph::new("Caelix")
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(Style::default().fg(Color::Rgb(86, 156, 214)).add_modifier(Modifier::BOLD))  // #569CD6 蓝色高亮核心关键词
         .alignment(Alignment::Center);
     frame.render_widget(title, chunks[0]);
 
@@ -41,16 +41,16 @@ fn render_welcome_view(frame: &mut Frame, app: &App) {
     let input_block = Block::default()
         .title(" 输入消息 (Enter发送, Esc退出) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(Style::default().fg(Color::Rgb(86, 156, 214)));  // #569CD6 蓝色边框
     
     let input_text = format!("{}█", app.input_buffer);
     let input_paragraph = Paragraph::new(input_text)
         .block(input_block)
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(Color::Rgb(212, 212, 212)));  // #D4D4D4 普通文本
     
     frame.render_widget(input_paragraph, chunks[2]);
 
-    // 配置信息
+    // 配置信息（欢迎视图）
     let config_text = format!(
         " Agent: {} | Provider: {} | Model: {} (Tab切换Agent) ",
         app.current_agent,
@@ -58,13 +58,13 @@ fn render_welcome_view(frame: &mut Frame, app: &App) {
         app.current_model
     );
     let config_bar = Paragraph::new(config_text)
-        .style(Style::default().fg(Color::Yellow));
+        .style(Style::default().fg(Color::Rgb(78, 201, 176)));  // #4EC9B0 青绿色用于配置信息
     
     frame.render_widget(config_bar, chunks[3]);
 
     // 状态栏
     let status_bar = Paragraph::new(format!(" {} ", app.status_message))
-        .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        .style(Style::default().fg(Color::Rgb(133, 133, 133)).bg(Color::Rgb(30, 30, 30)));  // #858585 辅助文本，#1E1E1E 背景
     
     frame.render_widget(status_bar, chunks[4]);
 }
@@ -112,14 +112,14 @@ fn render_chat_view(frame: &mut Frame, app: &App) {
     let input_block = Block::default()
         .title(" 输入消息 (Enter发送, Tab切换Agent, Esc退出) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(Style::default().fg(Color::Rgb(86, 156, 214)));  // #569CD6 蓝色边框
     
     let input_text = format!("{}█", app.input_buffer);
-    let mut input_style = Style::default().fg(Color::White);
+    let mut input_style = Style::default().fg(Color::Rgb(212, 212, 212));  // #D4D4D4 普通文本
     
     // 如果正在加载，改变输入框样式
     if app.is_loading {
-        input_style = Style::default().fg(Color::DarkGray);
+        input_style = Style::default().fg(Color::Rgb(133, 133, 133));  // #858585 辅助文本灰色
     }
     
     let input_paragraph = Paragraph::new(input_text)
@@ -128,7 +128,7 @@ fn render_chat_view(frame: &mut Frame, app: &App) {
     
     frame.render_widget(input_paragraph, left_chunks[1]);
 
-    // 配置信息
+    // 配置信息（对话视图）
     let config_text = format!(
         " Agent: {} | Provider: {} | Model: {} (Tab切换Agent) ",
         app.current_agent,
@@ -136,7 +136,7 @@ fn render_chat_view(frame: &mut Frame, app: &App) {
         app.current_model
     );
     let config_bar = Paragraph::new(config_text)
-        .style(Style::default().fg(Color::Yellow));
+        .style(Style::default().fg(Color::Rgb(78, 201, 176)));  // #4EC9B0 青绿色用于配置信息
     
     frame.render_widget(config_bar, left_chunks[2]);
 
@@ -152,7 +152,7 @@ fn render_chat_view(frame: &mut Frame, app: &App) {
     };
     
     let status_bar = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        .style(Style::default().fg(Color::Rgb(133, 133, 133)).bg(Color::Rgb(30, 30, 30)));  // #858585 辅助文本，#1E1E1E 背景
     
     frame.render_widget(status_bar, left_chunks[3]);
 
@@ -167,14 +167,24 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let messages_block = Block::default()
         .title(" 对话历史 ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(Color::Rgb(86, 156, 214)));  // #569CD6 蓝色边框
 
     // 构建消息列表
-    let items: Vec<ListItem> = app.messages.iter().map(|msg| {
+    let items: Vec<ListItem> = app.messages.iter().enumerate().map(|(idx, msg)| {
         let (prefix, style) = match msg.msg_type {
-            MessageType::User => ("👤 你: ", Style::default().fg(Color::Green)),
-            MessageType::Assistant => ("💬 AI: ", Style::default().fg(Color::White)),
-            MessageType::System => ("⚙️ 系统: ", Style::default().fg(Color::Yellow)),
+            MessageType::User => ("👤 你: ", Style::default().fg(Color::Rgb(78, 201, 176))),  // #4EC9B0 青绿色用户消息
+            MessageType::Assistant => {
+                // 如果是最后一条消息且正在流式接收，添加闪烁光标提示
+                let is_last_and_streaming = idx == app.messages.len() - 1 && app.is_streaming;
+                let content = if is_last_and_streaming {
+                    format!("{}▌", msg.content)  // 添加闪烁光标
+                } else {
+                    msg.content.clone()
+                };
+                return ListItem::new(format!("💬 AI: {}", content))
+                    .style(Style::default().fg(Color::Rgb(212, 212, 212)));  // #D4D4D4 普通文本助手消息
+            }
+            MessageType::System => ("⚙️ 系统: ", Style::default().fg(Color::Rgb(197, 134, 192))),  // #C586C0 紫色系统消息（交互提示）
         };
         
         let content = format!("{}{}", prefix, msg.content);
@@ -193,15 +203,15 @@ fn render_notifications(frame: &mut Frame, app: &App, area: Rect) {
     let notifications_block = Block::default()
         .title(" 通知 ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
+        .border_style(Style::default().fg(Color::Rgb(197, 134, 192)));  // #C586C0 紫色边框（交互提示）
 
     // 构建通知列表
     let items: Vec<ListItem> = app.notifications.iter().map(|notif| {
         let (icon, style) = match notif.notif_type {
-            NotificationType::Info => ("ℹ️ ", Style::default().fg(Color::Blue)),
-            NotificationType::Success => ("✅ ", Style::default().fg(Color::Green)),
-            NotificationType::Error => ("❌ ", Style::default().fg(Color::Red)),
-            NotificationType::Warning => ("⚠️ ", Style::default().fg(Color::Yellow)),
+            NotificationType::Info => ("ℹ️ ", Style::default().fg(Color::Rgb(86, 156, 214))),  // #569CD6 蓝色信息
+            NotificationType::Success => ("✅ ", Style::default().fg(Color::Rgb(78, 201, 176))),  // #4EC9B0 青绿色成功
+            NotificationType::Error => ("❌ ", Style::default().fg(Color::Rgb(212, 212, 212))),  // #D4D4D4 普通文本错误（需要醒目）
+            NotificationType::Warning => ("⚠️ ", Style::default().fg(Color::Rgb(197, 134, 192))),  // #C586C0 紫色警告（交互提示）
         };
         
         let content = format!("{}{}", icon, notif.message);

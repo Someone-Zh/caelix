@@ -1,24 +1,12 @@
 use std::collections::HashMap;
-use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use crate::base::ProviderConfig;
 /// Provider配置结
 
-/// 从环境变量或默认位置获取CAELIX_HOME路径
-pub fn get_caelix_home() -> PathBuf {
-    env::var("CAELIX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let mut home_dir = dirs::home_dir().expect("无法获取用户主目录");
-            home_dir.push(".caelix");
-            home_dir
-        })
-}
 
 /// 加载提供商配置
-pub fn load_provider_configs() -> Result<HashMap<String, ProviderConfig>, Box<dyn std::error::Error>> {
-    let caelix_home = get_caelix_home();
+pub fn load_provider_configs(caelix_home: &Path) -> Result<HashMap<String, ProviderConfig>, Box<dyn std::error::Error>> {
     let provider_config_path = caelix_home.join("provider.json");
     
     // 如果目录不存在，创建它

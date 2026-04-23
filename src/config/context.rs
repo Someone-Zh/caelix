@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::env;
+use std::path::PathBuf;
 use tokio::sync::RwLock;
 use crate::manager::AgentManager;
 use crate::manager::ToolManager;
@@ -22,6 +24,17 @@ pub struct CaelixContext {
 }
 
 impl CaelixContext {
+    /// 从环境变量或默认位置获取CAELIX_HOME路径
+    pub fn get_caelix_home() -> PathBuf {
+        env::var("CAELIX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let mut home_dir = dirs::home_dir().expect("无法获取用户主目录");
+                home_dir.push(".caelix");
+                home_dir
+            })
+    }
+
     /// 创建新的应用上下文实例
     pub fn new() -> Self {
         // 初始化消息总线和存储
@@ -43,7 +56,8 @@ impl CaelixContext {
     /// 初始化提供商配置
     /// 读取配置文件并将提供商注册到 llm_provider_manager 中
     pub async fn init_provider(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let configs = load_provider_configs()?;
+        let caelix_home = Self::get_caelix_home();
+        let configs = load_provider_configs(&caelix_home)?;
         
         let mut provider_manager = self.llm_provider_manager.write().await;
         for (key,mut config) in configs {
@@ -76,8 +90,34 @@ impl CaelixContext {
     }
 
     /// 初始化智能体管理器
+    /// 从 CAELIX_HOME/agents 目录加载所有 .agent 文件
     pub async fn init_agents(&self) -> Result<(), Box<dyn std::error::Error>> {
-        register_all_agents(self).await?;
+        let caelix_home = Self::get_caelix_home();
+        let agents_dir = caelix_home.join("agents");
+        
+        // 如果 agents 目录不存在，创建它并从嵌入的 conf 目录复制文件
+        if !agents_dir.exists() {
+            std::fs::create_dir_all(&agents_dir)?;
+            println!("Creating agents directory at: {:?}", agents_dir);
+            
+            // 从嵌入的资源中复制 agent 文件
+            use rust_embed::RustEmbed;
+            
+            #[derive(RustEmbed)]
+            #[folder = "conf/agents/"]
+            struct AgentAssets;
+            
+            for filename in AgentAssets::iter() {
+                if let Some(asset) = AgentAssets::get(&filename) {
+                    let file_path = agents_dir.join(filename.as_ref());
+                    std::fs::write(&file_path, asset.data.as_ref())?;
+                    println!("Copied agent file: {}", filename);
+                }
+            }
+        }
+        
+        // 从 agents 目录加载并注册所有 agent
+        register_all_agents(self, &agents_dir.to_string_lossy()).await?;
         Ok(())
     }
 

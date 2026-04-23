@@ -52,4 +52,6 @@ impl AgentManager {
 pub enum AgentRegistryError {
     #[error("Agent with name '{0}' already exists")]
     AgentAlreadyExists(String),
+    #[error("Failed to load agent: {0}")]
+    LoadError(String),
 }

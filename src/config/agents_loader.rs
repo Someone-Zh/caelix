@@ -1,233 +1,137 @@
-
-use crate::manager::AgentRegistryError;
+use crate::manager::{AgentRegistryError, ToolManager};
 use crate::base::agent::AgentSpec;
 use crate::config::CaelixContext;
-use crate::manager::ToolManager;
+use serde::Deserialize;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
-/// 创建规划专家智能体
-pub async  fn create_planner_agent(tool_manager: &ToolManager, context: &CaelixContext) -> AgentSpec {
-    let system_prompt = r#"
-你是一名专业的规划专家，擅长将复杂任务拆解为可执行的子任务。
+/// Agent 配置的 YAML 部分
+#[derive(Debug, Deserialize)]
+struct AgentConfig {
+    name: String,
+    tools: Vec<String>,
+}
 
-你的职责：
-1. 分析用户提出的任务，理解其目标和要求
-2. 将任务拆分为多个原子的子任务
-3. 将需要收集信息的子任务分发给收集专家
-4. 收到收集专家的信息后，根据信息进行详细的任务规划
-5. 对于大型任务，将其交给架构专家生成架构图和具体子任务
-6. 对于小型任务，直接交给执行者进行处理
-7. 确保子任务之间的依赖关系清晰，原子任务支持并发执行，非原子任务基于依赖顺序串行执行
-
-你需要：
-- 确保任务拆分合理，覆盖所有必要的步骤
-- 评估任务的复杂度，决定是否需要架构专家的参与
-- 为不同类型的子任务选择合适的执行者
-- 提供清晰的任务描述和执行顺序
-"#;
-    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
-    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
-    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
-    let delegate_task_tool = crate::config::tools_loader::create_delegate_task_tool(
-        Arc::new(context.clone()),
-        None,
-        None,
-    );
+/// 解析 .agent 文件内容
+/// 格式：YAML 头（--- ... ---）+ Markdown 体
+fn parse_agent_file(content: &str) -> Result<(AgentConfig, String), String> {
+    // 查找第一个 ---
+    let first_delimiter = content
+        .find("---")
+        .ok_or("Invalid .agent file: missing opening ---")?;
     
-    let tools = vec![
-        diff_edit_tool,
-        global_file_search_tool,
-        directory_tree_tool,
-        delegate_task_tool,
-    ];
-
-    AgentSpec::new(
-        "planner_agent".to_string(),
-        system_prompt.to_string(),
-        tools,
-    )
+    // 查找第二个 ---（从第一个之后开始）
+    let second_delimiter = content[first_delimiter + 3..]
+        .find("---")
+        .ok_or("Invalid .agent file: missing closing ---")?
+        + first_delimiter + 3;
+    
+    // 提取 YAML 部分
+    let yaml_content = &content[first_delimiter + 3..second_delimiter];
+    
+    // 提取 Markdown 部分（system_prompt）
+    let system_prompt = content[second_delimiter + 3..].trim().to_string();
+    
+    // 解析 YAML
+    let config: AgentConfig = serde_yaml::from_str(yaml_content)
+        .map_err(|e| format!("Failed to parse YAML: {}", e))?;
+    
+    Ok((config, system_prompt))
 }
 
-/// 创建收集专家智能体
-pub async fn create_collector_agent(tool_manager: &ToolManager) -> AgentSpec {
-    let system_prompt = r#"
-你是一名专业的收集专家，擅长根据任务信息收集相关的外部信息。
-
-你的职责：
-1. 接收规划专家分配的信息收集任务
-2. 根据任务要求，收集相关的代码、文档、数据等外部信息
-3. 确保收集到的信息全面、准确、相关
-4. 将收集到的信息整理后返回给规划专家
-
-你需要：
-- 明确信息收集的范围和目标
-- 利用各种工具和资源获取所需信息
-- 对收集到的信息进行筛选和整理
-- 确保信息的时效性和可靠性
-"#;
-
-    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
-    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
-    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
-    let tools = vec![
-        diff_edit_tool,
-        global_file_search_tool,
-        directory_tree_tool,
-    ];
-
-    AgentSpec::new(
-        "collector_agent".to_string(),
-        system_prompt.to_string(),
-        tools,
-    )
+/// 从单个 .agent 文件创建 AgentSpec
+async fn create_agent_from_file(
+    file_path: &Path,
+    tool_manager: &ToolManager,
+    context: &CaelixContext,
+) -> Result<AgentSpec, String> {
+    // 读取文件内容
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| format!("Failed to read file {:?}: {}", file_path, e))?;
+    
+    // 解析文件
+    let (config, system_prompt) = parse_agent_file(&content)?;
+    
+    // 根据工具名称列表获取工具实例
+    let mut tools = Vec::new();
+    for tool_name in &config.tools {
+        let tool = tool_manager.get(tool_name).await
+            .ok_or_else(|| format!("Tool '{}' not found in ToolManager", tool_name))?;
+        tools.push(tool);
+    }
+    
+    // 特殊处理：如果工具列表中包含 "delegate_task"，需要额外创建
+    if config.tools.iter().any(|t| t == "delegate_task") {
+        // 检查是否已经添加过 delegate_task
+        let has_delegate = tools.iter().any(|t| t.name() == "delegate_task");
+        if !has_delegate {
+            let delegate_task_tool = crate::config::tools_loader::create_delegate_task_tool(
+                Arc::new(context.clone()),
+                None,
+                None,
+            );
+            tools.push(delegate_task_tool);
+        }
+    }
+    
+    Ok(AgentSpec::new(config.name, system_prompt, tools))
 }
 
-/// 创建架构专家智能体
-pub async fn create_architecture_agent(tool_manager: &ToolManager) -> AgentSpec {
-    let system_prompt = r#"
-你是一名专业的架构专家，擅长为大型任务设计架构图和具体的子任务。
-
-你的职责：
-1. 接收规划专家分配的大型任务
-2. 分析任务的需求和约束
-3. 设计合理的架构方案，包括组件、接口、数据流等
-4. 生成详细的架构图
-5. 将大型任务分解为具体的子任务
-6. 确定子任务之间的依赖关系
-7. 确保原子任务支持并发执行，非原子任务基于依赖顺序串行执行
-
-你需要：
-- 确保架构设计符合最佳实践
-- 考虑系统的可扩展性、可维护性和性能
-- 提供清晰的子任务分解和执行顺序
-- 确保子任务的粒度适当，便于执行和管理
-"#;
-
-    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
-    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
-    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
-    let tools = vec![
-        diff_edit_tool,
-        global_file_search_tool,
-        directory_tree_tool,
-    ];
-
-    AgentSpec::new(
-        "architecture_agent".to_string(),
-        system_prompt.to_string(),
-        tools,
-    )
+/// 从指定目录加载所有 .agent 文件
+pub async fn load_agents_from_directory(
+    directory_path: &str,
+    tool_manager: &ToolManager,
+    context: &CaelixContext,
+) -> Result<Vec<AgentSpec>, String> {
+    let dir_path = Path::new(directory_path);
+    
+    if !dir_path.exists() {
+        return Err(format!("Directory does not exist: {}", directory_path));
+    }
+    
+    if !dir_path.is_dir() {
+        return Err(format!("Path is not a directory: {}", directory_path));
+    }
+    
+    let mut agents = Vec::new();
+    
+    // 遍历目录中的所有 .agent 文件
+    for entry in fs::read_dir(dir_path)
+        .map_err(|e| format!("Failed to read directory {}: {}", directory_path, e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        
+        // 只处理 .agent 文件
+        if path.extension().and_then(|ext| ext.to_str()) == Some("agent") {
+            println!("Loading agent from: {:?}", path);
+            match create_agent_from_file(&path, tool_manager, context).await {
+                Ok(agent) => agents.push(agent),
+                Err(e) => {
+                    eprintln!("Warning: Failed to load agent from {:?}: {}", path, e);
+                }
+            }
+        }
+    }
+    
+    Ok(agents)
 }
 
-/// 创建代码操作执行者智能体
-pub async fn create_code_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
-    let system_prompt = r#"
-你是一名专业的代码操作执行者，擅长执行与代码相关的任务。
-
-你的职责：
-1. 接收规划专家或架构专家分配的代码操作任务
-2. 利用文件系统工具执行具体的代码操作
-3. 确保代码操作的准确性和完整性
-4. 及时反馈执行结果
-
-你需要：
-- 熟练使用文件系统工具进行文件读写和修改
-- 确保代码操作符合要求
-- 处理执行过程中遇到的问题
-- 提供清晰的执行结果反馈
-- 当工具执行失败时，可以尝试别的方法但是最多3次都失败则结束
-"#;
-
-    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
-    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
-    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
-    let tools = vec![
-        // diff_edit_tool,
-        global_file_search_tool,
-        directory_tree_tool,
-    ];
-    AgentSpec::new(
-        "code_executor_agent".to_string(),
-        system_prompt.to_string(),
-        tools,
-    )
-}
-
-/// 创建浏览器操作执行者智能体
-pub async  fn create_browser_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
-    let system_prompt = r#"
-你是一名专业的浏览器操作执行者，擅长执行与浏览器相关的任务。
-
-你的职责：
-1. 接收规划专家分配的浏览器操作任务
-2. 执行浏览器相关的操作，如网页访问、信息获取等
-3. 确保浏览器操作的准确性和完整性
-4. 及时反馈执行结果
-
-你需要：
-- 熟练使用浏览器工具进行网页操作
-- 确保操作符合要求
-- 处理执行过程中遇到的问题
-- 提供清晰的执行结果反馈
-"#;
-
-    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
-    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
-    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
-    let tools = vec![
-        diff_edit_tool,
-        global_file_search_tool,
-        directory_tree_tool,
-    ];
-
-    AgentSpec::new(
-        "browser_executor_agent".to_string(),
-        system_prompt.to_string(),
-        tools,
-    )
-}
-
-/// 创建UI操作执行者智能体
-pub async fn create_ui_executor_agent(tool_manager: &ToolManager) -> AgentSpec {
-    let system_prompt = r#"
-你是一名专业的UI操作执行者，擅长执行与UI相关的任务。
-
-你的职责：
-1. 接收规划专家分配的UI操作任务
-2. 执行UI相关的操作，如界面交互、元素操作等
-3. 确保UI操作的准确性和完整性
-4. 及时反馈执行结果
-
-你需要：
-- 熟练使用UI工具进行界面操作
-- 确保操作符合要求
-- 处理执行过程中遇到的问题
-- 提供清晰的执行结果反馈
-"#;
-    let diff_edit_tool = tool_manager.get("diff_edit").await.unwrap();
-    let global_file_search_tool = tool_manager.get("global_file_search").await.unwrap();
-    let directory_tree_tool = tool_manager.get("directory_tree").await.unwrap();
-    let tools = vec![
-        diff_edit_tool,
-        global_file_search_tool,
-        directory_tree_tool,
-    ];
-    AgentSpec::new(
-        "ui_executor_agent".to_string(),
-        system_prompt.to_string(),
-        tools,
-    )
-}
-
-/// 注册所有角色智能体到注册中心
-pub async fn register_all_agents(context: &CaelixContext) -> Result<(), AgentRegistryError> {
+/// 注册所有角色智能体到注册中心（从指定目录加载）
+pub async fn register_all_agents(context: &CaelixContext, directory_path: &str) -> Result<(), AgentRegistryError> {
     let agent_manager = context.agent_manager.clone();
     let tool_manager = context.tool_manager.clone();
-    agent_manager.register(create_planner_agent(&tool_manager, context).await).await?;
-    agent_manager.register(create_collector_agent(&tool_manager).await).await?;
-    agent_manager.register(create_architecture_agent(&tool_manager).await).await?;
-    agent_manager.register(create_code_executor_agent(&tool_manager).await).await?;
-    agent_manager.register(create_browser_executor_agent(&tool_manager).await).await?;
-    agent_manager.register(create_ui_executor_agent(&tool_manager).await).await?;
+    
+    // 从指定目录加载所有 agent
+    let agents = load_agents_from_directory(directory_path, &tool_manager, context)
+        .await
+        .map_err(|e| AgentRegistryError::LoadError(e))?;
+    
+    // 注册所有加载的 agent
+    for agent in agents {
+        agent_manager.register(agent).await?;
+    }
+    
     Ok(())
 }

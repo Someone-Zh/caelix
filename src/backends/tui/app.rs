@@ -66,6 +66,8 @@ pub struct App {
     pub loading_start_time: Option<Instant>,  // 加载开始时间
     pub has_started_chat: bool,  // 是否已经开始对话（用于切换视图）
     pub status_message: String,  // 状态栏消息
+    pub streaming_content: String,  // 当前流式内容缓冲区
+    pub is_streaming: bool,  // 是否正在流式接收
     // 用于异步任务通信的通道
     pub message_tx: Option<mpsc::Sender<AppMessage>>,
     pub message_rx: Option<mpsc::Receiver<AppMessage>>,
@@ -78,6 +80,8 @@ pub enum AppMessage {
     AddNotification(Notification),
     SetLoading(bool),
     UpdateStatus(String),
+    StreamContent(String),  // 流式内容追加
+    StartStreamingMessage,  // 开始流式消息
 }
 
 impl App {
@@ -98,6 +102,8 @@ impl App {
             loading_start_time: None,
             has_started_chat: false,
             status_message: "就绪".to_string(),
+            streaming_content: String::new(),
+            is_streaming: false,
             message_tx: Some(tx),
             message_rx: Some(rx),
         }
@@ -151,10 +157,35 @@ impl App {
                     self.loading_start_time = Some(Instant::now());
                 } else {
                     self.loading_start_time = None;
+                    // 加载结束时，也结束流式状态
+                    self.is_streaming = false;
                 }
             }
             AppMessage::UpdateStatus(status) => {
                 self.status_message = status;
+            }
+            AppMessage::StartStreamingMessage => {
+                // 开始新的流式消息，清空缓冲区
+                self.streaming_content.clear();
+                self.is_streaming = true;
+                // 添加一个空的助手消息作为占位符
+                self.add_message(Message {
+                    msg_type: MessageType::Assistant,
+                    content: String::new(),
+                    timestamp: Instant::now(),
+                });
+            }
+            AppMessage::StreamContent(content) => {
+                // 追加流式内容
+                self.streaming_content.push_str(&content);
+                // 更新最后一条消息的内容（如果存在）
+                if let Some(last_msg) = self.messages.last_mut() {
+                    if last_msg.msg_type == MessageType::Assistant {
+                        last_msg.content = self.streaming_content.clone();
+                        // 自动滚动到最新消息
+                        self.scroll_offset = self.messages.len() as u16;
+                    }
+                }
             }
         }
     }
@@ -256,16 +287,18 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                             agent: None,
                         };
                         
-                        let mut full_response = String::new();
-                        
                         match api_clone.chat_stream(request).await {
                             Ok(mut stream) => {
+                                // 开始流式消息
+                                let _ = tx.send(AppMessage::StartStreamingMessage).await;
+                                
                                 while let Some(chunk_result) = stream.next().await {
                                     match chunk_result {
                                         Ok(chunk) => {
                                             match chunk {
                                                 AgentOutputChunk::Content { content } => {
-                                                    full_response.push_str(&content);
+                                                    // 立即发送内容更新，实现流式显示
+                                                    let _ = tx.send(AppMessage::StreamContent(content)).await;
                                                 }
                                                 AgentOutputChunk::ToolCall { name, .. } => {
                                                     let _ = tx.send(AppMessage::AddNotification(Notification {
@@ -289,15 +322,6 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                             break;
                                         }
                                     }
-                                }
-                                
-                                // 添加完整的助手消息
-                                if !full_response.is_empty() {
-                                    let _ = tx.send(AppMessage::AddMessage(Message {
-                                        msg_type: MessageType::Assistant,
-                                        content: full_response,
-                                        timestamp: Instant::now(),
-                                    })).await;
                                 }
                             }
                             Err(e) => {
