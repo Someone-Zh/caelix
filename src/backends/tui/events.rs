@@ -10,8 +10,10 @@ pub enum TuiEvent {
     Key(KeyEvent),
     /// 退出应用
     Quit,
-    /// 发送消息
+    /// 发送消息（Command+Enter）
     Send,
+    /// 换行（普通Enter）
+    NewLine,
     /// 调整大小
     Resize(u16, u16),
 }
@@ -33,15 +35,20 @@ impl EventHandler {
         if event::poll(self.tick_rate)? {
             match event::read()? {
                 Event::Key(key) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    // 检查 Command/Ctrl 修饰键
+                    let is_command = key.modifiers.contains(KeyModifiers::CONTROL) 
+                        || key.modifiers.contains(KeyModifiers::SUPER);
+                    
+                    if is_command {
                         match key.code {
                             KeyCode::Char('c') | KeyCode::Char('q') => Ok(TuiEvent::Quit),
+                            KeyCode::Enter => Ok(TuiEvent::Send),  // Command+Enter 发送
                             _ => Ok(TuiEvent::Key(key)),
                         }
                     } else {
                         match key.code {
-                            KeyCode::Enter => Ok(TuiEvent::Send),
-                            KeyCode::Esc => Ok(TuiEvent::Quit),
+                            KeyCode::Enter => Ok(TuiEvent::NewLine),  // 普通Enter换行
+                            KeyCode::Esc => Ok(TuiEvent::Key(key)),  // Esc作为普通按键处理
                             _ => Ok(TuiEvent::Key(key)),
                         }
                     }

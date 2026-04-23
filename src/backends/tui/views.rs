@@ -2,7 +2,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph, List, ListItem, Wrap},
 };
-use crate::backends::tui::app::{App, TuiMessageType, NotificationType, AppView};
+use crate::backends::tui::state::{App, TuiMessageType, NotificationType, AppView};
 use crate::runtime::message::types::MessageType as RuntimeMessageType;
 use crate::runtime::task::TaskStatus;
 
@@ -18,6 +18,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         }
         AppView::Tasks => render_tasks_view(frame, app),
         AppView::Notifications => render_notifications_view(frame, app),
+        AppView::SessionList => render_session_list_popup(frame, app),
+        AppView::ProviderList => render_provider_list_popup(frame, app),
+        AppView::ModelList => render_model_list_popup(frame, app),
+    }
+    
+    // 如果在输入命令（以'/'开头）且有过滤的命令，显示命令补全列表
+    if app.active_view == AppView::Chat && app.input_buffer.starts_with('/') && !app.filtered_commands.is_empty() {
+        render_command_completion_popup(frame, app);
     }
     
     // 始终渲染气泡通知（在所有视图之上）
@@ -48,7 +56,7 @@ fn render_welcome_view(frame: &mut Frame, app: &App) {
 
     // 输入框
     let input_block = Block::default()
-        .title(" 输入消息 (Enter发送, Esc退出) ")
+        .title(" 输入消息 (Cmd+Enter发送, Enter换行, Esc退出) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(86, 156, 214)));  // #569CD6 蓝色边框
     
@@ -98,15 +106,11 @@ fn render_chat_view(frame: &mut Frame, app: &App) {
 
     // 输入框
     let input_block = Block::default()
-        .title(" 输入消息 (Enter发送, Tab切换Agent, /命令, Esc退出) ")
+        .title(" 输入消息 (Cmd+Enter发送, Enter换行, Tab切换Agent, /命令, Esc返回) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(86, 156, 214)));  // #569CD6 蓝色边框
     
-    let input_text = if app.is_command_mode {
-        format!("/{}█", app.command_buffer)
-    } else {
-        format!("{}█", app.input_buffer)
-    };
+    let input_text = format!("{}█", app.input_buffer);
     
     let mut input_style = Style::default().fg(Color::Rgb(212, 212, 212));  // #D4D4D4 普通文本
     
@@ -414,4 +418,322 @@ fn render_bubble_notifications(frame: &mut Frame, app: &App) {
         
         frame.render_widget(text, bubble_rect);
     }
+}
+
+/// 渲染Session列表弹窗（居中）
+fn render_session_list_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    
+    // 计算弹窗大小和位置（居中）
+    let popup_width = 60u16.min(area.width.saturating_sub(4));
+    let popup_height = 20u16.min(area.height.saturating_sub(4));
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    
+    let popup_area = Rect {
+        x: popup_x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+    
+    // 渲染背景遮罩
+    let block = Block::default()
+        .title(" 会话列表 (Enter选择, Esc返回) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(86, 156, 214)))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    
+    frame.render_widget(block, popup_area);
+    
+    // 内容区域
+    let inner_area = Rect {
+        x: popup_x + 1,
+        y: popup_y + 1,
+        width: popup_width - 2,
+        height: popup_height - 2,
+    };
+    
+    if app.is_loading_sessions {
+        let loading = Paragraph::new("加载中...")
+            .style(Style::default().fg(Color::Rgb(133, 133, 133)))
+            .alignment(Alignment::Center);
+        frame.render_widget(loading, inner_area);
+    } else if app.sessions.is_empty() {
+        let empty = Paragraph::new("暂无会话")
+            .style(Style::default().fg(Color::Rgb(133, 133, 133)))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, inner_area);
+    } else {
+        let items: Vec<ListItem> = app.sessions.iter().enumerate().map(|(idx, session)| {
+            let is_selected = idx == app.selected_session_idx;
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Rgb(78, 201, 176))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Rgb(212, 212, 212))
+            };
+            
+            let time_str = session.created_at.format("%Y-%m-%d %H:%M").to_string();
+            let content = format!("{} | {}", time_str, session.summary);
+            ListItem::new(content).style(style)
+        }).collect();
+        
+        let list = List::new(items)
+            .highlight_style(Style::default()
+                .fg(Color::Rgb(78, 201, 176))
+                .add_modifier(Modifier::BOLD));
+        
+        frame.render_widget(list, inner_area);
+    }
+}
+
+/// 渲染Provider列表弹窗（居中）
+fn render_provider_list_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    
+    // 计算弹窗大小和位置（居中）
+    let popup_width = 50u16.min(area.width.saturating_sub(4));
+    let popup_height = 15u16.min(area.height.saturating_sub(4));
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    
+    let popup_area = Rect {
+        x: popup_x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+    
+    // 渲染背景遮罩
+    let block = Block::default()
+        .title(" 提供者列表 (Enter选择, Esc返回) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(86, 156, 214)))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    
+    frame.render_widget(block, popup_area);
+    
+    // 内容区域
+    let inner_area = Rect {
+        x: popup_x + 1,
+        y: popup_y + 1,
+        width: popup_width - 2,
+        height: popup_height - 2,
+    };
+    
+    if app.is_loading_providers {
+        let loading = Paragraph::new("加载中...")
+            .style(Style::default().fg(Color::Rgb(133, 133, 133)))
+            .alignment(Alignment::Center);
+        frame.render_widget(loading, inner_area);
+    } else if app.providers.is_empty() {
+        let empty = Paragraph::new("暂无提供者")
+            .style(Style::default().fg(Color::Rgb(133, 133, 133)))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, inner_area);
+    } else {
+        let items: Vec<ListItem> = app.providers.iter().enumerate().map(|(idx, provider)| {
+            let is_selected = idx == app.selected_provider_idx;
+            let is_current = provider.name == app.current_provider;
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Rgb(78, 201, 176))
+                    .add_modifier(Modifier::BOLD)
+            } else if is_current {
+                Style::default().fg(Color::Rgb(197, 134, 192))
+            } else {
+                Style::default().fg(Color::Rgb(212, 212, 212))
+            };
+            
+            let marker = if is_current { " ✓" } else { "" };
+            let content = format!("{} ({}){}", provider.name, provider.llm_type, marker);
+            ListItem::new(content).style(style)
+        }).collect();
+        
+        let list = List::new(items)
+            .highlight_style(Style::default()
+                .fg(Color::Rgb(78, 201, 176))
+                .add_modifier(Modifier::BOLD));
+        
+        frame.render_widget(list, inner_area);
+    }
+}
+
+/// 渲染Model列表弹窗（两级列表，居中）
+fn render_model_list_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    
+    // 计算弹窗大小和位置（居中）
+    let popup_width = 70u16.min(area.width.saturating_sub(4));
+    let popup_height = 25u16.min(area.height.saturating_sub(4));
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    
+    let popup_area = Rect {
+        x: popup_x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+    
+    // 渲染背景遮罩
+    let block = Block::default()
+        .title(" 模型选择 (↑↓导航, Enter确认, Esc返回) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(86, 156, 214)))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    
+    frame.render_widget(block, popup_area);
+    
+    // 内容区域
+    let inner_area = Rect {
+        x: popup_x + 1,
+        y: popup_y + 1,
+        width: popup_width - 2,
+        height: popup_height - 2,
+    };
+    
+    if app.is_loading_providers {
+        let loading = Paragraph::new("加载提供者...")
+            .style(Style::default().fg(Color::Rgb(133, 133, 133)))
+            .alignment(Alignment::Center);
+        frame.render_widget(loading, inner_area);
+    } else if app.providers.is_empty() {
+        let empty = Paragraph::new("暂无提供者")
+            .style(Style::default().fg(Color::Rgb(133, 133, 133)))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, inner_area);
+    } else {
+        // 构建两级列表：Provider -> Models
+        let mut items = Vec::new();
+        
+        for (pidx, provider) in app.providers.iter().enumerate() {
+            let is_provider_selected = pidx == app.selected_provider_idx;
+            
+            // Provider标题
+            let provider_style = if is_provider_selected {
+                Style::default()
+                    .fg(Color::Rgb(78, 201, 176))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Rgb(197, 134, 192))
+            };
+            
+            let marker = if provider.name == app.current_provider { " ✓" } else { "" };
+            items.push(ListItem::new(format!(">>> {} ({}){}", provider.name, provider.llm_type, marker))
+                .style(provider_style));
+            
+            // 如果这是选中的provider，显示其models
+            if is_provider_selected {
+                if app.is_loading_models {
+                    items.push(ListItem::new("  加载中...")
+                        .style(Style::default().fg(Color::Rgb(133, 133, 133))));
+                } else if provider.models.is_empty() {
+                    items.push(ListItem::new("  (无模型)")
+                        .style(Style::default().fg(Color::Rgb(133, 133, 133))));
+                } else {
+                    for (midx, model) in provider.models.iter().enumerate() {
+                        let is_model_selected = midx == app.selected_model_idx;
+                        let is_current_model = model == &app.current_model;
+                        
+                        let model_style = if is_model_selected {
+                            Style::default()
+                                .fg(Color::Rgb(78, 201, 176))
+                                .add_modifier(Modifier::BOLD)
+                        } else if is_current_model {
+                            Style::default().fg(Color::Rgb(197, 134, 192))
+                        } else {
+                            Style::default().fg(Color::Rgb(212, 212, 212))
+                        };
+                        
+                        let model_marker = if is_current_model { " ✓" } else { "" };
+                        items.push(ListItem::new(format!("  • {}{}", model, model_marker))
+                            .style(model_style));
+                    }
+                }
+            }
+        }
+        
+        let list = List::new(items)
+            .highlight_style(Style::default()
+                .fg(Color::Rgb(78, 201, 176))
+                .add_modifier(Modifier::BOLD));
+        
+        frame.render_widget(list, inner_area);
+    }
+}
+
+/// 渲染命令补全弹窗（输入框下方）
+fn render_command_completion_popup(frame: &mut Frame, app: &App) {
+    // 如果没有过滤结果，不显示
+    if app.filtered_commands.is_empty() {
+        return;
+    }
+    
+    let area = frame.area();
+    
+    // 计算弹窗位置（在输入框上方或下方）
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let max_height = 8u16; // 最多显示8个命令
+    let popup_height = ((app.filtered_commands.len() as u16 + 2).min(max_height)).max(3); // 至少3行（标题+边框）
+    
+    // 放在屏幕底部输入框上方
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = area.height.saturating_sub(popup_height + 6); // 留出状态栏和配置栏空间
+    
+    // 确保不会超出屏幕
+    if popup_y >= area.height || popup_width == 0 || popup_height == 0 {
+        return;
+    }
+    
+    let popup_area = Rect {
+        x: popup_x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+    
+    // 渲染背景
+    let block = Block::default()
+        .title(" 命令补全 (↑↓选择, Enter确认) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(197, 134, 192)))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    
+    frame.render_widget(block, popup_area);
+    
+    // 内容区域
+    let inner_area = Rect {
+        x: popup_x + 1,
+        y: popup_y + 1,
+        width: popup_width.saturating_sub(2),
+        height: popup_height.saturating_sub(2),
+    };
+    
+    // 如果内部区域太小，不渲染列表
+    if inner_area.width == 0 || inner_area.height == 0 {
+        return;
+    }
+    
+    let items: Vec<ListItem> = app.filtered_commands.iter().enumerate().map(|(idx, cmd)| {
+        let is_selected = idx == app.selected_command_idx;
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Rgb(78, 201, 176))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(212, 212, 212))
+        };
+        
+        ListItem::new(cmd.as_str()).style(style)
+    }).collect();
+    
+    let list = List::new(items)
+        .highlight_style(Style::default()
+            .fg(Color::Rgb(78, 201, 176))
+            .add_modifier(Modifier::BOLD));
+    
+    frame.render_widget(list, inner_area);
 }
