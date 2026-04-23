@@ -7,8 +7,9 @@ use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::config::CaelixContext;
 use crate::base::agent::{AgentOutputChunk, Agent};
 use crate::base::provider::{ChatMessage, LlmConfig, LlmType};
-use crate::runtime::message::types::Message;
+use crate::runtime::message::types::{Message, MessageType, Role, Status, MessageMeta};
 use crate::runtime::TaskMeta;
+use uuid::Uuid;
 
 /// API 核心实现
 pub struct CaelixApiImpl {
@@ -108,47 +109,275 @@ impl CaelixApi for CaelixApiImpl {
             .or(session_config.agent)
             .unwrap_or_else(|| "code_executor_agent".to_string());
 
-        // 获取提供者
-        let provider_manager = self.context.llm_provider_manager.read().await;
-        let provider = provider_manager
-            .get_provider(&provider_name)
-            .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
-            .clone();
+        // 生成唯一的 stream_id
+        let stream_id = Uuid::new_v4().to_string();
+        
+        // 克隆必要的引用用于后台任务
+        let context = self.context.clone();
+        let session_id = request.session_id.clone();
+        let message_content = request.message.clone();
+        let bus = self.context.message_bus.clone();
+        
+        // 在后台执行 agent 并通过消息总线推送流式内容
+        tokio::spawn(async move {
+            // 发送开始消息
+            let start_span_id = Message::generate_span_id();
+            let start_msg = Message {
+                session_id: session_id.clone(),
+                span_id: start_span_id.clone(),
+                parent_span_id: None,
+                seq: 0,
+                role: Role::Agent,
+                name: agent_name.clone(),
+                r#type: MessageType::Status,
+                content: "开始处理...".to_string(),
+                status: Status::Running,
+                timestamp: chrono::Utc::now(),
+                error: None,
+                meta: Some(MessageMeta {
+                    latency_ms: None,
+                    tokens_used: None,
+                    version: None,
+                    task_id: None,
+                    stream_id: Some(stream_id.clone()),
+                    is_final: false,
+                }),
+            };
+            let _ = bus.send(start_msg);
+            
+            // 获取提供者
+            let provider_manager = context.llm_provider_manager.read().await;
+            let provider = match provider_manager.get_provider(&provider_name) {
+                Some(p) => p.clone(),
+                None => {
+                    // 发送错误消息
+                    let error_msg = Message {
+                        session_id: session_id.clone(),
+                        span_id: Message::generate_span_id(),
+                        parent_span_id: Some(start_span_id.clone()),
+                        seq: 0,
+                        role: Role::System,
+                        name: "system".to_string(),
+                        r#type: MessageType::Error,
+                        content: format!("Provider '{}' not found", provider_name),
+                        status: Status::Error,
+                        timestamp: chrono::Utc::now(),
+                        error: None,
+                        meta: Some(MessageMeta {
+                            latency_ms: None,
+                            tokens_used: None,
+                            version: None,
+                            task_id: None,
+                            stream_id: Some(stream_id.clone()),
+                            is_final: true,
+                        }),
+                    };
+                    let _ = bus.send(error_msg);
+                    return;
+                }
+            };
 
-        // 获取 agent
-        let agent_spec = self.context.agent_manager
-            .get(&agent_name)
-            .await
-            .ok_or_else(|| ApiError::agent_not_found(&agent_name))?;
+            // 获取 agent
+            let agent_spec = match context.agent_manager.get(&agent_name).await {
+                Some(spec) => spec,
+                None => {
+                    // 发送错误消息
+                    let error_msg = Message {
+                        session_id: session_id.clone(),
+                        span_id: Message::generate_span_id(),
+                        parent_span_id: Some(start_span_id.clone()),
+                        seq: 0,
+                        role: Role::System,
+                        name: "system".to_string(),
+                        r#type: MessageType::Error,
+                        content: format!("Agent '{}' not found", agent_name),
+                        status: Status::Error,
+                        timestamp: chrono::Utc::now(),
+                        error: None,
+                        meta: Some(MessageMeta {
+                            latency_ms: None,
+                            tokens_used: None,
+                            version: None,
+                            task_id: None,
+                            stream_id: Some(stream_id.clone()),
+                            is_final: true,
+                        }),
+                    };
+                    let _ = bus.send(error_msg);
+                    return;
+                }
+            };
 
-        // 应用钩子增强 AgentSpec
-        let mut enhanced_agent = (*agent_spec).clone();
-        self.context.hook_registry.apply_hooks(&mut enhanced_agent).await;
+            // 应用钩子增强 AgentSpec
+            let mut enhanced_agent = (*agent_spec).clone();
+            context.hook_registry.apply_hooks(&mut enhanced_agent).await;
 
-        // 构建消息
-        let messages = vec![
-            ChatMessage::user(request.message),
-        ];
+            // 构建消息
+            let messages = vec![
+                ChatMessage::user(message_content),
+            ];
 
-        // 构建 LLM 配置
-        let config = LlmConfig {
-            model_name,
-        };
+            // 构建 LLM 配置
+            let config = LlmConfig {
+                model_name,
+            };
 
-        // 执行 agent 并获取流
-        let stream: BoxStream<'_, Result<AgentOutputChunk, _>> = match enhanced_agent.execute(messages, provider, &config).await {
-            Ok(s) => Box::pin(s),
-            Err(e) => {
-                return Err(ApiError::InternalError(format!("Agent execution failed: {:?}", e)));
+            // 执行 agent 并获取流
+            let stream = match enhanced_agent.execute(messages, provider, &config).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // 发送错误消息
+                    let error_msg = Message {
+                        session_id: session_id.clone(),
+                        span_id: Message::generate_span_id(),
+                        parent_span_id: Some(start_span_id.clone()),
+                        seq: 0,
+                        role: Role::System,
+                        name: "system".to_string(),
+                        r#type: MessageType::Error,
+                        content: format!("Agent execution failed: {:?}", e),
+                        status: Status::Error,
+                        timestamp: chrono::Utc::now(),
+                        error: None,
+                        meta: Some(MessageMeta {
+                            latency_ms: None,
+                            tokens_used: None,
+                            version: None,
+                            task_id: None,
+                            stream_id: Some(stream_id.clone()),
+                            is_final: true,
+                        }),
+                    };
+                    let _ = bus.send(error_msg);
+                    return;
+                }
+            };
+
+            // 逐块推送流式内容
+            let mut chunk_count = 0u64;
+            let mut full_content = String::new();
+            
+            let mut stream = stream;
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(chunk) => {
+                        match chunk {
+                            AgentOutputChunk::Content { content } => {
+                                full_content.push_str(&content);
+                                chunk_count += 1;
+                                
+                                // 发送流式内容块
+                                let chunk_msg = Message {
+                                    session_id: session_id.clone(),
+                                    span_id: Message::generate_span_id(),
+                                    parent_span_id: Some(start_span_id.clone()),
+                                    seq: 0,
+                                    role: Role::Agent,
+                                    name: agent_name.clone(),
+                                    r#type: MessageType::Chunk,
+                                    content: content.clone(),
+                                    status: Status::Running,
+                                    timestamp: chrono::Utc::now(),
+                                    error: None,
+                                    meta: Some(MessageMeta {
+                                        latency_ms: None,
+                                        tokens_used: None,
+                                        version: None,
+                                        task_id: None,
+                                        stream_id: Some(stream_id.clone()),
+                                        is_final: false,
+                                    }),
+                                };
+                                let _ = bus.send(chunk_msg);
+                            }
+                            AgentOutputChunk::ToolCall { name, arguments, .. } => {
+                                // 发送工具调用通知
+                                let tool_msg = Message {
+                                    session_id: session_id.clone(),
+                                    span_id: Message::generate_span_id(),
+                                    parent_span_id: Some(start_span_id.clone()),
+                                    seq: 0,
+                                    role: Role::Agent,
+                                    name: agent_name.clone(),
+                                    r#type: MessageType::ToolCall,
+                                    content: format!("调用工具: {}({})", name, arguments),
+                                    status: Status::Running,
+                                    timestamp: chrono::Utc::now(),
+                                    error: None,
+                                    meta: Some(MessageMeta {
+                                        latency_ms: None,
+                                        tokens_used: None,
+                                        version: None,
+                                        task_id: None,
+                                        stream_id: Some(stream_id.clone()),
+                                        is_final: false,
+                                    }),
+                                };
+                                let _ = bus.send(tool_msg);
+                            }
+                            AgentOutputChunk::Finish { .. } => {
+                                // 发送结束标记
+                                let finish_msg = Message {
+                                    session_id: session_id.clone(),
+                                    span_id: Message::generate_span_id(),
+                                    parent_span_id: Some(start_span_id.clone()),
+                                    seq: 0,
+                                    role: Role::Agent,
+                                    name: agent_name.clone(),
+                                    r#type: MessageType::Chunk,
+                                    content: String::new(),
+                                    status: Status::Done,
+                                    timestamp: chrono::Utc::now(),
+                                    error: None,
+                                    meta: Some(MessageMeta {
+                                        latency_ms: None,
+                                        tokens_used: None,
+                                        version: None,
+                                        task_id: None,
+                                        stream_id: Some(stream_id.clone()),
+                                        is_final: true,
+                                    }),
+                                };
+                                let _ = bus.send(finish_msg);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        // 发送错误消息
+                        let error_msg = Message {
+                            session_id: session_id.clone(),
+                            span_id: Message::generate_span_id(),
+                            parent_span_id: Some(start_span_id.clone()),
+                            seq: 0,
+                            role: Role::System,
+                            name: "system".to_string(),
+                            r#type: MessageType::Error,
+                            content: format!("Stream error: {:?}", e),
+                            status: Status::Error,
+                            timestamp: chrono::Utc::now(),
+                            error: None,
+                            meta: Some(MessageMeta {
+                                latency_ms: None,
+                                tokens_used: None,
+                                version: None,
+                                task_id: None,
+                                stream_id: Some(stream_id.clone()),
+                                is_final: true,
+                            }),
+                        };
+                        let _ = bus.send(error_msg);
+                        break;
+                    }
+                }
             }
-        };
-
-        // 转换流类型
-        let transformed_stream = stream.map(|result| {
-            result.map_err(|e| ApiError::StreamError(format!("{:?}", e)))
         });
 
-        Ok(Box::pin(transformed_stream))
+        // 立即返回一个空的已完成流，告知客户端任务已在后台执行
+        // 实际内容会通过消息总线推送
+        let empty_stream = futures::stream::empty();
+        Ok(Box::pin(empty_stream))
     }
 
     async fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>, ApiError> {

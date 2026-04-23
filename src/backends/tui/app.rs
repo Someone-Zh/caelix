@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
+use std::collections::{HashMap, HashSet};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::sync::broadcast;
@@ -100,6 +101,8 @@ pub struct App {
     pub is_command_mode: bool,              // 是否处于命令模式
     pub message_bus_rx: Option<broadcast::Receiver<RuntimeMessage>>, // 消息总线订阅者
     pub bubble_notifications: Vec<BubbleNotification>, // 活跃的气泡通知
+    pub active_streams: HashMap<String, String>,  // stream_id -> 当前累积内容
+    pub completed_streams: HashSet<String>,        // 已完成的 stream_id
 }
 
 /// 应用内部消息（用于异步任务与主循环通信）
@@ -144,6 +147,8 @@ impl App {
             is_command_mode: false,
             message_bus_rx: None,
             bubble_notifications: Vec::new(),
+            active_streams: HashMap::new(),
+            completed_streams: HashSet::new(),
         }
     }
 
@@ -380,8 +385,51 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         
         // 处理收集到的消息
         for msg in bus_messages {
-            // 判断是否为任务相关通知
-            if matches!(msg.r#type, 
+            // 检查是否是流式消息
+            let is_stream_chunk = if let Some(meta) = &msg.meta {
+                meta.stream_id.is_some()
+            } else {
+                false
+            };
+            
+            if is_stream_chunk {
+                // 处理流式消息
+                if let Some(meta) = &msg.meta {
+                    if let Some(stream_id) = &meta.stream_id {
+                        // 更新或创建流式缓冲区
+                        let content = app.active_streams.entry(stream_id.clone())
+                            .or_insert_with(String::new);
+                        content.push_str(&msg.content);
+                        let content_clone = content.clone();
+                        
+                        // 如果这是最后一条,标记为完成
+                        if meta.is_final {
+                            app.completed_streams.insert(stream_id.clone());
+                            // 将完整内容作为普通助手消息添加
+                            app.add_assistant_message(&content_clone);
+                            // 清理 active_streams
+                            app.active_streams.remove(stream_id);
+                            // 取消加载状态
+                            app.is_loading = false;
+                            app.loading_start_time = None;
+                            app.is_streaming = false;
+                            app.status_message = "就绪".to_string();
+                        } else {
+                            // 实时更新最后一条消息
+                            if let Some(last_msg) = app.messages.last_mut() {
+                                if last_msg.msg_type == TuiMessageType::Assistant {
+                                    last_msg.content = content_clone.clone();
+                                    // 自动滚动到最新消息
+                                    app.scroll_offset = app.messages.len() as u16;
+                                }
+                            } else {
+                                // 如果没有助手消息，创建一个
+                                app.add_assistant_message(&content_clone);
+                            }
+                        }
+                    }
+                }
+            } else if matches!(msg.r#type, 
                 RuntimeMessageType::TaskStarted | RuntimeMessageType::TaskCompleted | 
                 RuntimeMessageType::TaskFailed | RuntimeMessageType::TaskProgress)
             {
@@ -458,7 +506,7 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                     let session_clone = session_id.clone();
                     let tx = app.message_tx.clone().unwrap();
                     
-                    // 在后台任务中处理流式响应
+                    // 在后台任务中处理异步调用
                     tokio::spawn(async move {
                         // 设置加载状态
                         let _ = tx.send(AppMessage::SetLoading(true)).await;
@@ -472,42 +520,12 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                             agent: None,
                         };
                         
+                        // 现在 chat_stream 会立即返回，任务在后台执行
+                        // 实际内容会通过消息总线推送
                         match api_clone.chat_stream(request).await {
-                            Ok(mut stream) => {
-                                // 开始流式消息
-                                let _ = tx.send(AppMessage::StartStreamingMessage).await;
-                                
-                                while let Some(chunk_result) = stream.next().await {
-                                    match chunk_result {
-                                        Ok(chunk) => {
-                                            match chunk {
-                                                AgentOutputChunk::Content { content } => {
-                                                    // 立即发送内容更新，实现流式显示
-                                                    let _ = tx.send(AppMessage::StreamContent(content)).await;
-                                                }
-                                                AgentOutputChunk::ToolCall { name, .. } => {
-                                                    let _ = tx.send(AppMessage::AddNotification(Notification {
-                                                        notif_type: NotificationType::Info,
-                                                        message: format!("调用工具: {}", name),
-                                                        timestamp: Instant::now(),
-                                                    })).await;
-                                                }
-                                                AgentOutputChunk::Finish { .. } => {
-                                                    // 完成
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let _ = tx.send(AppMessage::AddNotification(Notification {
-                                                notif_type: NotificationType::Error,
-                                                message: format!("错误: {:?}", e),
-                                                timestamp: Instant::now(),
-                                            })).await;
-                                            break;
-                                        }
-                                    }
-                                }
+                            Ok(_stream) => {
+                                // 流可能只包含任务启动信息
+                                // 实际内容会通过消息总线推送
                             }
                             Err(e) => {
                                 let _ = tx.send(AppMessage::AddNotification(Notification {
@@ -518,9 +536,7 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                             }
                         }
                         
-                        // 取消加载状态
-                        let _ = tx.send(AppMessage::SetLoading(false)).await;
-                        let _ = tx.send(AppMessage::UpdateStatus("就绪".to_string())).await;
+                        // 注意：不立即取消加载状态，等待消息总线的完成信号
                     });
                 }
             }

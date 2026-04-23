@@ -61,6 +61,10 @@ pub struct MessageMeta {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,  // 关联的任务ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_id: Option<String>,  // 流式消息组ID,同一组流式chunk共享此ID
+    #[serde(default)]
+    pub is_final: bool,              // 是否为流的最后一条消息
 }
 
 /// 核心消息结构 (OTEL 风格)

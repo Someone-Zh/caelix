@@ -1,4 +1,5 @@
 pub mod hooks;
+pub mod commands;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;

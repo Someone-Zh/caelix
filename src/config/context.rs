@@ -6,6 +6,7 @@ use crate::manager::AgentManager;
 use crate::manager::ToolManager;
 use crate::manager::ProviderManager;
 use crate::manager::SkillManager;
+use crate::manager::CommandManager;
 use crate::config::provider_loader::load_provider_configs;
 use crate::config::tools_loader::{create_all_builtin_tools, create_delegate_task_tool};
 use crate::config::agents_loader::register_all_agents;
@@ -28,6 +29,8 @@ pub struct CaelixContext {
     pub session_manager: Arc<SessionManager>,
     /// 技能管理器实例
     pub skill_manager: Arc<SkillManager>,
+    /// 命令管理器实例
+    pub command_manager: Arc<CommandManager>,
     /// 钩子注册中心实例
     pub hook_registry: Arc<HookRegistry>,
     /// 消息总线实例
@@ -71,6 +74,7 @@ impl CaelixContext {
             llm_provider_manager: Arc::new(RwLock::new(ProviderManager::new())),
             session_manager,
             skill_manager: Arc::new(SkillManager::new()),
+            command_manager: Arc::new(CommandManager::new()),
             hook_registry: Arc::new(HookRegistry::new()),
             message_bus: Arc::new(bus),
             task_manager: Some(task_manager),
@@ -180,6 +184,30 @@ impl CaelixContext {
         Ok(())
     }
 
+    /// 初始化命令管理器
+    /// 从 CAELIX_HOME/commands 目录加载所有 .md 文件
+    pub async fn init_commands(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let caelix_home = Self::get_caelix_home();
+        let commands_dir = caelix_home.join("commands");
+        
+        // 如果 commands 目录不存在，创建它
+        if !commands_dir.exists() {
+            std::fs::create_dir_all(&commands_dir)?;
+            println!("Creating commands directory at: {:?}", commands_dir);
+        }
+        
+        // 从 commands 目录加载并注册所有命令
+        crate::config::commands_loader::register_all_commands(
+            &commands_dir.to_string_lossy(),
+            &self.command_manager,
+        ).await?;
+        
+        println!("Commands loaded. Total commands: {}", 
+            self.command_manager.get_all().await.len());
+        
+        Ok(())
+    }
+
     pub async fn init(&self) -> Result<(), Box<dyn std::error::Error>> { 
         // 初始化工具
         self.init_tools().await?;
@@ -195,6 +223,9 @@ impl CaelixContext {
         
         // 初始化钩子
         self.init_hooks().await?;
+        
+        // 初始化命令
+        self.init_commands().await?;
         
         Ok(())
     }

@@ -236,4 +236,48 @@ impl SessionManager {
     pub async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<Message>> {
         self.storage.read_notifications(session_id).await
     }
+
+    /// 获取指定 stream_id 的所有消息(包括未完成的流)
+    pub async fn get_messages_by_stream_id(&self, session_id: &str, stream_id: &str) -> Vec<Message> {
+        // 从存储中读取所有消息
+        let all_messages = self.storage.read_messages(session_id).await.unwrap_or_default();
+        
+        // 筛选出带有指定 stream_id 的消息
+        all_messages.into_iter()
+            .filter(|msg| {
+                if let Some(meta) = &msg.meta {
+                    meta.stream_id.as_deref() == Some(stream_id)
+                } else {
+                    false
+                }
+            })
+            .collect()
+    }
+
+    /// 获取所有未完成的流式消息组
+    pub async fn get_incomplete_streams(&self, session_id: &str) -> Vec<String> {
+        // 从存储中读取所有消息
+        let all_messages = self.storage.read_messages(session_id).await.unwrap_or_default();
+        
+        // 收集所有 stream_id
+        let mut stream_ids: HashMap<String, bool> = HashMap::new();
+        for msg in &all_messages {
+            if let Some(meta) = &msg.meta {
+                if let Some(stream_id) = &meta.stream_id {
+                    // 如果找到 is_final=true 的消息，标记为完成
+                    if meta.is_final {
+                        stream_ids.insert(stream_id.clone(), true);
+                    } else if !stream_ids.contains_key(stream_id) {
+                        // 否则标记为未完成
+                        stream_ids.insert(stream_id.clone(), false);
+                    }
+                }
+            }
+        }
+        
+        // 返回所有未完成的 stream_id
+        stream_ids.into_iter()
+            .filter_map(|(id, is_complete)| if !is_complete { Some(id) } else { None })
+            .collect()
+    }
 }

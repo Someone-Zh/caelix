@@ -374,6 +374,8 @@ impl TaskManager {
             tokens_used: None,
             version: None,
             task_id: Some(meta.task_id.to_string()),
+            stream_id: None,
+            is_final: false,
         });
         
         let _ = bus.send(msg);
