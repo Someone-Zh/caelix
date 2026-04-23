@@ -20,6 +20,16 @@ pub enum MessageType {
     ToolResult,   // 工具执行结果
     Chunk,        // 流式内容块
     Status,       // 状态更新
+    // 通用通知类型
+    Info,         // 普通信息
+    Error,        // 错误信息
+    Warning,      // 警告信息
+    Success,      // 成功信息
+    // 任务相关类型
+    TaskStarted,      // 任务开始
+    TaskCompleted,    // 任务完成
+    TaskFailed,       // 任务失败
+    TaskProgress,     // 任务进度
 }
 
 /// 执行状态
@@ -49,6 +59,8 @@ pub struct MessageMeta {
     pub tokens_used: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,  // 关联的任务ID
 }
 
 /// 核心消息结构 (OTEL 风格)

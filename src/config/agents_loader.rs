@@ -1,6 +1,7 @@
 use crate::manager::{AgentRegistryError, ToolManager};
 use crate::base::agent::AgentSpec;
 use crate::config::CaelixContext;
+use crate::config::skills_loader::parse_yaml_markdown_file;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -11,33 +12,6 @@ use std::sync::Arc;
 struct AgentConfig {
     name: String,
     tools: Vec<String>,
-}
-
-/// 解析 .agent 文件内容
-/// 格式：YAML 头（--- ... ---）+ Markdown 体
-fn parse_agent_file(content: &str) -> Result<(AgentConfig, String), String> {
-    // 查找第一个 ---
-    let first_delimiter = content
-        .find("---")
-        .ok_or("Invalid .agent file: missing opening ---")?;
-    
-    // 查找第二个 ---（从第一个之后开始）
-    let second_delimiter = content[first_delimiter + 3..]
-        .find("---")
-        .ok_or("Invalid .agent file: missing closing ---")?
-        + first_delimiter + 3;
-    
-    // 提取 YAML 部分
-    let yaml_content = &content[first_delimiter + 3..second_delimiter];
-    
-    // 提取 Markdown 部分（system_prompt）
-    let system_prompt = content[second_delimiter + 3..].trim().to_string();
-    
-    // 解析 YAML
-    let config: AgentConfig = serde_yaml::from_str(yaml_content)
-        .map_err(|e| format!("Failed to parse YAML: {}", e))?;
-    
-    Ok((config, system_prompt))
 }
 
 /// 从单个 .agent 文件创建 AgentSpec
@@ -51,7 +25,7 @@ async fn create_agent_from_file(
         .map_err(|e| format!("Failed to read file {:?}: {}", file_path, e))?;
     
     // 解析文件
-    let (config, system_prompt) = parse_agent_file(&content)?;
+    let (config, system_prompt) = parse_yaml_markdown_file::<AgentConfig>(&content)?;
     
     // 根据工具名称列表获取工具实例
     let mut tools = Vec::new();

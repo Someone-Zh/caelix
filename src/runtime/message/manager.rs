@@ -1,6 +1,6 @@
 use crate::runtime::message::bus::MessageBus;
 use crate::runtime::message::storage::StorageBackend;
-use crate::runtime::message::types::{ActiveSpanInfo, Message, SessionState, SessionConfig, Status};
+use crate::runtime::message::types::{ActiveSpanInfo, Message, SessionState, SessionConfig, Status, MessageType};
 use anyhow::Result;
 use futures::Stream;
 use futures::StreamExt;
@@ -42,38 +42,54 @@ impl SessionManager {
             loop {
                 match rx.recv().await {
                     Ok(msg) => {
-                        // 1. 更新内存状态
-                        {
-                            let mut states = states_clone.write().await;
-                            let state: &mut SessionState = states.entry(msg.session_id.clone()).or_default();
-                            
-                            if msg.status == Status::Running {
-                                state.active_spans.insert(
-                                    msg.span_id.clone(),
-                                    ActiveSpanInfo {
-                                        span_id: msg.span_id.clone(),
-                                        parent_span_id: msg.parent_span_id.clone(),
-                                        name: msg.name.clone(),
-                                        status: msg.status.clone(),
-                                        started_at: msg.timestamp,
-                                    },
-                                );
-                            } else if msg.status == Status::Done || msg.status == Status::Error {
-                                state.active_spans.remove(&msg.span_id);
+                        // 判断是否为通知消息
+                        let is_notification = matches!(
+                            msg.r#type,
+                            MessageType::Info | MessageType::Error | 
+                            MessageType::Warning | MessageType::Success |
+                            MessageType::TaskStarted | MessageType::TaskCompleted |
+                            MessageType::TaskFailed | MessageType::TaskProgress
+                        );
+                        
+                        if is_notification {
+                            // 存储到通知文件
+                            if let Err(e) = storage_clone.append_notification(&msg).await {
+                                eprintln!("[Storage Error] Failed to append notification: {}", e);
                             }
-                            
-                            // 异步持久化 state (不阻塞主流程)
-                            let state_clone = state.clone();
-                            let storage_clone = storage_clone.clone();
-                            let sess_id = msg.session_id.clone();
-                            tokio::spawn(async move {
-                                let _ = storage_clone.save_state(&sess_id, &state_clone).await;
-                            });
-                        }
+                        } else {
+                            // 1. 更新内存状态
+                            {
+                                let mut states = states_clone.write().await;
+                                let state: &mut SessionState = states.entry(msg.session_id.clone()).or_default();
+                                
+                                if msg.status == Status::Running {
+                                    state.active_spans.insert(
+                                        msg.span_id.clone(),
+                                        ActiveSpanInfo {
+                                            span_id: msg.span_id.clone(),
+                                            parent_span_id: msg.parent_span_id.clone(),
+                                            name: msg.name.clone(),
+                                            status: msg.status.clone(),
+                                            started_at: msg.timestamp,
+                                        },
+                                    );
+                                } else if msg.status == Status::Done || msg.status == Status::Error {
+                                    state.active_spans.remove(&msg.span_id);
+                                }
+                                
+                                // 异步持久化 state (不阻塞主流程)
+                                let state_clone = state.clone();
+                                let storage_clone = storage_clone.clone();
+                                let sess_id = msg.session_id.clone();
+                                tokio::spawn(async move {
+                                    let _ = storage_clone.save_state(&sess_id, &state_clone).await;
+                                });
+                            }
 
-                        // 2. 持久化消息
-                        if let Err(e) = storage_clone.append_message(&msg).await {
-                            eprintln!("[Storage Error] Failed to append message: {}", e);
+                            // 2. 持久化消息
+                            if let Err(e) = storage_clone.append_message(&msg).await {
+                                eprintln!("[Storage Error] Failed to append message: {}", e);
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -209,5 +225,15 @@ impl SessionManager {
     pub async fn list_sessions(&self) -> Vec<String> {
         let states = self.states.read().await;
         states.keys().cloned().collect()
+    }
+
+    /// 获取会话的完整消息历史
+    pub async fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>> {
+        self.storage.read_messages(session_id).await
+    }
+
+    /// 获取会话的通知消息
+    pub async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<Message>> {
+        self.storage.read_notifications(session_id).await
     }
 }

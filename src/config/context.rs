@@ -5,10 +5,15 @@ use tokio::sync::RwLock;
 use crate::manager::AgentManager;
 use crate::manager::ToolManager;
 use crate::manager::ProviderManager;
+use crate::manager::SkillManager;
 use crate::config::provider_loader::load_provider_configs;
 use crate::config::tools_loader::{create_all_builtin_tools, create_delegate_task_tool};
 use crate::config::agents_loader::register_all_agents;
+use crate::config::skills_loader::register_all_skills;
 use crate::runtime::message::{SessionManager, MessageBus, FileStorage};
+use crate::runtime::task::{TaskManager, FilePersistence, RunnableFactory};
+use crate::enhancement::HookRegistry;
+use crate::enhancement::hooks::skill_hook::SkillHook;
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
 #[derive(Debug, Clone)]
@@ -21,6 +26,14 @@ pub struct CaelixContext {
     pub llm_provider_manager: Arc<RwLock<ProviderManager>>,
     /// 会话管理器实例
     pub session_manager: Arc<SessionManager>,
+    /// 技能管理器实例
+    pub skill_manager: Arc<SkillManager>,
+    /// 钩子注册中心实例
+    pub hook_registry: Arc<HookRegistry>,
+    /// 消息总线实例
+    pub message_bus: Arc<MessageBus>,
+    /// 任务管理器实例
+    pub task_manager: Option<Arc<TaskManager>>,
 }
 
 impl CaelixContext {
@@ -40,13 +53,27 @@ impl CaelixContext {
         // 初始化消息总线和存储
         let bus = MessageBus::new(1024);
         let storage = Arc::new(FileStorage::new("./sessions".to_string()));
-        let session_manager = Arc::new(SessionManager::new(bus, storage));
+        let session_manager = Arc::new(SessionManager::new(bus.clone(), storage));
+        
+        // 初始化任务管理器
+        let task_persistence = Arc::new(FilePersistence::new("./tasks".to_string()));
+        let mut runnable_factory = RunnableFactory::new();
+        // TODO: 在这里注册具体的 Runnable 构造函数
+        let task_manager = Arc::new(TaskManager::new(
+            Arc::new(bus.clone()),
+            task_persistence,
+            runnable_factory,
+        ));
         
         Self {
             agent_manager: Arc::new(AgentManager::new()),
             tool_manager: Arc::new(ToolManager::new()),
             llm_provider_manager: Arc::new(RwLock::new(ProviderManager::new())),
             session_manager,
+            skill_manager: Arc::new(SkillManager::new()),
+            hook_registry: Arc::new(HookRegistry::new()),
+            message_bus: Arc::new(bus),
+            task_manager: Some(task_manager),
         }
         
     }
@@ -82,8 +109,12 @@ impl CaelixContext {
             tool_manager.register(tool).await;
         }
 
-        // 注册委派任务工具（暂不配置 message_bus 和 task_manager）
-        let delegate_tool = create_delegate_task_tool(Arc::new(self.clone()), None, None);
+        // 注册委派任务工具（配置 message_bus 和 task_manager）
+        let delegate_tool = create_delegate_task_tool(
+            Arc::new(self.clone()), 
+            Some(self.message_bus.clone()),
+            self.task_manager.clone(),
+        );
         tool_manager.register(delegate_tool).await;
 
         Ok(())
@@ -121,6 +152,34 @@ impl CaelixContext {
         Ok(())
     }
 
+    /// 初始化技能管理器
+    /// 从 CAELIX_HOME/skills 目录加载所有 .skill 文件
+    pub async fn init_skills(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let caelix_home = Self::get_caelix_home();
+        let skills_dir = caelix_home.join("skills");
+        
+        // 如果 skills 目录不存在，创建它
+        if !skills_dir.exists() {
+            std::fs::create_dir_all(&skills_dir)?;
+            println!("Creating skills directory at: {:?}", skills_dir);
+        }
+        
+        // 从 skills 目录加载并注册所有 skill
+        register_all_skills(&skills_dir.to_string_lossy(), &self.skill_manager).await?;
+        Ok(())
+    }
+
+    /// 初始化钩子系统
+    /// 注册所有内置钩子（如技能钩子）
+    pub async fn init_hooks(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // 注册技能钩子
+        let skill_hook = Arc::new(SkillHook::new(self.skill_manager.clone()));
+        self.hook_registry.register_hook(skill_hook).await;
+        
+        println!("Hooks initialized. Total hooks: {}", self.hook_registry.hook_count().await);
+        Ok(())
+    }
+
     pub async fn init(&self) -> Result<(), Box<dyn std::error::Error>> { 
         // 初始化工具
         self.init_tools().await?;
@@ -130,6 +189,13 @@ impl CaelixContext {
 
         // 初始化智能体
         self.init_agents().await?;
+        
+        // 初始化技能
+        self.init_skills().await?;
+        
+        // 初始化钩子
+        self.init_hooks().await?;
+        
         Ok(())
     }
 

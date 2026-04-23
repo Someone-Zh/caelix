@@ -11,6 +11,3 @@ pub use types::{
     ActiveSpanInfo, Message, MessageError, MessageMeta, MessageType, Role, SessionState,
     Status,
 };
-
-#[cfg(test)]
-pub mod test;

@@ -1,6 +1,6 @@
 mod context;
 pub mod message;
-mod task;
+pub mod task;
 
 pub use context::{RuntimeContext, SessionGuard};
 pub use message::*;

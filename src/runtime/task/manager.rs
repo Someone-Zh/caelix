@@ -17,6 +17,14 @@ type TaskHandle = (
     Option<JoinHandle<()>>,
 );
 
+/// 任务通知类型
+enum TaskNotificationType {
+    Started,
+    Completed,
+    Failed,
+    Progress,
+}
+
 pub struct TaskManager {
     bus: Arc<MessageBus>,
     persistence: Arc<dyn TaskPersistence>,
@@ -28,6 +36,14 @@ pub struct TaskManager {
     
     // 调度器运行句柄
     _scheduler_handle: JoinHandle<()>,
+}
+
+impl std::fmt::Debug for TaskManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskManager")
+            .field("registry", &self.registry)
+            .finish()
+    }
 }
 
 impl TaskManager {
@@ -199,26 +215,33 @@ impl TaskManager {
         }
     }
 
-    /// 列出活跃任务
-    pub async fn list_active(
-        &self,
-        filter_session: Option<&str>,
-        filter_span: Option<&str>,
-    ) -> Vec<TaskMeta> {
+    /// 列出任务（支持按session过滤）
+    pub async fn list_tasks(&self, filter_session: Option<&str>) -> Vec<TaskMeta> {
         self.registry
             .iter()
             .filter_map(|entry| {
                 let (meta, _, _) = entry.value();
-                let match_session = filter_session.map_or(true, |s| meta.session_id == s);
-                let match_span = filter_span.map_or(true, |s| meta.span_id == s);
-                
-                if match_session && match_span {
-                    Some(meta.clone())
-                } else {
-                    None
+                match filter_session {
+                    Some(sess_id) if meta.session_id != sess_id => None,
+                    _ => Some(meta.clone()),
                 }
             })
             .collect()
+    }
+
+    /// 更新任务进度
+    pub async fn update_progress(&self, task_id: TaskId, progress: f32) -> bool {
+        if let Some(mut entry) = self.registry.get_mut(&task_id) {
+            let (meta, _, _) = entry.value_mut();
+            meta.progress = Some(progress.clamp(0.0, 1.0));
+            meta.updated_at = Utc::now();
+            
+            // 发送进度通知
+            Self::send_task_notification_static(meta, TaskNotificationType::Progress, &self.bus).await;
+            true
+        } else {
+            false
+        }
     }
 
     // ==================== 内部辅助函数 ====================
@@ -233,6 +256,10 @@ impl TaskManager {
         persistence: Arc<dyn TaskPersistence>, // 修复：传入 persistence
     ) {
         let task_id = meta.task_id;
+        
+        // 发送开始通知
+        Self::send_task_notification_static(&meta, TaskNotificationType::Started, &bus).await;
+        
         let result = runnable.run().await;
 
         // 更新状态
@@ -240,6 +267,9 @@ impl TaskManager {
             Ok(_) => TaskStatus::Completed,
             Err(e) => TaskStatus::Failed(e.to_string()),
         };
+        
+        // 先克隆结果用于通知判断
+        let is_success = result.is_ok();
 
         // 更新注册表
         if let Some(mut entry) = registry.get_mut(&task_id) {
@@ -254,8 +284,13 @@ impl TaskManager {
             }
         }
 
-        // 发送消息到总线
-        Self::send_status_update_static(&meta, &bus).await;
+        // 发送完成/失败通知
+        let notif_type = if is_success {
+            TaskNotificationType::Completed
+        } else {
+            TaskNotificationType::Failed
+        };
+        Self::send_task_notification_static(&meta, notif_type, &bus).await;
 
         // 处理后续逻辑
         match meta.kind {
@@ -294,6 +329,52 @@ impl TaskManager {
             content,
             Status::Done,
         );
+        
+        let _ = bus.send(msg);
+    }
+
+    /// 发送任务通知消息
+    async fn send_task_notification_static(meta: &TaskMeta, notif_type: TaskNotificationType, bus: &Arc<MessageBus>) {
+        use crate::runtime::message::types::MessageMeta;
+        
+        let (msg_type, content) = match notif_type {
+            TaskNotificationType::Started => (
+                MessageType::TaskStarted,
+                format!("Task {} started", meta.task_id),
+            ),
+            TaskNotificationType::Completed => (
+                MessageType::TaskCompleted,
+                format!("Task {} completed", meta.task_id),
+            ),
+            TaskNotificationType::Failed => (
+                MessageType::TaskFailed,
+                format!("Task {} failed: {}", meta.task_id, 
+                    if let TaskStatus::Failed(e) = &meta.status { e } else { "unknown" }),
+            ),
+            TaskNotificationType::Progress => (
+                MessageType::TaskProgress,
+                format!("Task {} progress: {:.0}%", meta.task_id, meta.progress.unwrap_or(0.0) * 100.0),
+            ),
+        };
+        
+        let mut msg = Message::new(
+            meta.session_id.clone(),
+            meta.span_id.clone(),
+            None,
+            Role::System,
+            "TaskManager".to_string(),
+            msg_type,
+            content,
+            Status::Done,
+        );
+        
+        // 在meta中记录task_id
+        msg.meta = Some(MessageMeta {
+            latency_ms: None,
+            tokens_used: None,
+            version: None,
+            task_id: Some(meta.task_id.to_string()),
+        });
         
         let _ = bus.send(msg);
     }

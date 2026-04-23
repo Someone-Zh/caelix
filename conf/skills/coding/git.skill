@@ -1,0 +1,58 @@
+---
+name: git
+description: Git版本控制操作技能,包括提交、分支管理、合并等常见操作
+---
+
+# Git 操作技能
+
+## 基本操作
+
+### 查看状态
+```bash
+git status
+git log --oneline -10
+```
+
+### 提交更改
+```bash
+git add .
+git commit -m "描述性提交信息"
+```
+
+### 分支管理
+```bash
+# 创建新分支
+git branch feature/new-feature
+
+# 切换分支
+git checkout feature/new-feature
+
+# 创建并切换
+git checkout -b feature/new-feature
+
+# 删除分支
+git branch -d feature/old-feature
+```
+
+### 合并操作
+```bash
+# 合并分支到当前分支
+git merge feature/new-feature
+
+# 解决冲突后继续
+git add .
+git commit
+```
+
+## 最佳实践
+
+1. **提交信息规范**: 使用清晰的描述性提交信息
+2. **小步提交**: 频繁提交小的更改,便于追踪和回滚
+3. **分支策略**: 为每个功能或修复创建独立分支
+4. **代码审查**: 合并前进行代码审查
+
+## 常见问题
+
+- **合并冲突**: 手动编辑冲突文件,然后 `git add` 和 `git commit`
+- **误提交**: 使用 `git reset` 或 `git revert` 撤销
+- **清理历史**: 使用 `git rebase -i` 交互式变基

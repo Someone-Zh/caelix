@@ -60,6 +60,7 @@ pub struct TaskMeta {
     pub tool_call_id: Option<String>,
     pub kind: TaskKind,
     pub status: TaskStatus,
+    pub progress: Option<f32>,  // 任务进度 0.0-1.0
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub task_type_name: String,
@@ -83,6 +84,7 @@ impl TaskMeta {
             tool_call_id,
             kind,
             status: TaskStatus::Pending,
+            progress: None,
             created_at: now,
             updated_at: now,
             task_type_name,

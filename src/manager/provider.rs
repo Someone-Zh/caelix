@@ -59,4 +59,14 @@ impl ProviderManager {
     pub fn get_provider(&self, name: &str) -> Option<&Arc<dyn LlmProvider>> {
         self.providers.get(name)
     }
+    
+    /// 获取所有提供者
+    /// 
+    /// # 返回值
+    /// - `Vec<(String, Arc<dyn LlmProvider>)>`: 所有提供者的名称和实例
+    pub fn get_all_providers(&self) -> Vec<(String, Arc<dyn LlmProvider>)> {
+        self.providers.iter()
+            .map(|(name, provider)| (name.clone(), provider.clone()))
+            .collect()
+    }
 }

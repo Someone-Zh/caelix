@@ -31,10 +31,20 @@ fn create_router(api: Arc<CaelixApiImpl>) -> Router {
         .route("/api/models/default", get(get_default_config))
         // 会话管理
         .route("/api/sessions", post(create_session))
+        .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{session_id}/provider", put(set_session_provider))
         .route("/api/sessions/{session_id}/model", put(set_session_model))
+        // 会话消息历史
+        .route("/api/sessions/{session_id}/messages", get(get_session_messages))
+        // 会话通知历史
+        .route("/api/sessions/{session_id}/notifications", get(get_session_notifications))
         // Agent 列表
         .route("/api/agents", get(list_agents))
+        // 任务管理
+        .route("/api/tasks", get(list_tasks))
+        // 提供者管理
+        .route("/api/providers", get(get_providers))
+        .route("/api/providers/{name}/models", get(get_provider_models))
         // 流式聊天
         .route("/api/chat/stream", post(chat_stream))
         // 添加 CORS 支持

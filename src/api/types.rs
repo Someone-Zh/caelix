@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use chrono::{DateTime, Utc};
+use crate::runtime::message::types::Message;
+use crate::runtime::TaskMeta;
 
 /// API 错误类型
 #[derive(Debug, Error)]
@@ -67,4 +70,38 @@ pub struct DefaultConfigResponse {
 #[derive(Debug, Serialize)]
 pub struct AgentListResponse {
     pub agents: Vec<String>,
+}
+
+/// 会话消息列表响应
+#[derive(Debug, Serialize)]
+pub struct SessionMessagesResponse {
+    pub messages: Vec<Message>,
+}
+
+/// 任务列表响应
+#[derive(Debug, Serialize)]
+pub struct TaskListResponse {
+    pub tasks: Vec<TaskMeta>,
+}
+
+/// 任务查询参数
+#[derive(Debug, Deserialize)]
+pub struct TaskQueryParams {
+    pub session_id: Option<String>,
+}
+
+/// 会话摘要信息
+#[derive(Debug, Serialize, Clone)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub created_at: DateTime<Utc>,
+    pub summary: String,  // 首次输入的前15个字符
+}
+
+/// 提供者信息
+#[derive(Debug, Serialize, Clone)]
+pub struct ProviderInfo {
+    pub name: String,
+    pub llm_type: String,
+    pub models: Vec<String>,
 }

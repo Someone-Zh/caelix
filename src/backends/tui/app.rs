@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use futures::StreamExt;
 use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -14,12 +15,14 @@ use ratatui::{
 
 use crate::api::{CaelixApi, CaelixApiImpl, ChatRequest};
 use crate::base::agent::AgentOutputChunk;
+use crate::runtime::message::types::{Message as RuntimeMessage, MessageType as RuntimeMessageType};
+use crate::runtime::TaskMeta;
 use super::events::{EventHandler, TuiEvent};
 use super::ui;
 
 /// 对话消息类型
-#[derive(Debug, Clone)]
-pub enum MessageType {
+#[derive(Debug, Clone, PartialEq)]
+pub enum TuiMessageType {
     User,
     Assistant,
     System,
@@ -27,8 +30,8 @@ pub enum MessageType {
 
 /// 对话消息
 #[derive(Debug, Clone)]
-pub struct Message {
-    pub msg_type: MessageType,
+pub struct TuiMessage {
+    pub msg_type: TuiMessageType,
     pub content: String,
     pub timestamp: Instant,
 }
@@ -50,12 +53,30 @@ pub struct Notification {
     pub timestamp: Instant,
 }
 
+/// 气泡通知（右下角短暂显示）
+#[derive(Debug, Clone)]
+pub struct BubbleNotification {
+    pub message: String,
+    pub notif_type: NotificationType,
+    pub created_at: Instant,
+    pub expires_at: Instant,
+    pub is_persistent: bool,
+}
+
+/// 应用视图枚举
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppView {
+    Chat,
+    Tasks,
+    Notifications,
+}
+
 /// TUI 应用状态
 pub struct App {
     pub session_id: Option<String>,
     pub input_buffer: String,
-    pub messages: Vec<Message>,  // 对话历史
-    pub notifications: Vec<Notification>,  // 通知队列
+    pub messages: Vec<TuiMessage>,  // 对话历史
+    pub notifications: Vec<Notification>,  // 通知队列（已废弃，保留兼容）
     pub scroll_offset: u16,
     pub current_provider: String,
     pub current_model: String,
@@ -71,17 +92,26 @@ pub struct App {
     // 用于异步任务通信的通道
     pub message_tx: Option<mpsc::Sender<AppMessage>>,
     pub message_rx: Option<mpsc::Receiver<AppMessage>>,
+    // 新增字段
+    pub tasks: Vec<TaskMeta>,              // 当前任务列表
+    pub notifications_history: Vec<RuntimeMessage>, // 通知历史记录
+    pub active_view: AppView,               // 当前激活的视图
+    pub command_buffer: String,             // 命令输入缓冲区
+    pub is_command_mode: bool,              // 是否处于命令模式
+    pub message_bus_rx: Option<broadcast::Receiver<RuntimeMessage>>, // 消息总线订阅者
+    pub bubble_notifications: Vec<BubbleNotification>, // 活跃的气泡通知
 }
 
 /// 应用内部消息（用于异步任务与主循环通信）
 #[derive(Debug, Clone)]
 pub enum AppMessage {
-    AddMessage(Message),
+    AddMessage(TuiMessage),
     AddNotification(Notification),
     SetLoading(bool),
     UpdateStatus(String),
     StreamContent(String),  // 流式内容追加
     StartStreamingMessage,  // 开始流式消息
+    UpdateTasks(Vec<TaskMeta>),  // 更新任务列表
 }
 
 impl App {
@@ -106,19 +136,27 @@ impl App {
             is_streaming: false,
             message_tx: Some(tx),
             message_rx: Some(rx),
+            // 新增字段初始化
+            tasks: Vec::new(),
+            notifications_history: Vec::new(),
+            active_view: AppView::Chat,
+            command_buffer: String::new(),
+            is_command_mode: false,
+            message_bus_rx: None,
+            bubble_notifications: Vec::new(),
         }
     }
 
     /// 添加对话消息
-    pub fn add_message(&mut self, msg: Message) {
+    pub fn add_message(&mut self, msg: TuiMessage) {
         self.messages.push(msg);
         self.scroll_offset = self.messages.len() as u16;
     }
 
     /// 添加用户消息
     pub fn add_user_message(&mut self, content: &str) {
-        self.add_message(Message {
-            msg_type: MessageType::User,
+        self.add_message(TuiMessage {
+            msg_type: TuiMessageType::User,
             content: content.to_string(),
             timestamp: Instant::now(),
         });
@@ -126,8 +164,8 @@ impl App {
 
     /// 添加助手消息
     pub fn add_assistant_message(&mut self, content: &str) {
-        self.add_message(Message {
-            msg_type: MessageType::Assistant,
+        self.add_message(TuiMessage {
+            msg_type: TuiMessageType::Assistant,
             content: content.to_string(),
             timestamp: Instant::now(),
         });
@@ -169,8 +207,8 @@ impl App {
                 self.streaming_content.clear();
                 self.is_streaming = true;
                 // 添加一个空的助手消息作为占位符
-                self.add_message(Message {
-                    msg_type: MessageType::Assistant,
+                self.add_message(TuiMessage {
+                    msg_type: TuiMessageType::Assistant,
                     content: String::new(),
                     timestamp: Instant::now(),
                 });
@@ -180,12 +218,16 @@ impl App {
                 self.streaming_content.push_str(&content);
                 // 更新最后一条消息的内容（如果存在）
                 if let Some(last_msg) = self.messages.last_mut() {
-                    if last_msg.msg_type == MessageType::Assistant {
+                    if last_msg.msg_type == TuiMessageType::Assistant {
                         last_msg.content = self.streaming_content.clone();
                         // 自动滚动到最新消息
                         self.scroll_offset = self.messages.len() as u16;
                     }
                 }
+            }
+            AppMessage::UpdateTasks(tasks) => {
+                // 更新任务列表
+                self.tasks = tasks;
             }
         }
     }
@@ -199,6 +241,84 @@ impl App {
             let next_idx = (current_idx + 1) % self.available_agents.len();
             self.current_agent = self.available_agents[next_idx].clone();
         }
+    }
+    
+    /// 显示气泡通知
+    pub fn show_bubble_notification(&mut self, msg: &RuntimeMessage) {
+        // 根据消息类型决定气泡显示时长和是否持久化
+        let (duration_secs, is_persistent) = match msg.r#type {
+            RuntimeMessageType::Error | RuntimeMessageType::TaskFailed => (0, true), // 持久化
+            RuntimeMessageType::Warning => (5, false),
+            _ => (3, false), // Info, Success, TaskStarted, etc.
+        };
+        
+        let notif_type = match msg.r#type {
+            RuntimeMessageType::Info | RuntimeMessageType::TaskStarted | RuntimeMessageType::TaskProgress => NotificationType::Info,
+            RuntimeMessageType::Success | RuntimeMessageType::TaskCompleted => NotificationType::Success,
+            RuntimeMessageType::Error | RuntimeMessageType::TaskFailed => NotificationType::Error,
+            RuntimeMessageType::Warning => NotificationType::Warning,
+            _ => NotificationType::Info,
+        };
+        
+        let now = Instant::now();
+        self.bubble_notifications.push(BubbleNotification {
+            message: msg.content.clone(),
+            notif_type,
+            created_at: now,
+            expires_at: now + std::time::Duration::from_secs(duration_secs),
+            is_persistent,
+        });
+    }
+    
+    /// 清理过期的气泡通知
+    pub fn cleanup_expired_bubbles(&mut self) {
+        let now = Instant::now();
+        self.bubble_notifications.retain(|n| {
+            n.is_persistent || now < n.expires_at
+        });
+    }
+    
+    /// 处理命令
+    pub fn handle_command(&mut self, cmd: &str) {
+        match cmd {
+            "/tasks" => {
+                self.active_view = AppView::Tasks;
+                self.is_command_mode = false;
+                self.command_buffer.clear();
+            }
+            "/notifications" => {
+                self.active_view = AppView::Notifications;
+                self.is_command_mode = false;
+                self.command_buffer.clear();
+            }
+            "/chat" | "/back" => {
+                self.active_view = AppView::Chat;
+                self.is_command_mode = false;
+                self.command_buffer.clear();
+            }
+            _ => {
+                // 未知命令，显示错误提示
+                self.add_notification(Notification {
+                    notif_type: NotificationType::Error,
+                    message: format!("未知命令: {}", cmd),
+                    timestamp: Instant::now(),
+                });
+                self.is_command_mode = false;
+                self.command_buffer.clear();
+            }
+        }
+    }
+    
+    /// 删除选中的通知
+    pub fn delete_selected_notification(&mut self, index: usize) {
+        if index < self.notifications_history.len() {
+            self.notifications_history.remove(index);
+        }
+    }
+    
+    /// 清除所有通知
+    pub fn clear_all_notifications(&mut self) {
+        self.notifications_history.clear();
     }
 }
 
@@ -225,11 +345,76 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         app.available_agents = agents;
         app.current_agent = app.available_agents[0].clone();
     }
+    
+    // 初始化消息总线订阅
+    let message_bus_rx = api.message_bus().subscribe();
+    app.message_bus_rx = Some(message_bus_rx);
+    
+    // 加载初始任务列表
+    if let Ok(tasks) = api.list_tasks(Some(&session_id)).await {
+        app.tasks = tasks;
+    }
+    
+    // 加载通知历史
+    if let Ok(notifs) = api.get_session_notifications(&session_id).await {
+        app.notifications_history = notifs;
+    }
 
     let events = EventHandler::new(250);
 
     // 主循环
     while app.running {
+        // 处理消息总线（任务通知等）
+        let mut bus_messages = Vec::new();
+        if let Some(ref mut rx) = app.message_bus_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        bus_messages.push(msg);
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(_) => break,
+                }
+            }
+        }
+        
+        // 处理收集到的消息
+        for msg in bus_messages {
+            // 判断是否为任务相关通知
+            if matches!(msg.r#type, 
+                RuntimeMessageType::TaskStarted | RuntimeMessageType::TaskCompleted | 
+                RuntimeMessageType::TaskFailed | RuntimeMessageType::TaskProgress)
+            {
+                // 更新任务列表（简化：收到任何任务消息就重新获取列表）
+                if let Some(session_id) = &app.session_id {
+                    let api_clone = api.clone();
+                    let session_clone = session_id.clone();
+                    let tx = app.message_tx.clone();
+                    tokio::spawn(async move {
+                        if let Ok(tasks) = api_clone.list_tasks(Some(&session_clone)).await {
+                            if let Some(tx) = tx {
+                                let _ = tx.send(AppMessage::UpdateTasks(tasks)).await;
+                            }
+                        }
+                    });
+                }
+                // 添加到通知历史
+                app.notifications_history.push(msg.clone());
+                // 显示右下角气泡通知
+                app.show_bubble_notification(&msg);
+            } else if matches!(msg.r#type,
+                RuntimeMessageType::Info | RuntimeMessageType::Error |
+                RuntimeMessageType::Warning | RuntimeMessageType::Success)
+            {
+                // 通用通知也加入历史并显示气泡
+                app.notifications_history.push(msg.clone());
+                app.show_bubble_notification(&msg);
+            }
+        }
+        
+        // 清理过期的气泡通知
+        app.cleanup_expired_bubbles();
+        
         // 处理内部消息队列
         loop {
             let msg = if let Some(ref mut rx) = app.message_rx {
@@ -341,15 +526,64 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             }
             TuiEvent::Key(key_event) => {
                 match key_event.code {
+                    crossterm::event::KeyCode::Char('/') => {
+                        // 进入命令模式
+                        if !app.is_command_mode && app.active_view == AppView::Chat {
+                            app.is_command_mode = true;
+                            app.command_buffer.clear();
+                        }
+                    }
+                    crossterm::event::KeyCode::Enter => {
+                        if app.is_command_mode {
+                            // 执行命令（先克隆避免借用冲突）
+                            let cmd = app.command_buffer.clone();
+                            app.handle_command(&cmd);
+                        } else if !app.input_buffer.is_empty() && !app.is_loading {
+                            // 发送消息逻辑（原有代码在TuiEvent::Send中处理）
+                            // 这里不处理，让Send事件处理
+                        }
+                    }
+                    crossterm::event::KeyCode::Char('d') | crossterm::event::KeyCode::Delete => {
+                        // 在通知历史视图中删除选中项（简化：删除最后一个）
+                        if app.active_view == AppView::Notifications && !app.notifications_history.is_empty() {
+                            let last_idx = app.notifications_history.len() - 1;
+                            app.delete_selected_notification(last_idx);
+                        }
+                    }
+                    crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C') => {
+                        // 在通知历史视图中清除所有
+                        if app.active_view == AppView::Notifications {
+                            app.clear_all_notifications();
+                        }
+                    }
+                    crossterm::event::KeyCode::Esc => {
+                        // ESC退出命令模式或应用
+                        if app.is_command_mode {
+                            app.is_command_mode = false;
+                            app.command_buffer.clear();
+                        } else {
+                            app.running = false;
+                        }
+                    }
                     crossterm::event::KeyCode::Char(c) => {
-                        app.input_buffer.push(c);
+                        if app.is_command_mode {
+                            app.command_buffer.push(c);
+                        } else {
+                            app.input_buffer.push(c);
+                        }
                     }
                     crossterm::event::KeyCode::Backspace => {
-                        app.input_buffer.pop();
+                        if app.is_command_mode {
+                            app.command_buffer.pop();
+                        } else {
+                            app.input_buffer.pop();
+                        }
                     }
                     crossterm::event::KeyCode::Tab => {
-                        // Tab 切换 agent
-                        app.next_agent();
+                        // Tab 切换 agent（仅在聊天视图）
+                        if app.active_view == AppView::Chat {
+                            app.next_agent();
+                        }
                     }
                     _ => {}
                 }

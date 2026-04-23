@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use crate::api::{CaelixApi, CaelixApiImpl};
 use crate::api::types::{
-    ChatRequest, CreateSessionResponse, DefaultConfigResponse, AgentListResponse
+    ChatRequest, CreateSessionResponse, DefaultConfigResponse, AgentListResponse,
+    SessionMessagesResponse, TaskListResponse, TaskQueryParams,
+    SessionSummary, ProviderInfo
 };
 
 pub type ApiState = Arc<CaelixApiImpl>;
@@ -98,4 +100,74 @@ pub async fn chat_stream(
     });
 
     Ok(Sse::new(event_stream))
+}
+
+/// 获取会话消息历史
+pub async fn get_session_messages(
+    State(api): State<ApiState>,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Json<SessionMessagesResponse>, StatusCode> {
+    let messages = api.get_session_messages(&session_id)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    
+    Ok(Json(SessionMessagesResponse { messages }))
+}
+
+/// 获取任务列表
+pub async fn list_tasks(
+    State(api): State<ApiState>,
+    axum::extract::Query(params): axum::extract::Query<TaskQueryParams>,
+) -> Json<TaskListResponse> {
+    let tasks = api.list_tasks(params.session_id.as_deref())
+        .await
+        .unwrap_or_default();
+    
+    Json(TaskListResponse { tasks })
+}
+
+/// 获取会话列表
+pub async fn list_sessions(
+    State(api): State<ApiState>,
+) -> Result<Json<Vec<SessionSummary>>, StatusCode> {
+    let sessions = api.list_sessions()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(sessions))
+}
+
+/// 获取所有提供者及模型信息
+pub async fn get_providers(
+    State(api): State<ApiState>,
+) -> Result<Json<Vec<ProviderInfo>>, StatusCode> {
+    let providers = api.get_providers()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(providers))
+}
+
+/// 获取指定提供者的模型列表
+pub async fn get_provider_models(
+    State(api): State<ApiState>,
+    axum::extract::Path(provider_name): axum::extract::Path<String>,
+) -> Result<Json<Vec<String>>, StatusCode> {
+    let models = api.get_provider_models(&provider_name)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    
+    Ok(Json(models))
+}
+
+/// 获取会话通知历史
+pub async fn get_session_notifications(
+    State(api): State<ApiState>,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Json<SessionMessagesResponse>, StatusCode> {
+    let notifications = api.get_session_notifications(&session_id)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    
+    Ok(Json(SessionMessagesResponse { messages: notifications }))
 }

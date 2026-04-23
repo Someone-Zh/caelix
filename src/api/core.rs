@@ -3,10 +3,12 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use crate::api::CaelixApi;
-use crate::api::types::{ApiError, ChatRequest};
+use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::config::CaelixContext;
 use crate::base::agent::{AgentOutputChunk, Agent};
-use crate::base::provider::{ChatMessage, LlmConfig};
+use crate::base::provider::{ChatMessage, LlmConfig, LlmType};
+use crate::runtime::message::types::Message;
+use crate::runtime::TaskMeta;
 
 /// API 核心实现
 pub struct CaelixApiImpl {
@@ -18,6 +20,11 @@ impl CaelixApiImpl {
         Self {
             context,
         }
+    }
+    
+    /// 获取消息总线引用
+    pub fn message_bus(&self) -> &Arc<crate::runtime::message::MessageBus> {
+        &self.context.message_bus
     }
 }
 
@@ -114,6 +121,10 @@ impl CaelixApi for CaelixApiImpl {
             .await
             .ok_or_else(|| ApiError::agent_not_found(&agent_name))?;
 
+        // 应用钩子增强 AgentSpec
+        let mut enhanced_agent = (*agent_spec).clone();
+        self.context.hook_registry.apply_hooks(&mut enhanced_agent).await;
+
         // 构建消息
         let messages = vec![
             ChatMessage::user(request.message),
@@ -125,7 +136,7 @@ impl CaelixApi for CaelixApiImpl {
         };
 
         // 执行 agent 并获取流
-        let stream: BoxStream<'_, Result<AgentOutputChunk, _>> = match agent_spec.execute(messages, provider, &config).await {
+        let stream: BoxStream<'_, Result<AgentOutputChunk, _>> = match enhanced_agent.execute(messages, provider, &config).await {
             Ok(s) => Box::pin(s),
             Err(e) => {
                 return Err(ApiError::InternalError(format!("Agent execution failed: {:?}", e)));
@@ -138,5 +149,117 @@ impl CaelixApi for CaelixApiImpl {
         });
 
         Ok(Box::pin(transformed_stream))
+    }
+
+    async fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>, ApiError> {
+        // 验证会话存在
+        if !self.context.session_manager.session_exists(session_id).await {
+            return Err(ApiError::session_not_found(session_id));
+        }
+        
+        // 从 SessionManager 获取消息
+        self.context.session_manager
+            .get_session_messages(session_id)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string()))
+    }
+
+    async fn list_tasks(&self, session_id: Option<&str>) -> Result<Vec<TaskMeta>, ApiError> {
+        // 检查是否有 task_manager
+        let task_manager = match &self.context.task_manager {
+            Some(tm) => tm,
+            None => {
+                return Err(ApiError::InternalError("TaskManager not initialized".to_string()));
+            }
+        };
+        
+        // 获取任务列表
+        Ok(task_manager.list_tasks(session_id).await)
+    }
+
+    async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ApiError> {
+        // 获取所有会话ID
+        let session_ids = self.context.session_manager.list_sessions().await;
+        
+        let mut summaries = Vec::new();
+        for session_id in session_ids {
+            // 获取会话配置
+            if let Some(config) = self.context.session_manager.get_session_config(&session_id).await {
+                // 获取首条消息作为摘要
+                let messages = self.context.session_manager
+                    .get_session_messages(&session_id)
+                    .await
+                    .unwrap_or_default();
+                
+                let summary = messages.first()
+                    .map(|msg| {
+                        let chars: Vec<char> = msg.content.chars().collect();
+                        if chars.len() > 15 {
+                            chars[..15].iter().collect::<String>() + "..."
+                        } else {
+                            msg.content.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| "新会话".to_string());
+                
+                summaries.push(SessionSummary {
+                    session_id,
+                    created_at: config.created_at,
+                    summary,
+                });
+            }
+        }
+        
+        Ok(summaries)
+    }
+
+    async fn get_providers(&self) -> Result<Vec<ProviderInfo>, ApiError> {
+        let provider_manager = self.context.llm_provider_manager.read().await;
+        
+        let providers = provider_manager.get_all_providers()
+            .into_iter()
+            .map(|(name, provider)| {
+                let config = provider.config();
+                let llm_type = match config.llm_type {
+                    LlmType::OpenAI => "openai".to_string(),
+                };
+                let models: Vec<String> = config.models.values().cloned().collect();
+                
+                ProviderInfo {
+                    name,
+                    llm_type,
+                    models,
+                }
+            })
+            .collect();
+        
+        Ok(providers)
+    }
+
+    async fn get_provider_models(&self, provider_name: &str) -> Result<Vec<String>, ApiError> {
+        let provider_manager = self.context.llm_provider_manager.read().await;
+        
+        let provider = provider_manager
+            .get_provider(provider_name)
+            .ok_or_else(|| ApiError::provider_not_found(provider_name))?;
+        
+        // 从 provider config 中获取 models
+        let config = provider.config();
+        let models: Vec<String> = config.models.values().cloned().collect();
+        
+        Ok(models)
+    }
+
+    async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<Message>, ApiError> {
+        // 验证会话存在
+        if !self.context.session_manager.session_exists(session_id).await {
+            return Err(ApiError::session_not_found(session_id));
+        }
+        
+        // 从 SessionManager 获取通知消息
+        self.context.session_manager
+            .get_session_notifications(session_id)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string()))
     }
 }
