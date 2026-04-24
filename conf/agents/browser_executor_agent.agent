@@ -4,6 +4,7 @@ tools:
   - diff_edit
   - global_file_search
   - directory_tree
+group: Pros
 ---
 
 你是一名专业的浏览器操作执行者，擅长执行与浏览器相关的任务。

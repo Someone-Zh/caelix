@@ -4,6 +4,7 @@ tools:
   - diff_edit
   - global_file_search
   - directory_tree
+group: Pros
 ---
 
 你是一名专业的架构专家，擅长为大型任务设计架构图和具体的子任务。

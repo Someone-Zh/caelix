@@ -9,6 +9,7 @@ use crate::base::agent::{AgentOutputChunk, Agent};
 use crate::base::provider::{ChatMessage, LlmConfig, LlmType};
 use crate::runtime::message::types::{Message, MessageType, Role, Status, MessageMeta};
 use crate::runtime::TaskMeta;
+use crate::enhancement::hooks::{BaseContext, InitContext, PreContext, PostContext, ErrorContext, HookStage};
 use uuid::Uuid;
 
 /// API 核心实现
@@ -209,14 +210,91 @@ impl CaelixApi for CaelixApiImpl {
                 }
             };
 
-            // 应用钩子增强 AgentSpec
+            // 克隆agent_spec用于初始化
             let mut enhanced_agent = (*agent_spec).clone();
-            context.hook_registry.apply_hooks(&mut enhanced_agent).await;
+
+            // 构建BaseContext
+            let base_ctx = BaseContext {
+                session_id: session_id.clone(),
+                span_id: start_span_id.clone(),
+                agent_name: agent_name.clone(),
+                agent_group: enhanced_agent.group.clone(),
+            };
+
+            // 执行Init钩子
+            let mut init_ctx = InitContext {
+                base: base_ctx.clone(),
+                agent_spec: &mut enhanced_agent,
+            };
+
+            if let Err(e) = context.hook_registry.execute_init(&mut init_ctx).await {
+                // 发送错误消息并返回
+                let error_msg = Message {
+                    session_id: session_id.clone(),
+                    span_id: Message::generate_span_id(),
+                    parent_span_id: Some(start_span_id.clone()),
+                    seq: 0,
+                    role: Role::System,
+                    name: "system".to_string(),
+                    r#type: MessageType::Error,
+                    content: format!("Init hook failed: {:?}", e),
+                    status: Status::Error,
+                    timestamp: chrono::Utc::now(),
+                    error: None,
+                    meta: Some(MessageMeta {
+                        latency_ms: None,
+                        tokens_used: None,
+                        version: None,
+                        task_id: None,
+                        stream_id: Some(stream_id.clone()),
+                        is_final: true,
+                    }),
+                };
+                let _ = bus.send(error_msg);
+                return;
+            }
 
             // 构建消息
-            let messages = vec![
+            let mut messages = vec![
                 ChatMessage::user(message_content),
             ];
+
+            // 执行Pre钩子
+            let mut pre_ctx = PreContext {
+                base: base_ctx.clone(),
+                messages: messages.clone(),
+            };
+
+            if let Err(e) = context.hook_registry.execute_pre(&mut pre_ctx).await {
+                // 发送错误消息并返回
+                let error_msg = Message {
+                    session_id: session_id.clone(),
+                    span_id: Message::generate_span_id(),
+                    parent_span_id: Some(start_span_id.clone()),
+                    seq: 0,
+                    role: Role::System,
+                    name: "system".to_string(),
+                    r#type: MessageType::Error,
+                    content: format!("Pre-process hook failed: {:?}", e),
+                    status: Status::Error,
+                    timestamp: chrono::Utc::now(),
+                    error: None,
+                    meta: Some(MessageMeta {
+                        latency_ms: None,
+                        tokens_used: None,
+                        version: None,
+                        task_id: None,
+                        stream_id: Some(stream_id.clone()),
+                        is_final: true,
+                    }),
+                };
+                let _ = bus.send(error_msg);
+                return;
+            }
+
+            // 使用修改后的messages
+            messages = pre_ctx.messages;
+            let input_messages_for_post = messages.clone();  // 克隆用于Post钩子
 
             // 构建 LLM 配置
             let config = LlmConfig {
@@ -227,6 +305,14 @@ impl CaelixApi for CaelixApiImpl {
             let stream = match enhanced_agent.execute(messages, provider, &config).await {
                 Ok(s) => s,
                 Err(e) => {
+                    // 执行Error钩子
+                    let error_ctx = ErrorContext {
+                        base: base_ctx.clone(),
+                        error: anyhow::anyhow!("Agent execution failed: {:?}", e),
+                        stage: HookStage::Pre,
+                    };
+                    let _ = context.hook_registry.execute_error(&error_ctx).await;
+                    
                     // 发送错误消息
                     let error_msg = Message {
                         session_id: session_id.clone(),
@@ -257,11 +343,13 @@ impl CaelixApi for CaelixApiImpl {
             // 逐块推送流式内容
             let mut _chunk_count = 0u64;
             let mut _full_content = String::new();
+            let mut all_chunks = Vec::new();  // 收集所有chunks用于Post钩子
             
             let mut stream = stream;
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
+                        all_chunks.push(chunk.clone());  // 收集chunk
                         match chunk {
                             AgentOutputChunk::Content { content } => {
                                 _full_content.push_str(&content);
@@ -346,6 +434,14 @@ impl CaelixApi for CaelixApiImpl {
                         }
                     }
                     Err(e) => {
+                        // 执行Error钩子
+                        let error_ctx = ErrorContext {
+                            base: base_ctx.clone(),
+                            error: anyhow::anyhow!("Stream error: {:?}", e),
+                            stage: HookStage::Post,
+                        };
+                        let _ = context.hook_registry.execute_error(&error_ctx).await;
+                        
                         // 发送错误消息
                         let error_msg = Message {
                             session_id: session_id.clone(),
@@ -372,6 +468,18 @@ impl CaelixApi for CaelixApiImpl {
                         break;
                     }
                 }
+            }
+            
+            // 执行Post钩子
+            let post_ctx = PostContext {
+                base: base_ctx.clone(),
+                input_messages: input_messages_for_post,
+                output_chunks: all_chunks,
+            };
+
+            if let Err(e) = context.hook_registry.execute_post(&post_ctx).await {
+                eprintln!("Post-process hook failed: {:?}", e);
+                // Post钩子失败不影响已发送的内容
             }
         });
 

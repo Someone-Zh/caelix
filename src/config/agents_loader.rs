@@ -11,6 +11,7 @@ use std::path::Path;
 struct AgentConfig {
     name: String,
     tools: Vec<String>,
+    group: Option<String>,  // 新增：可选的group字段
 }
 
 /// 从单个 .agent 文件创建 AgentSpec
@@ -44,7 +45,8 @@ async fn create_agent_from_file(
         }
     }
     
-    Ok(AgentSpec::new(config.name, system_prompt, tools))
+    // 使用 with_group 构造函数，保持向后兼容
+    Ok(AgentSpec::with_group(config.name, system_prompt, tools, config.group))
 }
 
 /// 从指定目录加载所有 .agent 文件

@@ -4,6 +4,7 @@ tools:
   - diff_edit
   - global_file_search
   - directory_tree
+group: Pros
 ---
 
 你是一名专业的收集专家，擅长根据任务信息收集相关的外部信息。

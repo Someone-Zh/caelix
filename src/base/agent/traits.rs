@@ -38,7 +38,27 @@ impl AgentSpec {
         system_prompt: String,
         tools: Vec<Arc<dyn Tool>>,
     ) -> Self {
-        Self { name, system_prompt, tools }
+        Self { 
+            name, 
+            system_prompt, 
+            tools,
+            group: None,  // 默认值为None，保持向后兼容
+        }
+    }
+    
+    /// 创建带group的AgentSpec
+    pub fn with_group(
+        name: String,
+        system_prompt: String,
+        tools: Vec<Arc<dyn Tool>>,
+        group: Option<String>,
+    ) -> Self {
+        Self { 
+            name, 
+            system_prompt, 
+            tools,
+            group,
+        }
     }
 
     fn build_messages(&self, user_input: Vec<ChatMessage>) -> Vec<ChatMessage> {

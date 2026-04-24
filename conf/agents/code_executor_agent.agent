@@ -3,6 +3,7 @@ name: code_executor_agent
 tools:
   - global_file_search
   - directory_tree
+group: Pros
 ---
 
 你是一名专业的代码操作执行者，擅长执行与代码相关的任务。

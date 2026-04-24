@@ -38,4 +38,5 @@ pub struct AgentSpec {
     pub name: String,
     pub system_prompt: String,
     pub tools: Vec<Arc<dyn Tool>>,
+    pub group: Option<String>,
 }

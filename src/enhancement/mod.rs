@@ -3,11 +3,10 @@ pub mod commands;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::base::agent::AgentSpec;
-use crate::enhancement::hooks::AgentHook;
+use crate::enhancement::hooks::{AgentHook, InitContext, PreContext, PostContext, ErrorContext};
 
 /// 钩子注册中心
-/// 管理所有Agent增强钩子,并在Agent执行前应用它们
+/// 管理所有Agent增强钩子，并在Agent生命周期的不同阶段应用它们
 #[derive(Clone)]
 pub struct HookRegistry {
     hooks: Arc<RwLock<Vec<Arc<dyn AgentHook>>>>,
@@ -36,14 +35,59 @@ impl HookRegistry {
         hooks.push(hook);
     }
 
-    /// 应用所有钩子到AgentSpec
-    #[allow(dead_code)] // 为将来使用预留
-    pub async fn apply_hooks(&self, agent_spec: &mut AgentSpec) {
+    /// 执行Init阶段钩子
+    #[allow(dead_code)] // 在异步闭包中使用
+    pub async fn execute_init(&self, ctx: &mut InitContext<'_>) -> Result<(), anyhow::Error> {
         let hooks = self.hooks.read().await;
         for hook in hooks.iter() {
-            println!("Applying hook: {}", hook.name());
-            hook.enhance_agent(agent_spec);
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                println!("Executing init hook: {}", hook.name());
+                hook.on_init(ctx).await?;
+            }
         }
+        Ok(())
+    }
+
+    /// 执行Pre阶段钩子
+    #[allow(dead_code)] // 在异步闭包中使用
+    pub async fn execute_pre(&self, ctx: &mut PreContext) -> Result<(), anyhow::Error> {
+        let hooks = self.hooks.read().await;
+        for hook in hooks.iter() {
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                println!("Executing pre-process hook: {}", hook.name());
+                hook.on_pre_process(ctx).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 执行Post阶段钩子
+    #[allow(dead_code)] // 在异步闭包中使用
+    pub async fn execute_post(&self, ctx: &PostContext) -> Result<(), anyhow::Error> {
+        let hooks = self.hooks.read().await;
+        for hook in hooks.iter() {
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                println!("Executing post-process hook: {}", hook.name());
+                hook.on_post_process(ctx).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 执行Error阶段钩子
+    #[allow(dead_code)] // 在异步闭包中使用
+    pub async fn execute_error(&self, ctx: &ErrorContext) -> Result<(), anyhow::Error> {
+        let hooks = self.hooks.read().await;
+        for hook in hooks.iter() {
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                println!("Executing error hook: {}", hook.name());
+                // Error钩子失败不中断，只记录日志
+                if let Err(e) = hook.on_error(ctx).await {
+                    eprintln!("Error hook {} failed: {:?}", hook.name(), e);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 获取已注册的钩子数量

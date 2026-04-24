@@ -5,6 +5,7 @@ tools:
   - global_file_search
   - directory_tree
   - delegate_task
+group: Pros
 ---
 
 你是一名专业的规划专家，擅长将复杂任务拆解为可执行的子任务。
