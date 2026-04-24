@@ -93,13 +93,23 @@ pub async fn load_agents_from_directory(
 pub async fn register_all_agents(context: &CaelixContext, directory_path: &str) -> Result<(), AgentRegistryError> {
     let agent_manager = context.agent_manager.clone();
     let tool_manager = context.tool_manager.clone();
+    let hook_registry = context.hook_registry.clone();
     
     // 从指定目录加载所有 agent
-    let agents = load_agents_from_directory(directory_path, &tool_manager, context)
+    let mut agents = load_agents_from_directory(directory_path, &tool_manager, context)
         .await
         .map_err(|e| AgentRegistryError::LoadError(e))?;
     
-    // 注册所有加载的 agent
+    // 对每个agent应用init-hooks进行增强
+    for agent in agents.iter_mut() {
+        println!("Applying init hooks to agent: {}", agent.name);
+        if let Err(e) = hook_registry.apply_init_hooks(agent, None).await {
+            eprintln!("Warning: Failed to apply init hooks to agent '{}': {}", agent.name, e);
+            // 继续处理其他agent，不因钩子失败而中断
+        }
+    }
+    
+    // 注册所有增强后的agent
     for agent in agents {
         agent_manager.register(agent).await?;
     }

@@ -11,10 +11,10 @@ use crate::config::provider_loader::load_provider_configs;
 use crate::config::tools_loader::{create_all_builtin_tools, create_delegate_task_tool};
 use crate::config::agents_loader::register_all_agents;
 use crate::config::skills_loader::register_all_skills;
+use crate::enhancement::hooks::loader::HookLoader;
 use crate::runtime::message::{SessionManager, MessageBus, FileStorage};
 use crate::runtime::task::{TaskManager, FilePersistence, RunnableFactory};
 use crate::enhancement::HookRegistry;
-use crate::enhancement::hooks::skill_hook::SkillHook;
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
 #[derive(Debug, Clone)]
@@ -170,13 +170,14 @@ impl CaelixContext {
     }
 
     /// 初始化钩子系统
-    /// 注册所有内置钩子（如技能钩子）
+    /// 使用HookLoader注册所有内置钩子（如技能钩子）
     pub async fn init_hooks(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // 注册技能钩子
-        let skill_hook = Arc::new(SkillHook::new(self.skill_manager.clone()));
-        self.hook_registry.register_hook(skill_hook).await;
+        // 使用HookLoader加载内置钩子
+        HookLoader::load_builtin_hooks(
+            &self.hook_registry,
+            self.skill_manager.clone(),
+        ).await?;
         
-        println!("Hooks initialized. Total hooks: {}", self.hook_registry.hook_count().await);
         Ok(())
     }
 
@@ -210,15 +211,15 @@ impl CaelixContext {
 
         // 初始化提供商
         self.init_provider().await?;
-
-        // 初始化智能体
-        self.init_agents().await?;
         
-        // 初始化技能
+        // 初始化技能（必须在钩子之前）
         self.init_skills().await?;
         
-        // 初始化钩子
+        // 初始化钩子（必须在agents之前，因为agents注册时需要应用init-hooks）
         self.init_hooks().await?;
+
+        // 初始化智能体（会自动应用init-hooks进行增强）
+        self.init_agents().await?;
         
         // 初始化命令
         self.init_commands().await?;

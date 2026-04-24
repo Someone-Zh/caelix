@@ -3,7 +3,8 @@ pub mod commands;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::enhancement::hooks::{AgentHook, InitContext, PreContext, PostContext, ErrorContext};
+use crate::enhancement::hooks::{AgentHook, InitContext, PreContext, PostContext, ErrorContext, BaseContext};
+use crate::base::agent::AgentSpec;
 
 /// 钩子注册中心
 /// 管理所有Agent增强钩子，并在Agent生命周期的不同阶段应用它们
@@ -94,5 +95,46 @@ impl HookRegistry {
     pub async fn hook_count(&self) -> usize {
         let hooks = self.hooks.read().await;
         hooks.len()
+    }
+
+    /// 应用Init阶段钩子到AgentSpec（用于Agent注册时的一次性增强）
+    /// 
+    /// # Arguments
+    /// * `agent_spec` - 要增强的AgentSpec可变引用
+    /// * `session_id` - 会话ID（可选，用于日志）
+    /// 
+    /// 这个方法应该在Agent注册时调用，确保每个Agent只被增强一次
+    pub async fn apply_init_hooks(
+        &self,
+        agent_spec: &mut AgentSpec,
+        session_id: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        let hooks = self.hooks.read().await;
+        let session_id = session_id.unwrap_or("init").to_string();
+        
+        for hook in hooks.iter() {
+            if hook.should_apply(&agent_spec.name, agent_spec.group.as_deref()) {
+                println!("Applying init hook '{}' to agent '{}'", hook.name(), agent_spec.name);
+                
+                // 创建BaseContext
+                let base_ctx = BaseContext {
+                    session_id: session_id.clone(),
+                    span_id: format!("{}-init", session_id),
+                    agent_name: agent_spec.name.clone(),
+                    agent_group: agent_spec.group.clone(),
+                };
+                
+                // 创建InitContext
+                let mut init_ctx = InitContext {
+                    base: base_ctx,
+                    agent_spec,
+                };
+                
+                // 执行钩子
+                hook.on_init(&mut init_ctx).await?;
+            }
+        }
+        
+        Ok(())
     }
 }

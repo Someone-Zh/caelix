@@ -1,4 +1,5 @@
 pub mod skill_hook;
+pub mod loader;
 
 use crate::base::agent::{AgentSpec, AgentOutputChunk};
 use crate::base::provider::ChatMessage;
