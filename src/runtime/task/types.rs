@@ -58,6 +58,7 @@ pub struct TaskMeta {
     pub session_id: String,
     pub span_id: String,
     pub tool_call_id: Option<String>,
+    pub task_name: Option<String>,
     pub kind: TaskKind,
     pub status: TaskStatus,
     pub progress: Option<f32>,  // 任务进度 0.0-1.0
@@ -72,6 +73,7 @@ impl TaskMeta {
         session_id: String,
         span_id: String,
         tool_call_id: Option<String>,
+        task_name: Option<String>,
         kind: TaskKind,
         task_type_name: String,
         task_payload: String,
@@ -82,6 +84,7 @@ impl TaskMeta {
             session_id,
             span_id,
             tool_call_id,
+            task_name,
             kind,
             status: TaskStatus::Pending,
             progress: None,

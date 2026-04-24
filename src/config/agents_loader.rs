@@ -5,7 +5,6 @@ use crate::config::skills_loader::parse_yaml_markdown_file;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Agent 配置的 YAML 部分
 #[derive(Debug, Deserialize)]
@@ -18,7 +17,7 @@ struct AgentConfig {
 async fn create_agent_from_file(
     file_path: &Path,
     tool_manager: &ToolManager,
-    context: &CaelixContext,
+    _context: &CaelixContext,
 ) -> Result<AgentSpec, String> {
     // 读取文件内容
     let content = fs::read_to_string(file_path)
@@ -40,11 +39,7 @@ async fn create_agent_from_file(
         // 检查是否已经添加过 delegate_task
         let has_delegate = tools.iter().any(|t| t.name() == "delegate_task");
         if !has_delegate {
-            let delegate_task_tool = crate::config::tools_loader::create_delegate_task_tool(
-                Arc::new(context.clone()),
-                None,
-                None,
-            );
+            let delegate_task_tool = crate::config::tools_loader::create_delegate_task_tool();
             tools.push(delegate_task_tool);
         }
     }

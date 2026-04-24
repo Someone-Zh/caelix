@@ -113,12 +113,8 @@ impl CaelixContext {
             tool_manager.register(tool).await;
         }
 
-        // 注册委派任务工具（配置 message_bus 和 task_manager）
-        let delegate_tool = create_delegate_task_tool(
-            Arc::new(self.clone()), 
-            Some(self.message_bus.clone()),
-            self.task_manager.clone(),
-        );
+        // 注册委派任务工具（无需参数，从 RuntimeContext 动态获取）
+        let delegate_tool = create_delegate_task_tool();
         tool_manager.register(delegate_tool).await;
 
         Ok(())

@@ -125,6 +125,7 @@ impl TaskManager {
         session_id: String,
         span_id: String,
         tool_call_id: Option<String>,
+        task_name: Option<String>,
         kind: TaskKind,
         runnable: Box<dyn Runnable>,
     ) -> TaskId {
@@ -135,6 +136,7 @@ impl TaskManager {
             session_id.clone(),
             span_id.clone(),
             tool_call_id,
+            task_name,
             kind.clone(),
             task_type_name,
             task_payload,

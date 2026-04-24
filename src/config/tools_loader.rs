@@ -2,8 +2,6 @@
 
 use crate::base::tool::Tool;
 use std::sync::Arc;
-use crate::config::CaelixContext;
-use std::sync::Arc as StdArc;
 
 
 /// 创建所有内置工具实例（统一管理所有工具的实例化）
@@ -20,11 +18,7 @@ pub fn create_all_builtin_tools() -> Vec<Arc<dyn Tool>> {
     ]
 }
 
-/// 创建委派任务工具实例（需要 context、message_bus 和 task_manager）
-pub fn create_delegate_task_tool(
-    context: StdArc<CaelixContext>,
-    message_bus: Option<Arc<crate::runtime::MessageBus>>,
-    task_manager: Option<Arc<crate::runtime::TaskManager>>,
-) -> Arc<dyn Tool> {
-    Arc::new(crate::base::tool::DelegateTaskTool::new(context, message_bus, task_manager))
+/// 创建委派任务工具实例（无需参数，从 RuntimeContext 动态获取）
+pub fn create_delegate_task_tool() -> Arc<dyn Tool> {
+    Arc::new(crate::base::tool::DelegateTaskTool::new())
 }
