@@ -7,7 +7,8 @@ use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::config::CaelixContext;
 use crate::base::agent::{AgentOutputChunk, Agent};
 use crate::base::provider::{ChatMessage, LlmConfig, LlmType};
-use crate::runtime::message::types::{Message, MessageType, Role, Status, MessageMeta};
+use crate::runtime::message::agent_message::{AgentMessage, AgentMessageType};
+use crate::runtime::message::notification_message::{NotificationMessage, NotificationType};
 use crate::runtime::TaskMeta;
 use crate::enhancement::hooks::{BaseContext, InitContext, PreContext, PostContext, ErrorContext, HookStage};
 use uuid::Uuid;
@@ -111,41 +112,31 @@ impl CaelixApi for CaelixApiImpl {
             .or(session_config.agent)
             .unwrap_or_else(|| "code_executor_agent".to_string());
 
-        // 生成唯一的 stream_id
-        let stream_id = Uuid::new_v4().to_string();
+        // 生成唯一的 stream_id（暂时未使用，为将来扩展预留）
+        let _stream_id = Uuid::new_v4().to_string();
+        
+        // 生成 request_id（每次请求唯一）
+        let request_id = Uuid::new_v4().to_string();
         
         // 克隆必要的引用用于后台任务
         let context = self.context.clone();
         let session_id = request.session_id.clone();
         let message_content = request.message.clone();
         let bus = self.context.message_bus.clone();
+        let request_id = request_id.clone();
         
         // 在后台执行 agent 并通过消息总线推送流式内容
         tokio::spawn(async move {
             // 发送开始消息
-            let start_span_id = Message::generate_span_id();
-            let start_msg = Message {
+            let start_span_id = AgentMessage::generate_span_id();
+            let start_msg = AgentMessage {
                 session_id: session_id.clone(),
                 span_id: start_span_id.clone(),
-                parent_span_id: None,
-                seq: 0,
-                role: Role::Agent,
-                name: agent_name.clone(),
-                r#type: MessageType::Status,
-                content: "开始处理...".to_string(),
-                status: Status::Running,
+                r#type: AgentMessageType::Chunk,
                 timestamp: chrono::Utc::now(),
-                error: None,
-                meta: Some(MessageMeta {
-                    latency_ms: None,
-                    tokens_used: None,
-                    version: None,
-                    task_id: None,
-                    stream_id: Some(stream_id.clone()),
-                    is_final: false,
-                }),
+                content: "开始处理...".to_string(),
             };
-            let _ = bus.send(start_msg);
+            let _ = bus.send_agent(start_msg);
             
             // 获取提供者
             let provider_manager = context.llm_provider_manager.read().await;
@@ -153,28 +144,14 @@ impl CaelixApi for CaelixApiImpl {
                 Some(p) => p.clone(),
                 None => {
                     // 发送错误消息
-                    let error_msg = Message {
+                    let error_msg = NotificationMessage {
                         session_id: session_id.clone(),
-                        span_id: Message::generate_span_id(),
-                        parent_span_id: Some(start_span_id.clone()),
-                        seq: 0,
-                        role: Role::System,
-                        name: "system".to_string(),
-                        r#type: MessageType::Error,
-                        content: format!("Provider '{}' not found", provider_name),
-                        status: Status::Error,
+                        span_id: NotificationMessage::generate_span_id(),
+                        r#type: NotificationType::Error,
                         timestamp: chrono::Utc::now(),
-                        error: None,
-                        meta: Some(MessageMeta {
-                            latency_ms: None,
-                            tokens_used: None,
-                            version: None,
-                            task_id: None,
-                            stream_id: Some(stream_id.clone()),
-                            is_final: true,
-                        }),
+                        content: format!("Provider '{}' not found", provider_name),
                     };
-                    let _ = bus.send(error_msg);
+                    let _ = bus.send_notification(error_msg);
                     return;
                 }
             };
@@ -184,28 +161,14 @@ impl CaelixApi for CaelixApiImpl {
                 Some(spec) => spec,
                 None => {
                     // 发送错误消息
-                    let error_msg = Message {
+                    let error_msg = NotificationMessage {
                         session_id: session_id.clone(),
-                        span_id: Message::generate_span_id(),
-                        parent_span_id: Some(start_span_id.clone()),
-                        seq: 0,
-                        role: Role::System,
-                        name: "system".to_string(),
-                        r#type: MessageType::Error,
-                        content: format!("Agent '{}' not found", agent_name),
-                        status: Status::Error,
+                        span_id: NotificationMessage::generate_span_id(),
+                        r#type: NotificationType::Error,
                         timestamp: chrono::Utc::now(),
-                        error: None,
-                        meta: Some(MessageMeta {
-                            latency_ms: None,
-                            tokens_used: None,
-                            version: None,
-                            task_id: None,
-                            stream_id: Some(stream_id.clone()),
-                            is_final: true,
-                        }),
+                        content: format!("Agent '{}' not found", agent_name),
                     };
-                    let _ = bus.send(error_msg);
+                    let _ = bus.send_notification(error_msg);
                     return;
                 }
             };
@@ -216,6 +179,7 @@ impl CaelixApi for CaelixApiImpl {
             // 构建BaseContext
             let base_ctx = BaseContext {
                 session_id: session_id.clone(),
+                request_id: request_id.clone(),
                 span_id: start_span_id.clone(),
                 agent_name: agent_name.clone(),
                 agent_group: enhanced_agent.group.clone(),
@@ -229,28 +193,14 @@ impl CaelixApi for CaelixApiImpl {
 
             if let Err(e) = context.hook_registry.execute_init(&mut init_ctx).await {
                 // 发送错误消息并返回
-                let error_msg = Message {
+                let error_msg = NotificationMessage {
                     session_id: session_id.clone(),
-                    span_id: Message::generate_span_id(),
-                    parent_span_id: Some(start_span_id.clone()),
-                    seq: 0,
-                    role: Role::System,
-                    name: "system".to_string(),
-                    r#type: MessageType::Error,
-                    content: format!("Init hook failed: {:?}", e),
-                    status: Status::Error,
+                    span_id: NotificationMessage::generate_span_id(),
+                    r#type: NotificationType::Error,
                     timestamp: chrono::Utc::now(),
-                    error: None,
-                    meta: Some(MessageMeta {
-                        latency_ms: None,
-                        tokens_used: None,
-                        version: None,
-                        task_id: None,
-                        stream_id: Some(stream_id.clone()),
-                        is_final: true,
-                    }),
+                    content: format!("Init hook failed: {:?}", e),
                 };
-                let _ = bus.send(error_msg);
+                let _ = bus.send_notification(error_msg);
                 return;
             }
 
@@ -267,28 +217,14 @@ impl CaelixApi for CaelixApiImpl {
 
             if let Err(e) = context.hook_registry.execute_pre(&mut pre_ctx).await {
                 // 发送错误消息并返回
-                let error_msg = Message {
+                let error_msg = NotificationMessage {
                     session_id: session_id.clone(),
-                    span_id: Message::generate_span_id(),
-                    parent_span_id: Some(start_span_id.clone()),
-                    seq: 0,
-                    role: Role::System,
-                    name: "system".to_string(),
-                    r#type: MessageType::Error,
-                    content: format!("Pre-process hook failed: {:?}", e),
-                    status: Status::Error,
+                    span_id: NotificationMessage::generate_span_id(),
+                    r#type: NotificationType::Error,
                     timestamp: chrono::Utc::now(),
-                    error: None,
-                    meta: Some(MessageMeta {
-                        latency_ms: None,
-                        tokens_used: None,
-                        version: None,
-                        task_id: None,
-                        stream_id: Some(stream_id.clone()),
-                        is_final: true,
-                    }),
+                    content: format!("Pre-process hook failed: {:?}", e),
                 };
-                let _ = bus.send(error_msg);
+                let _ = bus.send_notification(error_msg);
                 return;
             }
 
@@ -314,28 +250,14 @@ impl CaelixApi for CaelixApiImpl {
                     let _ = context.hook_registry.execute_error(&error_ctx).await;
                     
                     // 发送错误消息
-                    let error_msg = Message {
+                    let error_msg = NotificationMessage {
                         session_id: session_id.clone(),
-                        span_id: Message::generate_span_id(),
-                        parent_span_id: Some(start_span_id.clone()),
-                        seq: 0,
-                        role: Role::System,
-                        name: "system".to_string(),
-                        r#type: MessageType::Error,
-                        content: format!("Agent execution failed: {:?}", e),
-                        status: Status::Error,
+                        span_id: NotificationMessage::generate_span_id(),
+                        r#type: NotificationType::Error,
                         timestamp: chrono::Utc::now(),
-                        error: None,
-                        meta: Some(MessageMeta {
-                            latency_ms: None,
-                            tokens_used: None,
-                            version: None,
-                            task_id: None,
-                            stream_id: Some(stream_id.clone()),
-                            is_final: true,
-                        }),
+                        content: format!("Agent execution failed: {:?}", e),
                     };
-                    let _ = bus.send(error_msg);
+                    let _ = bus.send_notification(error_msg);
                     return;
                 }
             };
@@ -356,78 +278,36 @@ impl CaelixApi for CaelixApiImpl {
                                 _chunk_count += 1;
                                 
                                 // 发送流式内容块
-                                let chunk_msg = Message {
+                                let chunk_msg = AgentMessage {
                                     session_id: session_id.clone(),
-                                    span_id: Message::generate_span_id(),
-                                    parent_span_id: Some(start_span_id.clone()),
-                                    seq: 0,
-                                    role: Role::Agent,
-                                    name: agent_name.clone(),
-                                    r#type: MessageType::Chunk,
-                                    content: content.clone(),
-                                    status: Status::Running,
+                                    span_id: AgentMessage::generate_span_id(),
+                                    r#type: AgentMessageType::Chunk,
                                     timestamp: chrono::Utc::now(),
-                                    error: None,
-                                    meta: Some(MessageMeta {
-                                        latency_ms: None,
-                                        tokens_used: None,
-                                        version: None,
-                                        task_id: None,
-                                        stream_id: Some(stream_id.clone()),
-                                        is_final: false,
-                                    }),
+                                    content: content.clone(),
                                 };
-                                let _ = bus.send(chunk_msg);
+                                let _ = bus.send_agent(chunk_msg);
                             }
                             AgentOutputChunk::ToolCall { name, arguments, .. } => {
                                 // 发送工具调用通知
-                                let tool_msg = Message {
+                                let tool_msg = NotificationMessage {
                                     session_id: session_id.clone(),
-                                    span_id: Message::generate_span_id(),
-                                    parent_span_id: Some(start_span_id.clone()),
-                                    seq: 0,
-                                    role: Role::Agent,
-                                    name: agent_name.clone(),
-                                    r#type: MessageType::ToolCall,
-                                    content: format!("调用工具: {}({})", name, arguments),
-                                    status: Status::Running,
+                                    span_id: NotificationMessage::generate_span_id(),
+                                    r#type: NotificationType::Info,
                                     timestamp: chrono::Utc::now(),
-                                    error: None,
-                                    meta: Some(MessageMeta {
-                                        latency_ms: None,
-                                        tokens_used: None,
-                                        version: None,
-                                        task_id: None,
-                                        stream_id: Some(stream_id.clone()),
-                                        is_final: false,
-                                    }),
+                                    content: format!("调用工具: {}({})", name, arguments),
                                 };
-                                let _ = bus.send(tool_msg);
+                                let _ = bus.send_notification(tool_msg);
                             }
                             AgentOutputChunk::Finish { .. } => {
                                 // 发送结束标记
-                                let finish_msg = Message {
+                                let finish_msg = AgentMessage {
                                     session_id: session_id.clone(),
-                                    span_id: Message::generate_span_id(),
-                                    parent_span_id: Some(start_span_id.clone()),
-                                    seq: 0,
-                                    role: Role::Agent,
-                                    name: agent_name.clone(),
-                                    r#type: MessageType::Chunk,
-                                    content: String::new(),
-                                    status: Status::Done,
+                                    span_id: AgentMessage::generate_span_id(),
+                                    r#type: AgentMessageType::ChunkEnd,
                                     timestamp: chrono::Utc::now(),
-                                    error: None,
-                                    meta: Some(MessageMeta {
-                                        latency_ms: None,
-                                        tokens_used: None,
-                                        version: None,
-                                        task_id: None,
-                                        stream_id: Some(stream_id.clone()),
-                                        is_final: true,
-                                    }),
+                                    content: String::new(),
                                 };
-                                let _ = bus.send(finish_msg);
+                                let _ = bus.send_agent(finish_msg);
                                 break;
                             }
                             _ => {}
@@ -443,28 +323,14 @@ impl CaelixApi for CaelixApiImpl {
                         let _ = context.hook_registry.execute_error(&error_ctx).await;
                         
                         // 发送错误消息
-                        let error_msg = Message {
+                        let error_msg = NotificationMessage {
                             session_id: session_id.clone(),
-                            span_id: Message::generate_span_id(),
-                            parent_span_id: Some(start_span_id.clone()),
-                            seq: 0,
-                            role: Role::System,
-                            name: "system".to_string(),
-                            r#type: MessageType::Error,
-                            content: format!("Stream error: {:?}", e),
-                            status: Status::Error,
+                            span_id: NotificationMessage::generate_span_id(),
+                            r#type: NotificationType::Error,
                             timestamp: chrono::Utc::now(),
-                            error: None,
-                            meta: Some(MessageMeta {
-                                latency_ms: None,
-                                tokens_used: None,
-                                version: None,
-                                task_id: None,
-                                stream_id: Some(stream_id.clone()),
-                                is_final: true,
-                            }),
+                            content: format!("Stream error: {:?}", e),
                         };
-                        let _ = bus.send(error_msg);
+                        let _ = bus.send_notification(error_msg);
                         break;
                     }
                 }
@@ -489,7 +355,7 @@ impl CaelixApi for CaelixApiImpl {
         Ok(Box::pin(empty_stream))
     }
 
-    async fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>, ApiError> {
+    async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError> {
         // 验证会话存在
         if !self.context.session_manager.session_exists(session_id).await {
             return Err(ApiError::session_not_found(session_id));
@@ -588,16 +454,14 @@ impl CaelixApi for CaelixApiImpl {
         Ok(models)
     }
 
-    async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<Message>, ApiError> {
+    async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<NotificationMessage>, ApiError> {
         // 验证会话存在
         if !self.context.session_manager.session_exists(session_id).await {
             return Err(ApiError::session_not_found(session_id));
         }
         
-        // 从 SessionManager 获取通知消息
-        self.context.session_manager
-            .get_session_notifications(session_id)
-            .await
-            .map_err(|e| ApiError::InternalError(e.to_string()))
+        // 注意：通知消息不再持久化，只能从内存缓冲中获取
+        // 这里返回空列表，实际应该通过订阅接口获取
+        Ok(Vec::new())
     }
 }

@@ -5,7 +5,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use chrono::{DateTime, Utc};
-use crate::runtime::message::types::Message;
 use crate::runtime::TaskMeta;
 
 /// API 错误类型
@@ -79,7 +78,13 @@ pub struct AgentListResponse {
 /// 会话消息列表响应
 #[derive(Debug, Serialize)]
 pub struct SessionMessagesResponse {
-    pub messages: Vec<Message>,
+    pub messages: Vec<crate::runtime::message::agent_message::AgentMessage>,
+}
+
+/// 会话通知列表响应
+#[derive(Debug, Serialize)]
+pub struct SessionNotificationsResponse {
+    pub notifications: Vec<crate::runtime::message::notification_message::NotificationMessage>,
 }
 
 /// 任务列表响应

@@ -1,34 +1,57 @@
-use crate::runtime::message::types::Message;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::broadcast;
-use std::sync::Arc; 
+use crate::runtime::message::agent_message::AgentMessage;
+use crate::runtime::message::notification_message::NotificationMessage;
+use crate::runtime::message::task_message::TaskMessage;
+use tokio::sync::broadcast; 
 
 #[derive(Debug, Clone)]
 pub struct MessageBus {
-    sender: broadcast::Sender<Message>,
-    seq_counter: Arc<AtomicU64>, 
-
+    agent_sender: broadcast::Sender<AgentMessage>,
+    notification_sender: broadcast::Sender<NotificationMessage>,
+    task_sender: broadcast::Sender<TaskMessage>,
 }
 
 impl MessageBus {
     pub fn new(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
+        let (agent_sender, _) = broadcast::channel(capacity);
+        let (notification_sender, _) = broadcast::channel(capacity);
+        let (task_sender, _) = broadcast::channel(capacity);
         Self {
-            sender,
-            seq_counter: Arc::new(AtomicU64::new(1)), 
+            agent_sender,
+            notification_sender,
+            task_sender,
         }
     }
 
-    /// 发送消息 (自动分配全局 Seq)
-    pub fn send(&self, mut msg: Message) -> Result<(), broadcast::error::SendError<Message>> {
-        let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-        msg.seq = seq;
-        self.sender.send(msg)?;
+    /// 发送 Agent 消息
+    pub fn send_agent(&self, msg: AgentMessage) -> Result<(), broadcast::error::SendError<AgentMessage>> {
+        self.agent_sender.send(msg)?;
         Ok(())
     }
 
-    /// 订阅消息
-    pub fn subscribe(&self) -> broadcast::Receiver<Message> {
-        self.sender.subscribe()
+    /// 发送通知消息
+    pub fn send_notification(&self, msg: NotificationMessage) -> Result<(), broadcast::error::SendError<NotificationMessage>> {
+        self.notification_sender.send(msg)?;
+        Ok(())
+    }
+
+    /// 发送任务消息
+    pub fn send_task(&self, msg: TaskMessage) -> Result<(), broadcast::error::SendError<TaskMessage>> {
+        self.task_sender.send(msg)?;
+        Ok(())
+    }
+
+    /// 订阅 Agent 消息
+    pub fn subscribe_agent(&self) -> broadcast::Receiver<AgentMessage> {
+        self.agent_sender.subscribe()
+    }
+
+    /// 订阅通知消息
+    pub fn subscribe_notification(&self) -> broadcast::Receiver<NotificationMessage> {
+        self.notification_sender.subscribe()
+    }
+
+    /// 订阅任务消息
+    pub fn subscribe_task(&self) -> broadcast::Receiver<TaskMessage> {
+        self.task_sender.subscribe()
     }
 }

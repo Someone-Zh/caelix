@@ -9,5 +9,4 @@ pub mod events;
 /// 主循环运行器
 pub mod runner;
 
-pub use events::EventHandler;
 pub use runner::run_tui;

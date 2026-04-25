@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::api::{CaelixApi, CaelixApiImpl};
 use crate::api::types::{
     ChatRequest, CreateSessionResponse, DefaultConfigResponse, AgentListResponse,
-    SessionMessagesResponse, TaskListResponse, TaskQueryParams,
+    SessionMessagesResponse, SessionNotificationsResponse, TaskListResponse, TaskQueryParams,
     SessionSummary, ProviderInfo
 };
 
@@ -164,10 +164,10 @@ pub async fn get_provider_models(
 pub async fn get_session_notifications(
     State(api): State<ApiState>,
     axum::extract::Path(session_id): axum::extract::Path<String>,
-) -> Result<Json<SessionMessagesResponse>, StatusCode> {
+) -> Result<Json<SessionNotificationsResponse>, StatusCode> {
     let notifications = api.get_session_notifications(&session_id)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
     
-    Ok(Json(SessionMessagesResponse { messages: notifications }))
+    Ok(Json(SessionNotificationsResponse { notifications }))
 }

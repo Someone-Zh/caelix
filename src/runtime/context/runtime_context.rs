@@ -30,6 +30,9 @@ pub struct RuntimeContext {
     /// Model 名称 - 当前使用的模型名称（如 "gpt-4", "qwen-max" 等）
     model: String,
     
+    /// Debug 模式是否启用（协程内可覆盖全局设置）
+    debug_enabled: bool,
+    
     /// 全局 CaelixContext 引用 - 所有 Session 共享
     caelix_context: Arc<CaelixContext>,
 }
@@ -43,6 +46,7 @@ impl RuntimeContext {
     /// * `work_dir` - 工作目录
     /// * `provider` - Provider 名称（必填）
     /// * `model` - Model 名称（必填）
+    /// * `debug_enabled` - Debug 模式是否启用
     /// * `caelix_context` - 全局上下文引用
     pub fn new(
         session_id: Option<String>,
@@ -50,6 +54,7 @@ impl RuntimeContext {
         work_dir: PathBuf,
         provider: String,
         model: String,
+        debug_enabled: bool,
         caelix_context: Arc<CaelixContext>,
     ) -> Self {
         let session_id = session_id.unwrap_or_else(|| format!("sess_{}", Uuid::new_v4()));
@@ -63,6 +68,7 @@ impl RuntimeContext {
             work_dir,
             provider,
             model,
+            debug_enabled,
             caelix_context,
         }
     }
@@ -201,6 +207,14 @@ impl RuntimeContext {
         CURRENT_CONTEXT.with(|ctx| ctx.caelix_context.clone())
     }
     
+    /// 获取当前 Debug 模式是否启用
+    /// 
+    /// # Panics
+    /// 如果在不存在的上下文中调用，会 panic
+    pub fn is_debug_enabled() -> bool {
+        CURRENT_CONTEXT.with(|ctx| ctx.debug_enabled)
+    }
+    
     /// 在指定的上下文中执行异步闭包
     /// 
     /// # Arguments
@@ -220,6 +234,9 @@ impl RuntimeContext {
     ///         None,
     ///         None,
     ///         std::env::current_dir().unwrap(),
+    ///         "openai".to_string(),
+    ///         "gpt-4".to_string(),
+    ///         false,
     ///         caelix_ctx,
     ///     );
     ///     
@@ -270,7 +287,7 @@ impl RuntimeContext {
     where
         F: std::future::Future<Output = R>,
     {
-        let context = RuntimeContext::new(session_id, None, work_dir, provider, model, caelix_context);
+        let context = RuntimeContext::new(session_id, None, work_dir, provider, model, false, caelix_context);
         CURRENT_CONTEXT.scope(context, f).await
     }
 }
@@ -293,6 +310,7 @@ mod tests {
             work_dir.clone(),
             "openai".to_string(),
             "gpt-4".to_string(),
+            false,
             caelix_ctx.clone(),
         );
         
@@ -314,6 +332,7 @@ mod tests {
             work_dir,
             "bailian".to_string(),
             "qwen-max".to_string(),
+            false,
             caelix_ctx,
         );
         
@@ -337,6 +356,7 @@ mod tests {
             work_dir,
             "openai".to_string(),
             "gpt-4".to_string(),
+            false,
             caelix_ctx,
         );
         

@@ -155,12 +155,9 @@ impl CommandHandler {
                 if let Ok(messages) = api_clone.get_session_messages(&session_id).await {
                     if let Some(tx) = tx {
                         for msg in messages {
+                            // AgentMessage 没有 role 字段，所有消息都视为 Assistant 回复
                             let tui_msg = TuiMessage {
-                                msg_type: match msg.role {
-                                    crate::runtime::message::types::Role::User => TuiMessageType::User,
-                                    crate::runtime::message::types::Role::Agent => TuiMessageType::Assistant,
-                                    _ => TuiMessageType::System,
-                                },
+                                msg_type: TuiMessageType::Assistant,
                                 content: msg.content,
                                 timestamp: Instant::now(),
                             };

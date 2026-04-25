@@ -65,6 +65,7 @@ impl HookScope {
 #[allow(dead_code)] // 在异步闭包中使用
 pub struct BaseContext {
     pub session_id: String,
+    pub request_id: String,
     pub span_id: String,
     pub agent_name: String,
     pub agent_group: Option<String>,

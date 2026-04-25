@@ -1,9 +1,7 @@
 use std::sync::Arc;
-use futures::StreamExt;
 
 use crate::api::{CaelixApi, CaelixApiImpl, ChatRequest};
-use crate::runtime::message::types::MessageType as RuntimeMessageType;
-use super::state::{App, AppView, TuiMessageType, Notification, NotificationType, AppMessage};
+use super::state::{App, AppView, AppMessage, Notification, NotificationType};
 use super::events::{EventHandler, TuiEvent};
 use super::views;
 
@@ -41,8 +39,8 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         app.current_agent = app.available_agents[0].clone();
     }
     
-    // 初始化消息总线订阅
-    let message_bus_rx = api.message_bus().subscribe();
+    // 初始化消息总线订阅（订阅通知消息）
+    let message_bus_rx = api.message_bus().subscribe_notification();
     app.message_bus_rx = Some(message_bus_rx);
     
     // 加载初始任务列表
@@ -75,79 +73,29 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         
         // 处理收集到的消息
         for msg in bus_messages {
-            // 检查是否是流式消息
-            let is_stream_chunk = if let Some(meta) = &msg.meta {
-                meta.stream_id.is_some()
-            } else {
-                false
+            // NotificationMessage 不包含流式数据，只显示为通知
+            // 将通知添加到气泡通知中
+            let notif_type = match msg.r#type {
+                crate::runtime::message::notification_message::NotificationType::Info => NotificationType::Info,
+                crate::runtime::message::notification_message::NotificationType::Success => NotificationType::Success,
+                crate::runtime::message::notification_message::NotificationType::Error => NotificationType::Error,
+                crate::runtime::message::notification_message::NotificationType::Warning => NotificationType::Warning,
             };
             
-            if is_stream_chunk {
-                // 处理流式消息
-                if let Some(meta) = &msg.meta {
-                    if let Some(stream_id) = &meta.stream_id {
-                        // 更新或创建流式缓冲区
-                        let content = app.active_streams.entry(stream_id.clone())
-                            .or_insert_with(String::new);
-                        content.push_str(&msg.content);
-                        let content_clone = content.clone();
-                        
-                        // 如果这是最后一条,标记为完成
-                        if meta.is_final {
-                            app.completed_streams.insert(stream_id.clone());
-                            // 将完整内容作为普通助手消息添加
-                            app.add_assistant_message(&content_clone);
-                            // 清理 active_streams
-                            app.active_streams.remove(stream_id);
-                            // 取消加载状态
-                            app.is_loading = false;
-                            app.loading_start_time = None;
-                            app.is_streaming = false;
-                            app.status_message = "就绪".to_string();
-                        } else {
-                            // 实时更新最后一条消息
-                            if let Some(last_msg) = app.messages.last_mut() {
-                                if last_msg.msg_type == TuiMessageType::Assistant {
-                                    last_msg.content = content_clone.clone();
-                                    // 自动滚动到最新消息
-                                    app.scroll_offset = app.messages.len() as u16;
-                                }
-                            } else {
-                                // 如果没有助手消息，创建一个
-                                app.add_assistant_message(&content_clone);
-                            }
-                        }
-                    }
-                }
-            } else if matches!(msg.r#type, 
-                RuntimeMessageType::TaskStarted | RuntimeMessageType::TaskCompleted | 
-                RuntimeMessageType::TaskFailed | RuntimeMessageType::TaskProgress)
-            {
-                // 更新任务列表（简化：收到任何任务消息就重新获取列表）
-                if let Some(session_id) = &app.session_id {
-                    let api_clone = api.clone();
-                    let session_clone = session_id.clone();
-                    let tx = app.message_tx.clone();
-                    tokio::spawn(async move {
-                        if let Ok(tasks) = api_clone.list_tasks(Some(&session_clone)).await {
-                            if let Some(tx) = tx {
-                                let _ = tx.send(AppMessage::UpdateTasks(tasks)).await;
-                            }
-                        }
-                    });
-                }
-                // 添加到通知历史
-                app.notifications_history.push(msg.clone());
-                // 显示右下角气泡通知
-                app.show_bubble_notification(&msg);
-            } else if matches!(msg.r#type,
-                RuntimeMessageType::Info | RuntimeMessageType::Error |
-                RuntimeMessageType::Warning | RuntimeMessageType::Success)
-            {
-                // 通用通知也加入历史并显示气泡
-                app.notifications_history.push(msg.clone());
-                app.show_bubble_notification(&msg);
-            }
+            // 创建气泡通知
+            use std::time::Instant;
+            use crate::backends::tui::state::BubbleNotification;
+            let bubble = BubbleNotification {
+                message: msg.content.clone(),
+                notif_type,
+                created_at: Instant::now(),
+                expires_at: Instant::now() + std::time::Duration::from_secs(5),
+                is_persistent: false,
+            };
+            app.bubble_notifications.push(bubble);
+            
+            // 同时添加到通知历史
+            app.notifications_history.push(msg);
         }
         
         // 清理过期的气泡通知
@@ -260,6 +208,19 @@ fn handle_key_event(app: &mut App, api: Arc<CaelixApiImpl>, key_event: crossterm
     use crossterm::event::KeyCode;
     
     match key_event.code {
+        KeyCode::Char('d') | KeyCode::Delete => {
+            // 在通知历史视图中删除选中项（简化：删除最后一个）
+            if app.active_view == AppView::Notifications && !app.notifications_history.is_empty() {
+                let last_idx = app.notifications_history.len() - 1;
+                app.delete_selected_notification(last_idx);
+            }
+        }
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            // 在通知历史视图中清除所有
+            if app.active_view == AppView::Notifications {
+                app.clear_all_notifications();
+            }
+        }
         KeyCode::Char(c) => {
             // 在聊天视图中，如果输入框为空且输入'/'，开始命令模式
             if app.active_view == AppView::Chat && app.input_buffer.is_empty() && c == '/' {
@@ -431,19 +392,8 @@ fn handle_key_event(app: &mut App, api: Arc<CaelixApiImpl>, key_event: crossterm
                 app.next_agent();
             }
         }
-        KeyCode::Char('d') | KeyCode::Delete => {
-            // 在通知历史视图中删除选中项（简化：删除最后一个）
-            if app.active_view == AppView::Notifications && !app.notifications_history.is_empty() {
-                let last_idx = app.notifications_history.len() - 1;
-                app.delete_selected_notification(last_idx);
-            }
+        _ => {
+            // 其他按键不处理
         }
-        KeyCode::Char('c') | KeyCode::Char('C') => {
-            // 在通知历史视图中清除所有
-            if app.active_view == AppView::Notifications {
-                app.clear_all_notifications();
-            }
-        }
-        _ => {}
     }
 }

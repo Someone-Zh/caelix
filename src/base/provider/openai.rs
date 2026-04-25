@@ -12,6 +12,10 @@ use serde::Serialize;
 use crate::base::tool::traits::ToolDefinition;
 use super::ProviderConfig;
 use std::sync::Arc;
+#[cfg(feature = "logging")]
+use crate::runtime::context::RuntimeContext;
+#[cfg(feature = "logging")]
+use crate::debug_log_ctx;
 
 #[derive(Debug, Serialize)]
 struct LlmChatRequest {
@@ -281,6 +285,24 @@ impl LlmProvider for OpenAIProvider {
         tools: &[ToolDefinition],
         config: &LlmConfig,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>, AgentError> {
+        // 记录请求开始
+        #[cfg(feature = "logging")]
+        {
+            if RuntimeContext::is_debug_enabled() {
+                debug_log_ctx!(
+                    "DEBUG",
+                    "openai.rs:283",
+                    json!({
+                        "event": "chat_stream_start",
+                        "provider": self.config.name,
+                        "model": config.model_name,
+                        "message_count": messages.len(),
+                        "tool_count": tools.len()
+                    })
+                );
+            }
+        }
+        
         let request_body = self.build_request_body(messages, tools, config);
         let base_url = self.config.base_url.as_ref().ok_or_else(|| {
             AgentError::LlmError(format!("{}: base_url 未配置", self.config.name))

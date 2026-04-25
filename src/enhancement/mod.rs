@@ -42,8 +42,42 @@ impl HookRegistry {
         let hooks = self.hooks.read().await;
         for hook in hooks.iter() {
             if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_start",
+                            "hook_name": hook.name(),
+                            "stage": "init",
+                            "agent_name": ctx.base.agent_name
+                        })
+                    );
+                }
+                
                 println!("Executing init hook: {}", hook.name());
                 hook.on_init(ctx).await?;
+                
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_complete",
+                            "hook_name": hook.name(),
+                            "stage": "init",
+                            "result": "success"
+                        })
+                    );
+                }
             }
         }
         Ok(())
@@ -55,8 +89,42 @@ impl HookRegistry {
         let hooks = self.hooks.read().await;
         for hook in hooks.iter() {
             if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_start",
+                            "hook_name": hook.name(),
+                            "stage": "pre",
+                            "agent_name": ctx.base.agent_name
+                        })
+                    );
+                }
+                
                 println!("Executing pre-process hook: {}", hook.name());
                 hook.on_pre_process(ctx).await?;
+                
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_complete",
+                            "hook_name": hook.name(),
+                            "stage": "pre",
+                            "result": "success"
+                        })
+                    );
+                }
             }
         }
         Ok(())
@@ -68,8 +136,42 @@ impl HookRegistry {
         let hooks = self.hooks.read().await;
         for hook in hooks.iter() {
             if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_start",
+                            "hook_name": hook.name(),
+                            "stage": "post",
+                            "agent_name": ctx.base.agent_name
+                        })
+                    );
+                }
+                
                 println!("Executing post-process hook: {}", hook.name());
                 hook.on_post_process(ctx).await?;
+                
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_complete",
+                            "hook_name": hook.name(),
+                            "stage": "post",
+                            "result": "success"
+                        })
+                    );
+                }
             }
         }
         Ok(())
@@ -81,10 +183,61 @@ impl HookRegistry {
         let hooks = self.hooks.read().await;
         for hook in hooks.iter() {
             if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_start",
+                            "hook_name": hook.name(),
+                            "stage": "error",
+                            "agent_name": ctx.base.agent_name
+                        })
+                    );
+                }
+                
                 println!("Executing error hook: {}", hook.name());
                 // Error钩子失败不中断，只记录日志
                 if let Err(e) = hook.on_error(ctx).await {
                     eprintln!("Error hook {} failed: {:?}", hook.name(), e);
+                    
+                    #[cfg(feature = "logging")]
+                    {
+                        crate::debug_log!(
+                            "ERROR",
+                            &ctx.base.session_id,
+                            &ctx.base.request_id,
+                            &ctx.base.span_id,
+                            &format!("mod.rs:{}", line!()),
+                            serde_json::json!({
+                                "event": "hook_execute_failed",
+                                "hook_name": hook.name(),
+                                "stage": "error",
+                                "error": format!("{:?}", e)
+                            })
+                        );
+                    }
+                } else {
+                    #[cfg(feature = "logging")]
+                    {
+                        crate::debug_log!(
+                            "DEBUG",
+                            &ctx.base.session_id,
+                            &ctx.base.request_id,
+                            &ctx.base.span_id,
+                            &format!("mod.rs:{}", line!()),
+                            serde_json::json!({
+                                "event": "hook_execute_complete",
+                                "hook_name": hook.name(),
+                                "stage": "error",
+                                "result": "success"
+                            })
+                        );
+                    }
                 }
             }
         }
@@ -119,6 +272,7 @@ impl HookRegistry {
                 // 创建BaseContext
                 let base_ctx = BaseContext {
                     session_id: session_id.clone(),
+                    request_id: format!("{}-init", session_id),
                     span_id: format!("{}-init", session_id),
                     agent_name: agent_spec.name.clone(),
                     agent_group: agent_spec.group.clone(),

@@ -92,6 +92,7 @@ pub struct Message {
 
 impl Message {
     /// 便捷创建新消息 (需由 Bus 分配 seq)
+    #[allow(dead_code)] // 为将来使用预留
     pub fn new(
         session_id: String,
         span_id: String,

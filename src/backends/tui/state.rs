@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio::sync::broadcast;
 
 use crate::api::{CaelixApiImpl};
-use crate::runtime::message::types::{Message as RuntimeMessage, MessageType as RuntimeMessageType};
+use crate::runtime::message::notification_message::{NotificationMessage, NotificationType as RuntimeNotificationType};
 use crate::runtime::TaskMeta;
 use super::commands::CommandHandler;
 
@@ -14,6 +14,7 @@ use super::commands::CommandHandler;
 pub enum TuiMessageType {
     User,
     Assistant,
+    #[allow(dead_code)] // 为将来使用预留
     System,
 }
 
@@ -22,6 +23,7 @@ pub enum TuiMessageType {
 pub struct TuiMessage {
     pub msg_type: TuiMessageType,
     pub content: String,
+    #[allow(dead_code)] // 为将来使用预留
     pub timestamp: Instant,
 }
 
@@ -37,8 +39,11 @@ pub enum NotificationType {
 /// 通知消息（右侧气泡）
 #[derive(Debug, Clone)]
 pub struct Notification {
+    #[allow(dead_code)] // 为将来使用预留
     pub notif_type: NotificationType,
+    #[allow(dead_code)] // 为将来使用预留
     pub message: String,
+    #[allow(dead_code)] // 为将来使用预留
     pub timestamp: Instant,
 }
 
@@ -47,6 +52,7 @@ pub struct Notification {
 pub struct BubbleNotification {
     pub message: String,
     pub notif_type: NotificationType,
+    #[allow(dead_code)] // 为将来使用预留
     pub created_at: Instant,
     pub expires_at: Instant,
     pub is_persistent: bool,
@@ -70,8 +76,11 @@ pub enum AppMessage {
     AddNotification(Notification),
     SetLoading(bool),
     UpdateStatus(String),
+    #[allow(dead_code)] // 为将来使用预留
     StreamContent(String),  // 流式内容追加
+    #[allow(dead_code)] // 为将来使用预留
     StartStreamingMessage,  // 开始流式消息
+    #[allow(dead_code)] // 为将来使用预留
     UpdateTasks(Vec<TaskMeta>),  // 更新任务列表
     UpdateSessions(Vec<crate::api::types::SessionSummary>),  // 更新session列表
     UpdateProviders(Vec<crate::api::types::ProviderInfo>),   // 更新provider列表
@@ -101,11 +110,13 @@ pub struct App {
     pub message_rx: Option<mpsc::Receiver<AppMessage>>,
     // 新增字段
     pub tasks: Vec<TaskMeta>,              // 当前任务列表
-    pub notifications_history: Vec<RuntimeMessage>, // 通知历史记录
+    pub notifications_history: Vec<NotificationMessage>, // 通知历史记录
     pub active_view: AppView,               // 当前激活的视图
-    pub message_bus_rx: Option<broadcast::Receiver<RuntimeMessage>>, // 消息总线订阅者
+    pub message_bus_rx: Option<broadcast::Receiver<NotificationMessage>>, // 消息总线订阅者
     pub bubble_notifications: Vec<BubbleNotification>, // 活跃的气泡通知
+    #[allow(dead_code)] // 为将来使用预留
     pub active_streams: HashMap<String, String>,  // stream_id -> 当前累积内容
+    #[allow(dead_code)] // 为将来使用预留
     pub completed_streams: HashSet<String>,        // 已完成的 stream_id
     // 视图栈管理（用于Esc返回）
     pub view_stack: Vec<AppView>,          // 视图历史栈
@@ -192,6 +203,7 @@ impl App {
     }
 
     /// 添加助手消息
+    #[allow(dead_code)] // 为将来使用预留
     pub fn add_assistant_message(&mut self, content: &str) {
         self.add_message(TuiMessage {
             msg_type: TuiMessageType::Assistant,
@@ -288,20 +300,19 @@ impl App {
     }
     
     /// 显示气泡通知
-    pub fn show_bubble_notification(&mut self, msg: &RuntimeMessage) {
+    #[allow(dead_code)] // 为将来使用预留
+    pub fn show_bubble_notification(&mut self, msg: &NotificationMessage) {
         // 根据消息类型决定气泡显示时长和是否持久化
         let (duration_secs, is_persistent) = match msg.r#type {
-            RuntimeMessageType::Error | RuntimeMessageType::TaskFailed => (0, true), // 持久化
-            RuntimeMessageType::Warning => (5, false),
-            _ => (3, false), // Info, Success, TaskStarted, etc.
+            RuntimeNotificationType::Error => (0, true), // 持久化
+            RuntimeNotificationType::Warning => (5, false),
+            RuntimeNotificationType::Info | RuntimeNotificationType::Success => (3, false),
         };
         
         let notif_type = match msg.r#type {
-            RuntimeMessageType::Info | RuntimeMessageType::TaskStarted | RuntimeMessageType::TaskProgress => NotificationType::Info,
-            RuntimeMessageType::Success | RuntimeMessageType::TaskCompleted => NotificationType::Success,
-            RuntimeMessageType::Error | RuntimeMessageType::TaskFailed => NotificationType::Error,
-            RuntimeMessageType::Warning => NotificationType::Warning,
-            _ => NotificationType::Info,
+            RuntimeNotificationType::Info | RuntimeNotificationType::Success => NotificationType::Info,
+            RuntimeNotificationType::Error => NotificationType::Error,
+            RuntimeNotificationType::Warning => NotificationType::Warning,
         };
         
         let now = Instant::now();

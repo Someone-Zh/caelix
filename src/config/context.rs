@@ -15,6 +15,8 @@ use crate::enhancement::hooks::loader::HookLoader;
 use crate::runtime::message::{SessionManager, MessageBus, FileStorage};
 use crate::runtime::task::{TaskManager, FilePersistence, RunnableFactory};
 use crate::enhancement::HookRegistry;
+#[cfg(feature = "logging")]
+use crate::utils::logger::{JsonLogger, LoggerConfig, set_global_logger};
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
 #[derive(Debug, Clone)]
@@ -37,6 +39,9 @@ pub struct CaelixContext {
     pub message_bus: Arc<MessageBus>,
     /// 任务管理器实例
     pub task_manager: Option<Arc<TaskManager>>,
+    /// Debug 模式是否启用
+    #[allow(dead_code)] // 为将来使用预留
+    pub debug_enabled: bool,
 }
 
 impl CaelixContext {
@@ -53,6 +58,11 @@ impl CaelixContext {
 
     /// 创建新的应用上下文实例
     pub fn new() -> Self {
+        // 读取 debug 配置
+        let debug_enabled = env::var("CAELIX_DEBUG")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        
         // 初始化消息总线和存储
         let bus = MessageBus::new(1024);
         let storage = Arc::new(FileStorage::new("./sessions".to_string()));
@@ -68,6 +78,29 @@ impl CaelixContext {
             runnable_factory,
         ));
         
+        // 初始化日志系统
+        #[cfg(feature = "logging")]
+        {
+            if debug_enabled {
+                let caelix_home = Self::get_caelix_home();
+                let log_dir = caelix_home.join("logs");
+                
+                match JsonLogger::new(LoggerConfig {
+                    debug_enabled,
+                    log_dir,
+                    max_file_size: 10 * 1024 * 1024, // 10MB
+                }) {
+                    Ok(logger) => {
+                        set_global_logger(logger);
+                        println!("✅ 日志系统已启用，日志目录: {:?}", caelix_home.join("logs"));
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  日志系统初始化失败: {}", e);
+                    }
+                }
+            }
+        }
+        
         Self {
             agent_manager: Arc::new(AgentManager::new()),
             tool_manager: Arc::new(ToolManager::new()),
@@ -78,6 +111,7 @@ impl CaelixContext {
             hook_registry: Arc::new(HookRegistry::new()),
             message_bus: Arc::new(bus),
             task_manager: Some(task_manager),
+            debug_enabled,
         }
         
     }

@@ -3,7 +3,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, List, ListItem, Wrap},
 };
 use crate::backends::tui::state::{App, TuiMessageType, NotificationType, AppView};
-use crate::runtime::message::types::MessageType as RuntimeMessageType;
 use crate::runtime::task::TaskStatus;
 
 /// 渲染主界面
@@ -191,6 +190,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// 渲染通知气泡
+#[allow(dead_code)] // 为将来使用预留
 fn render_notifications(frame: &mut Frame, app: &App, area: Rect) {
     let notifications_block = Block::default()
         .title(" 通知 ")
@@ -345,17 +345,12 @@ fn render_notification_history_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
     
-    let items: Vec<ListItem> = app.notifications_history.iter().enumerate().map(|(idx, msg)| {
+    let items: Vec<ListItem> = app.notifications_history.iter().enumerate().map(|(_idx, msg)| {
         let (icon, style) = match msg.r#type {
-            RuntimeMessageType::Info => ("ℹ️ ", Style::default().fg(Color::Rgb(86, 156, 214))),
-            RuntimeMessageType::Success => ("✅ ", Style::default().fg(Color::Rgb(78, 201, 176))),
-            RuntimeMessageType::Error => ("❌ ", Style::default().fg(Color::Rgb(212, 212, 212))),
-            RuntimeMessageType::Warning => ("⚠️ ", Style::default().fg(Color::Rgb(197, 134, 192))),
-            RuntimeMessageType::TaskStarted => ("🚀 ", Style::default().fg(Color::Rgb(78, 201, 176))),
-            RuntimeMessageType::TaskCompleted => ("✓ ", Style::default().fg(Color::Rgb(78, 201, 176))),
-            RuntimeMessageType::TaskFailed => ("✗ ", Style::default().fg(Color::Rgb(212, 212, 212))),
-            RuntimeMessageType::TaskProgress => ("⏳ ", Style::default().fg(Color::Rgb(86, 156, 214))),
-            _ => ("• ", Style::default().fg(Color::Rgb(212, 212, 212))),
+            crate::runtime::message::notification_message::NotificationType::Info => ("ℹ️ ", Style::default().fg(Color::Rgb(86, 156, 214))),
+            crate::runtime::message::notification_message::NotificationType::Success => ("✅ ", Style::default().fg(Color::Rgb(78, 201, 176))),
+            crate::runtime::message::notification_message::NotificationType::Error => ("❌ ", Style::default().fg(Color::Rgb(212, 212, 212))),
+            crate::runtime::message::notification_message::NotificationType::Warning => ("⚠️ ", Style::default().fg(Color::Rgb(197, 134, 192))),
         };
         
         let time_str = msg.timestamp.format("%H:%M:%S").to_string();

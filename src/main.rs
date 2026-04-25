@@ -5,6 +5,7 @@ mod config;
 mod enhancement;
 mod api;
 mod backends;
+mod utils;
 
 use std::sync::Arc;
 use crate::config::CaelixContext;
@@ -12,6 +13,11 @@ use crate::api::{CaelixApi, CaelixApiImpl};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 初始化 tracing（控制台只显示 INFO 以上级别）
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+    
     // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
     
@@ -72,36 +78,39 @@ fn print_usage() {
 }
 
 /// 根据启用的 features 自动启动默认后端
-async fn start_default_backend(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
+async fn start_default_backend(_api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(all(feature = "http-server", feature = "tui"))]
     {
         // 同时启用了多个 features，需要用户指定
         eprintln!("⚠️  检测到多个后端可用，请指定要启动的后端:");
         print_usage();
-        std::process::exit(1);
+        return Err("Multiple backends enabled, please specify one".into());
     }
     
     #[cfg(all(feature = "http-server", not(feature = "tui")))]
     {
         println!("🌐 启动 HTTP Server 后端...");
-        backends::http::start_http_server(api, 3000).await?;
+        backends::http::start_http_server(_api, 3000).await?;
+        return Ok(());
     }
     
     #[cfg(all(feature = "tui", not(feature = "http-server")))]
     {
         println!("🖥️  启动 TUI 后端...");
-        backends::tui::run_tui(api).await?;
+        backends::tui::run_tui(_api).await?;
+        return Ok(());
     }
     
     #[cfg(not(any(feature = "http-server", feature = "tui")))]
     {
         // 没有启用任何 features，运行演示模式
         println!("⚠️  未启用任何后端，运行演示模式...");
-        run_demo(api).await;
+        run_demo(_api).await;
+        return Ok(());
     }
-    
-    Ok(())
 }
+
+#[allow(dead_code)] // 演示模式使用
 async fn run_demo(api: Arc<CaelixApiImpl>) {
     println!("\n🚀 Caelix 演示模式");
     println!("==================");

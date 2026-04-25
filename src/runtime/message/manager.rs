@@ -3,7 +3,10 @@
 
 use crate::runtime::message::bus::MessageBus;
 use crate::runtime::message::storage::StorageBackend;
-use crate::runtime::message::types::{ActiveSpanInfo, Message, SessionState, SessionConfig, Status, MessageType};
+use crate::runtime::message::agent_message::{AgentMessage, AgentMessageType};
+use crate::runtime::message::notification_message::NotificationMessage;
+use crate::runtime::message::task_message::TaskMessage;
+use crate::runtime::message::types::{SessionState, SessionConfig};
 use anyhow::Result;
 use futures::Stream;
 use futures::StreamExt;
@@ -21,6 +24,12 @@ pub struct SessionManager {
     storage: Arc<dyn StorageBackend>,
     // 内存状态：session_id -> state
     states: Arc<tokio::sync::RwLock<HashMap<String, SessionState>>>,
+    // Agent 消息缓冲：(session_id, span_id) -> Vec<AgentMessage>
+    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String), Vec<AgentMessage>>>>,
+    // Notification 消息缓冲：session_id -> Vec<NotificationMessage>
+    notification_buffers: Arc<tokio::sync::RwLock<HashMap<String, Vec<NotificationMessage>>>>,
+    // Task 消息缓冲：session_id -> Vec<TaskMessage>
+    task_buffers: Arc<tokio::sync::RwLock<HashMap<String, Vec<TaskMessage>>>>,
     // 存储消费者任务句柄
     _store_handle: JoinHandle<()>,
 }
@@ -36,67 +45,59 @@ impl std::fmt::Debug for SessionManager {
 impl SessionManager {
     pub fn new(bus: MessageBus, storage: Arc<dyn StorageBackend>) -> Self {
         let states = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let states_clone = states.clone();
+        let agent_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let notification_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let task_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        
+        let agent_buffers_clone = agent_buffers.clone();
+        let notification_buffers_clone = notification_buffers.clone();
+        let task_buffers_clone = task_buffers.clone();
         let storage_clone = storage.clone();
-        let mut rx = bus.subscribe();
+        
+        let mut agent_rx = bus.subscribe_agent();
+        let mut notification_rx = bus.subscribe_notification();
+        let mut task_rx = bus.subscribe_task();
 
         // 启动存储消费者任务 (单线程顺序写入)
         let _store_handle = tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(msg) => {
-                        // 判断是否为通知消息
-                        let is_notification = matches!(
-                            msg.r#type,
-                            MessageType::Info | MessageType::Error | 
-                            MessageType::Warning | MessageType::Success |
-                            MessageType::TaskStarted | MessageType::TaskCompleted |
-                            MessageType::TaskFailed | MessageType::TaskProgress
-                        );
-                        
-                        if is_notification {
-                            // 存储到通知文件
-                            if let Err(e) = storage_clone.append_notification(&msg).await {
-                                eprintln!("[Storage Error] Failed to append notification: {}", e);
-                            }
-                        } else {
-                            // 1. 更新内存状态
-                            {
-                                let mut states = states_clone.write().await;
-                                let state: &mut SessionState = states.entry(msg.session_id.clone()).or_default();
-                                
-                                if msg.status == Status::Running {
-                                    state.active_spans.insert(
-                                        msg.span_id.clone(),
-                                        ActiveSpanInfo {
-                                            span_id: msg.span_id.clone(),
-                                            parent_span_id: msg.parent_span_id.clone(),
-                                            name: msg.name.clone(),
-                                            status: msg.status.clone(),
-                                            started_at: msg.timestamp,
-                                        },
-                                    );
-                                } else if msg.status == Status::Done || msg.status == Status::Error {
-                                    state.active_spans.remove(&msg.span_id);
+                tokio::select! {
+                    // 处理 Agent 消息
+                    Ok(msg) = agent_rx.recv() => {
+                        match msg.r#type {
+                            AgentMessageType::Msg => {
+                                // 持久化 Msg 类型
+                                if let Err(e) = storage_clone.append_agent_message(&msg).await {
+                                    eprintln!("[Storage Error] Failed to append agent message: {}", e);
                                 }
-                                
-                                // 异步持久化 state (不阻塞主流程)
-                                let state_clone = state.clone();
-                                let storage_clone = storage_clone.clone();
-                                let sess_id = msg.session_id.clone();
-                                tokio::spawn(async move {
-                                    let _ = storage_clone.save_state(&sess_id, &state_clone).await;
-                                });
                             }
-
-                            // 2. 持久化消息
-                            if let Err(e) = storage_clone.append_message(&msg).await {
-                                eprintln!("[Storage Error] Failed to append message: {}", e);
+                            AgentMessageType::Chunk => {
+                                // 积累 Chunk 消息
+                                let key = (msg.session_id.clone(), msg.span_id.clone());
+                                let mut buffers = agent_buffers_clone.write().await;
+                                buffers.entry(key).or_insert_with(Vec::new).push(msg);
+                            }
+                            AgentMessageType::ChunkEnd => {
+                                // 清空该 span_id 的缓冲
+                                let key = (msg.session_id.clone(), msg.span_id.clone());
+                                let mut buffers = agent_buffers_clone.write().await;
+                                buffers.remove(&key);
                             }
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // 处理 Notification 消息
+                    Ok(msg) = notification_rx.recv() => {
+                        // 积累通知消息
+                        let mut buffers = notification_buffers_clone.write().await;
+                        buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new).push(msg);
+                    }
+                    // 处理 Task 消息
+                    Ok(msg) = task_rx.recv() => {
+                        // 积累任务消息
+                        let mut buffers = task_buffers_clone.write().await;
+                        buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new).push(msg);
+                    }
+                    else => break,
                 }
             }
         });
@@ -105,6 +106,9 @@ impl SessionManager {
             bus,
             storage,
             states,
+            agent_buffers,
+            notification_buffers,
+            task_buffers,
             _store_handle,
         }
     }
@@ -114,19 +118,42 @@ impl SessionManager {
         &self.bus
     }
 
-    /// 订阅 Session: 返回 (历史消息列表, 实时消息流)
-    pub async fn subscribe_session(
+    /// 订阅 Agent 消息: 返回 (历史消息列表, 实时消息流)
+    pub async fn subscribe_agent(
         &self,
         session_id: String,
     ) -> Result<(
-        Vec<Message>,
-        Pin<Box<dyn Stream<Item = Result<Message, broadcast::error::RecvError>> + Send>>,
+        Vec<AgentMessage>,
+        Pin<Box<dyn Stream<Item = Result<AgentMessage, broadcast::error::RecvError>> + Send>>,
     )> {
-        // 1. 读取历史
-        let history = self.storage.read_messages(&session_id).await?;
+        // 1. 读取历史 Msg 消息
+        let history = self.storage.read_agent_messages(&session_id).await?;
 
-        // 2. 订阅实时
-        let rx = self.bus.subscribe();
+        // 2. Flush 积累的 Chunk 消息
+        let mut accumulated = Vec::new();
+        {
+            let mut buffers = self.agent_buffers.write().await;
+            let keys_to_remove: Vec<(String, String)> = buffers.keys()
+                .filter(|(sess_id, _)| sess_id == &session_id)
+                .cloned()
+                .collect();
+            
+            for key in keys_to_remove {
+                if let Some(msgs) = buffers.remove(&key) {
+                    accumulated.extend(msgs);
+                }
+            }
+        }
+        
+        // 按 timestamp 排序
+        accumulated.sort_by_key(|m| m.timestamp);
+        
+        // 合并历史和积累的消息
+        let mut all_history = history;
+        all_history.extend(accumulated);
+
+        // 3. 订阅实时
+        let rx = self.bus.subscribe_agent();
         let session_id_clone = session_id.clone();
         
         let stream = BroadcastStream::new(rx)
@@ -135,15 +162,88 @@ impl SessionManager {
                 std::future::ready(if keep { Some(res) } else { None })
             })
             .map(|item| {
-                // 将 BroadcastStreamRecvError 转换为标准的 RecvError
                 item.map_err(|e| match e {
-                  BroadcastStreamRecvError::Lagged(n) => {
-                        RecvError::Lagged(n)
-                    }
+                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
                 })
             });
 
-        Ok((history, Box::pin(stream)))
+        Ok((all_history, Box::pin(stream)))
+    }
+
+    /// 订阅通知消息: 返回 (历史消息列表, 实时消息流)
+    pub async fn subscribe_notification(
+        &self,
+        session_id: String,
+    ) -> Result<(
+        Vec<NotificationMessage>,
+        Pin<Box<dyn Stream<Item = Result<NotificationMessage, broadcast::error::RecvError>> + Send>>,
+    )> {
+        // 1. Flush 积累的通知消息
+        let mut accumulated = Vec::new();
+        {
+            let mut buffers = self.notification_buffers.write().await;
+            if let Some(msgs) = buffers.remove(&session_id) {
+                accumulated = msgs;
+            }
+        }
+        
+        // 按 timestamp 排序
+        accumulated.sort_by_key(|m| m.timestamp);
+
+        // 2. 订阅实时
+        let rx = self.bus.subscribe_notification();
+        let session_id_clone = session_id.clone();
+        
+        let stream = BroadcastStream::new(rx)
+            .filter_map(move |res| {
+                let keep = res.as_ref().map_or(true, |m| m.session_id == session_id_clone);
+                std::future::ready(if keep { Some(res) } else { None })
+            })
+            .map(|item| {
+                item.map_err(|e| match e {
+                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
+                })
+            });
+
+        Ok((accumulated, Box::pin(stream)))
+    }
+
+    /// 订阅任务消息: 返回 (历史消息列表, 实时消息流)
+    pub async fn subscribe_task(
+        &self,
+        session_id: String,
+    ) -> Result<(
+        Vec<TaskMessage>,
+        Pin<Box<dyn Stream<Item = Result<TaskMessage, broadcast::error::RecvError>> + Send>>,
+    )> {
+        // 1. Flush 积累的任务消息
+        let mut accumulated = Vec::new();
+        {
+            let mut buffers = self.task_buffers.write().await;
+            if let Some(msgs) = buffers.remove(&session_id) {
+                accumulated = msgs;
+            }
+        }
+        
+        // 按 timestamp 排序
+        accumulated.sort_by_key(|m| m.timestamp);
+
+        // 2. 订阅实时
+        let rx = self.bus.subscribe_task();
+        let session_id_clone = session_id.clone();
+        
+        let stream = BroadcastStream::new(rx)
+            .filter_map(move |res| {
+                let keep = res.as_ref().map_or(true, |m| m.session_id == session_id_clone);
+                std::future::ready(if keep { Some(res) } else { None })
+            })
+            .map(|item| {
+                item.map_err(|e| match e {
+                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
+                })
+            });
+
+        Ok((accumulated, Box::pin(stream)))
     }
 
     /// 获取当前 Session 状态
@@ -230,57 +330,8 @@ impl SessionManager {
         states.keys().cloned().collect()
     }
 
-    /// 获取会话的完整消息历史
-    pub async fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>> {
-        self.storage.read_messages(session_id).await
-    }
-
-    /// 获取会话的通知消息
-    pub async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<Message>> {
-        self.storage.read_notifications(session_id).await
-    }
-
-    /// 获取指定 stream_id 的所有消息(包括未完成的流)
-    pub async fn get_messages_by_stream_id(&self, session_id: &str, stream_id: &str) -> Vec<Message> {
-        // 从存储中读取所有消息
-        let all_messages = self.storage.read_messages(session_id).await.unwrap_or_default();
-        
-        // 筛选出带有指定 stream_id 的消息
-        all_messages.into_iter()
-            .filter(|msg| {
-                if let Some(meta) = &msg.meta {
-                    meta.stream_id.as_deref() == Some(stream_id)
-                } else {
-                    false
-                }
-            })
-            .collect()
-    }
-
-    /// 获取所有未完成的流式消息组
-    pub async fn get_incomplete_streams(&self, session_id: &str) -> Vec<String> {
-        // 从存储中读取所有消息
-        let all_messages = self.storage.read_messages(session_id).await.unwrap_or_default();
-        
-        // 收集所有 stream_id
-        let mut stream_ids: HashMap<String, bool> = HashMap::new();
-        for msg in &all_messages {
-            if let Some(meta) = &msg.meta {
-                if let Some(stream_id) = &meta.stream_id {
-                    // 如果找到 is_final=true 的消息，标记为完成
-                    if meta.is_final {
-                        stream_ids.insert(stream_id.clone(), true);
-                    } else if !stream_ids.contains_key(stream_id) {
-                        // 否则标记为未完成
-                        stream_ids.insert(stream_id.clone(), false);
-                    }
-                }
-            }
-        }
-        
-        // 返回所有未完成的 stream_id
-        stream_ids.into_iter()
-            .filter_map(|(id, is_complete)| if !is_complete { Some(id) } else { None })
-            .collect()
+    /// 获取会话的完整 Agent 消息历史
+    pub async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>> {
+        self.storage.read_agent_messages(session_id).await
     }
 }

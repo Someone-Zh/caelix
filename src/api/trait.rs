@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::base::agent::AgentOutputChunk;
-use crate::runtime::message::types::Message;
+use crate::runtime::message::agent_message::AgentMessage;
+use crate::runtime::message::notification_message::NotificationMessage;
 use crate::runtime::TaskMeta;
 
 /// Caelix API trait
@@ -36,8 +37,8 @@ pub trait CaelixApi: Send + Sync {
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<AgentOutputChunk, ApiError>>, ApiError>;
     
-    /// 获取会话的完整消息历史
-    async fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>, ApiError>;
+    /// 获取会话的完整 Agent 消息历史
+    async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError>;
     
     /// 获取任务列表
     async fn list_tasks(&self, session_id: Option<&str>) -> Result<Vec<TaskMeta>, ApiError>;
@@ -52,5 +53,5 @@ pub trait CaelixApi: Send + Sync {
     async fn get_provider_models(&self, provider_name: &str) -> Result<Vec<String>, ApiError>;
     
     /// 获取会话通知历史
-    async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<Message>, ApiError>;
+    async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<NotificationMessage>, ApiError>;
 }

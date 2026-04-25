@@ -1,6 +1,6 @@
 // src/runtime/task/manager.rs
 use crate::runtime::message::bus::MessageBus;
-use crate::runtime::message::types::{Message, MessageType, Role, Status};
+use crate::runtime::message::task_message::{TaskMessage, TaskMessageType};
 use crate::runtime::task::persistence::TaskPersistence;
 use crate::runtime::task::scheduler::TaskScheduler;
 use crate::runtime::task::types::*;
@@ -320,67 +320,49 @@ impl TaskManager {
             TaskStatus::Failed(e) => format!("Task {} failed: {}", meta.task_id, e),
             _ => return,
         };
-
-        let msg = Message::new(
-            meta.session_id.clone(),
-            meta.span_id.clone(),
-            None,
-            Role::System,
-            "TaskScheduler".to_string(),
-            MessageType::Status,
+    
+        let msg = TaskMessage {
+            session_id: meta.session_id.clone(),
+            span_id: TaskMessage::generate_span_id(),
+            r#type: TaskMessageType::Completed,
+            timestamp: chrono::Utc::now(),
             content,
-            Status::Done,
-        );
-        
-        let _ = bus.send(msg);
+        };
+            
+        let _ = bus.send_task(msg);
     }
-
+    
     /// 发送任务通知消息
     async fn send_task_notification_static(meta: &TaskMeta, notif_type: TaskNotificationType, bus: &Arc<MessageBus>) {
-        use crate::runtime::message::types::MessageMeta;
-        
         let (msg_type, content) = match notif_type {
             TaskNotificationType::Started => (
-                MessageType::TaskStarted,
+                TaskMessageType::Started,
                 format!("Task {} started", meta.task_id),
             ),
             TaskNotificationType::Completed => (
-                MessageType::TaskCompleted,
+                TaskMessageType::Completed,
                 format!("Task {} completed", meta.task_id),
             ),
             TaskNotificationType::Failed => (
-                MessageType::TaskFailed,
+                TaskMessageType::Failed,
                 format!("Task {} failed: {}", meta.task_id, 
                     if let TaskStatus::Failed(e) = &meta.status { e } else { "unknown" }),
             ),
             TaskNotificationType::Progress => (
-                MessageType::TaskProgress,
+                TaskMessageType::Progress,
                 format!("Task {} progress: {:.0}%", meta.task_id, meta.progress.unwrap_or(0.0) * 100.0),
             ),
         };
-        
-        let mut msg = Message::new(
-            meta.session_id.clone(),
-            meta.span_id.clone(),
-            None,
-            Role::System,
-            "TaskManager".to_string(),
-            msg_type,
+            
+        let msg = TaskMessage {
+            session_id: meta.session_id.clone(),
+            span_id: TaskMessage::generate_span_id(),
+            r#type: msg_type,
+            timestamp: chrono::Utc::now(),
             content,
-            Status::Done,
-        );
-        
-        // 在meta中记录task_id
-        msg.meta = Some(MessageMeta {
-            latency_ms: None,
-            tokens_used: None,
-            version: None,
-            task_id: Some(meta.task_id.to_string()),
-            stream_id: None,
-            is_final: false,
-        });
-        
-        let _ = bus.send(msg);
+        };
+            
+        let _ = bus.send_task(msg);
     }
 
     /// 成员方法，供外部调用

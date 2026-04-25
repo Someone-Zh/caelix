@@ -5,6 +5,7 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub enum TuiEvent {
     /// 用户输入文本
+    #[allow(dead_code)] // 为将来使用预留
     Input(String),
     /// 按键事件
     Key(KeyEvent),
@@ -15,6 +16,7 @@ pub enum TuiEvent {
     /// 换行（普通Enter）
     NewLine,
     /// 调整大小
+    #[allow(dead_code)] // 为将来使用预留
     Resize(u16, u16),
 }
 

@@ -40,7 +40,8 @@ strip = false     # 不剥离符号
 
 [features]
 default = []
+logging = []  # 启用详细日志
 http-server = ["axum", "tower", "tower-http"]
 tui = ["ratatui", "crossterm"]
-all = ["http-server", "tui"]
+all = ["http-server", "tui", "logging"]
 

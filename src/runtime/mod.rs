@@ -1,4 +1,4 @@
-mod context;
+pub mod context;
 pub mod message;
 pub mod task;
 pub mod runner;
