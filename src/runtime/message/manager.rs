@@ -34,6 +34,10 @@ pub struct SessionManager {
     _store_handle: JoinHandle<()>,
 }
 
+// 缓冲区大小限制
+const MAX_NOTIFICATION_BUFFER_SIZE: usize = 500;
+const MAX_TASK_BUFFER_SIZE: usize = 500;
+
 impl std::fmt::Debug for SessionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionManager")
@@ -87,15 +91,27 @@ impl SessionManager {
                     }
                     // 处理 Notification 消息
                     Ok(msg) = notification_rx.recv() => {
-                        // 积累通知消息
+                        // 积累通知消息，但限制大小
                         let mut buffers = notification_buffers_clone.write().await;
-                        buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new).push(msg);
+                        let buffer = buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new);
+                        
+                        // 如果超过限制，移除最早的消息
+                        if buffer.len() >= MAX_NOTIFICATION_BUFFER_SIZE {
+                            buffer.remove(0);
+                        }
+                        buffer.push(msg);
                     }
                     // 处理 Task 消息
                     Ok(msg) = task_rx.recv() => {
-                        // 积累任务消息
+                        // 积累任务消息，但限制大小
                         let mut buffers = task_buffers_clone.write().await;
-                        buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new).push(msg);
+                        let buffer = buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new);
+                        
+                        // 如果超过限制，移除最早的消息
+                        if buffer.len() >= MAX_TASK_BUFFER_SIZE {
+                            buffer.remove(0);
+                        }
+                        buffer.push(msg);
                     }
                     else => break,
                 }
@@ -132,12 +148,17 @@ impl SessionManager {
         // 2. Flush 积累的 Chunk 消息
         let mut accumulated = Vec::new();
         {
-            let mut buffers = self.agent_buffers.write().await;
-            let keys_to_remove: Vec<(String, String)> = buffers.keys()
-                .filter(|(sess_id, _)| sess_id == &session_id)
-                .cloned()
-                .collect();
+            // 先收集 keys（快速读取）
+            let keys_to_remove: Vec<(String, String)> = {
+                let buffers = self.agent_buffers.read().await;
+                buffers.keys()
+                    .filter(|(sess_id, _)| sess_id == &session_id)
+                    .cloned()
+                    .collect()
+            };
             
+            // 锁已释放，再执行删除
+            let mut buffers = self.agent_buffers.write().await;
             for key in keys_to_remove {
                 if let Some(msgs) = buffers.remove(&key) {
                     accumulated.extend(msgs);

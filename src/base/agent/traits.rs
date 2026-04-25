@@ -40,7 +40,7 @@ impl AgentSpec {
     ) -> Self {
         Self { 
             name, 
-            system_prompt, 
+            system_prompt: Arc::new(system_prompt),  // 包装为 Arc
             tools,
             group: None,  // 默认值为None，保持向后兼容
         }
@@ -55,14 +55,14 @@ impl AgentSpec {
     ) -> Self {
         Self { 
             name, 
-            system_prompt, 
+            system_prompt: Arc::new(system_prompt),  // 包装为 Arc
             tools,
-            group,
+            group: group.map(Arc::new),  // 将 Option<String> 转换为 Option<Arc<String>>
         }
     }
 
     fn build_messages(&self, user_input: Vec<ChatMessage>) -> Vec<ChatMessage> {
-        let mut messages = vec![ChatMessage::system(self.system_prompt.clone())];
+        let mut messages = vec![ChatMessage::system(self.system_prompt.as_str())];  // 使用 as_str()
         messages.extend(user_input);
         messages
     }

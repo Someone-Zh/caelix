@@ -266,7 +266,7 @@ impl HookRegistry {
         let session_id = session_id.unwrap_or("init").to_string();
         
         for hook in hooks.iter() {
-            if hook.should_apply(&agent_spec.name, agent_spec.group.as_deref()) {
+            if hook.should_apply(&agent_spec.name, agent_spec.group.as_ref().map(|s| s.as_str())) {
                 println!("Applying init hook '{}' to agent '{}'", hook.name(), agent_spec.name);
                 
                 // 创建BaseContext
@@ -275,7 +275,7 @@ impl HookRegistry {
                     request_id: format!("{}-init", session_id),
                     span_id: format!("{}-init", session_id),
                     agent_name: agent_spec.name.clone(),
-                    agent_group: agent_spec.group.clone(),
+                    agent_group: agent_spec.group.as_ref().map(|g| g.to_string()),  // Arc<String> -> Option<String>
                 };
                 
                 // 创建InitContext

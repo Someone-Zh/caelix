@@ -182,7 +182,7 @@ impl CaelixApi for CaelixApiImpl {
                 request_id: request_id.clone(),
                 span_id: start_span_id.clone(),
                 agent_name: agent_name.clone(),
-                agent_group: enhanced_agent.group.clone(),
+                agent_group: enhanced_agent.group.as_ref().map(|g| g.to_string()),  // Arc<String> -> Option<String>
             };
 
             // 执行Init钩子
@@ -205,14 +205,14 @@ impl CaelixApi for CaelixApiImpl {
             }
 
             // 构建消息
-            let mut messages = vec![
+            let messages = vec![
                 ChatMessage::user(message_content),
             ];
 
-            // 执行Pre钩子
+            // 执行Pre钩子 - 直接移动 messages 而非克隆
             let mut pre_ctx = PreContext {
                 base: base_ctx.clone(),
-                messages: messages.clone(),
+                messages,  // 移动而非克隆
             };
 
             if let Err(e) = context.hook_registry.execute_pre(&mut pre_ctx).await {
@@ -228,9 +228,9 @@ impl CaelixApi for CaelixApiImpl {
                 return;
             }
 
-            // 使用修改后的messages
-            messages = pre_ctx.messages;
-            let input_messages_for_post = messages.clone();  // 克隆用于Post钩子
+            // 使用修改后的messages（从 pre_ctx 中取出）
+            let messages = pre_ctx.messages;  // 移动回来，避免克隆
+            let input_messages_for_post = messages.clone();  // 仅克隆一次用于Post钩子
 
             // 构建 LLM 配置
             let config = LlmConfig {

@@ -5,6 +5,9 @@ use tokio::fs;
 
 use crate::base::tool::{Tool, ToolResult};
 
+// 最大可编辑文件大小：10MB
+const MAX_EDIT_SIZE: usize = 10 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct DiffEditTool;
 
@@ -83,6 +86,14 @@ impl Tool for DiffEditTool {
                     error: Some(format!("Failed to read file: {}", e)),
                 },
             };
+
+            // 检查文件大小限制
+            if original.len() > MAX_EDIT_SIZE {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some(format!("File too large: {} bytes (max: {} bytes)", original.len(), MAX_EDIT_SIZE)),
+                };
+            }
 
             let lines: Vec<&str> = original.lines().collect();
             match parse_and_apply_unified_diff(&lines, diff_content) {

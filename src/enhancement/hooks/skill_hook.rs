@@ -68,7 +68,10 @@ impl AgentHook for SkillHook {
                 "\n\n## Available Skills\n\nYou have access to the following skills:\n{}\n\nUse the 'get_skill_detail' tool to view the full content of any skill when needed.",
                 skills_list.iter().map(|s| format!("- {}", s)).collect::<Vec<_>>().join("\n")
             );
-            ctx.agent_spec.system_prompt.push_str(&skills_info);
+            // 由于 system_prompt 是 Arc<String>，需要创建新的 Arc
+            let mut new_prompt = ctx.agent_spec.system_prompt.as_ref().clone();
+            new_prompt.push_str(&skills_info);
+            ctx.agent_spec.system_prompt = std::sync::Arc::new(new_prompt);
         }
         
         // 2. 添加 get_skill_detail 工具

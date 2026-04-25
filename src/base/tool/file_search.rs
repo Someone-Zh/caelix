@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value as JsonValue};
 use std::fs::read_to_string;
+use std::sync::LazyLock;
 use tokio::process::Command;
 use walkdir::WalkDir;
 use crate::base::tool::ToolResult;
@@ -11,16 +12,21 @@ use crate::base::tool::Tool;
 #[derive(Debug, Default, Clone)]
 pub struct SmartSearchTool;
 
+// 缓存 ripgrep 检测结果，只执行一次
+static HAS_RIPGREP: LazyLock<bool> = LazyLock::new(|| {
+    // 同步检测，在 LazyLock 初始化时执行
+    std::process::Command::new("rg")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+});
+
 impl SmartSearchTool {
-    /// 标准库检查 rg 是否存在（无依赖）
+    /// 使用缓存的 ripgrep 检测结果
     async fn has_ripgrep(&self) -> bool {
-        Command::new("rg")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .is_ok()
+        *HAS_RIPGREP
     }
 
     /// 方案1：调用系统 rg 命令行（高性能）

@@ -36,7 +36,9 @@ impl AgentManager {
     /// 获取所有智能体蓝图
     pub async fn get_all(&self) -> Vec<Arc<AgentSpec>> {
         let agents = self.agents.read().await;
-        agents.values().cloned().collect()
+        let result = agents.values().cloned().collect();
+        // 锁在此处自动释放
+        result
     }
 
     /// 移除智能体蓝图

@@ -18,7 +18,7 @@ impl Tool for DirectoryTreeTool {
         "遍历目录生成文件树，可指定路径和最大深度，标注文件/文件夹类型"
     }
 
-    /// JSON 参数 schema：path(必选), max_depth(可选，默认0=当前目录)
+    /// JSON 参数 schema：path(必选), max_depth(可选，默认3，最大10)
     fn parameters_schema(&self) -> JsonValue {
         json!({
             "type": "object",
@@ -29,7 +29,9 @@ impl Tool for DirectoryTreeTool {
                 },
                 "max_depth": {
                     "type": "integer",
-                    "description": "最大遍历深度，0=仅当前目录，默认0"
+                    "description": "最大遍历深度，默认3，最大10",
+                    "default": 3,
+                    "maximum": 10
                 }
             },
             "required": ["path"]
@@ -52,7 +54,10 @@ impl Tool for DirectoryTreeTool {
         let max_depth = input
             .get("max_depth")
             .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+            .unwrap_or(3) as usize; // 默认值为 3
+
+        // 限制最大深度为 10
+        let max_depth = max_depth.min(10);
 
         // 生成文件树
         let tree = match generate_tree(path, max_depth) {

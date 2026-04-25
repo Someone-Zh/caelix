@@ -36,7 +36,7 @@ impl std::fmt::Display for AgentOutputChunk {
 #[derive(Debug, Clone)]
 pub struct AgentSpec {
     pub name: String,
-    pub system_prompt: String,
-    pub tools: Vec<Arc<dyn Tool>>,
-    pub group: Option<String>,
+    pub system_prompt: Arc<String>,  // 使用 Arc 避免字符串克隆
+    pub tools: Vec<Arc<dyn Tool>>,   // 已经是 Arc，无需改变
+    pub group: Option<Arc<String>>,  // 使用 Arc 避免 Option<String> 克隆
 }

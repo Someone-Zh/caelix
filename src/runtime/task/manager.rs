@@ -70,7 +70,8 @@ impl TaskManager {
                     
                     // 检查任务是否还在注册表中
                     if let Some(mut handle) = registry_clone.get_mut(&task_id) {
-                        let (meta, _, _) = &mut handle.value_mut();
+                        let (meta, _opt_tx, _) = handle.value_mut();
+                        // 一次性更新所有字段
                         meta.status = TaskStatus::Running;
                         meta.updated_at = Utc::now();
                         
@@ -235,6 +236,7 @@ impl TaskManager {
     pub async fn update_progress(&self, task_id: TaskId, progress: f32) -> bool {
         if let Some(mut entry) = self.registry.get_mut(&task_id) {
             let (meta, _, _) = entry.value_mut();
+            // 一次性更新所有字段
             meta.progress = Some(progress.clamp(0.0, 1.0));
             meta.updated_at = Utc::now();
             
@@ -276,6 +278,7 @@ impl TaskManager {
         // 更新注册表
         if let Some(mut entry) = registry.get_mut(&task_id) {
             let (m, opt_tx, _) = entry.value_mut();
+            // 一次性更新所有字段
             m.status = final_status.clone();
             m.updated_at = Utc::now();
             meta = m.clone();
