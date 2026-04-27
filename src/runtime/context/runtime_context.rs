@@ -3,8 +3,8 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 use crate::config::CaelixContext;
+use crate::runtime::id_generator;
 
 /// 运行时上下文 - Session 级别
 /// 
@@ -57,8 +57,8 @@ impl RuntimeContext {
         debug_enabled: bool,
         caelix_context: Arc<CaelixContext>,
     ) -> Self {
-        let session_id = session_id.unwrap_or_else(|| format!("sess_{}", Uuid::new_v4()));
-        let request_id = request_id.unwrap_or_else(|| format!("req_{}", Uuid::new_v4()));
+        let session_id = session_id.unwrap_or_else(|| id_generator::generate_session_id());
+        let request_id = request_id.unwrap_or_else(|| id_generator::generate_request_id());
         let span_id = Self::extract_span_id_from_tracing();
         
         Self {
@@ -74,14 +74,14 @@ impl RuntimeContext {
     }
     
     /// 从当前 tracing span 提取 span_id
-    /// 如果没有活跃的 span，则生成一个新的 UUID
+    /// 如果没有活跃的 span，则生成一个新的 ID
     fn extract_span_id_from_tracing() -> String {
         // 尝试从 tracing 的当前 span 中提取 id
         if let Some(span) = tracing::Span::current().id() {
             format!("{:?}", span)
         } else {
             // 如果没有活跃 span，生成一个新的
-            Uuid::new_v4().to_string()
+            id_generator::generate_span_id()
         }
     }
     
@@ -366,8 +366,8 @@ mod tests {
         assert!(!ctx.get_span_id().is_empty());
         
         // 验证 ID 格式
-        assert!(ctx.get_session_id().starts_with("sess_"));
-        assert!(ctx.get_request_id().starts_with("req_"));
+        assert!(ctx.get_session_id().starts_with("S-"));
+        assert!(ctx.get_request_id().starts_with("R-"));
         
         // 验证 provider 和 model
         assert_eq!(ctx.get_provider(), "openai");

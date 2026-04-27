@@ -50,8 +50,9 @@ impl TaskScheduler {
 
     pub async fn schedule(&self, meta: TaskMeta) {
         if let Some(next_run) = Self::calculate_next_run(&meta.kind) {
+            let task_id = meta.task_id.clone();
             let task = ScheduledTask {
-                task_id: meta.task_id,
+                task_id,
                 meta,
                 next_run,
             };

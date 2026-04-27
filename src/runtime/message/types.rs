@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// 消息角色
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,10 +166,6 @@ impl Message {
             error: None,
             meta: None,
         }
-    }
-    
-    pub fn generate_span_id() -> String {
-        Uuid::new_v4().to_string()
     }
 }
 

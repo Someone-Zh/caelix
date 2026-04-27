@@ -131,7 +131,7 @@ impl DelegateTaskTool {
 
         // 生成 session_id 和 span_id
         let session_id = format!("delegate_{}", agent_name);
-        let span_id = crate::runtime::Message::generate_span_id();
+        let span_id = crate::runtime::id_generator::generate_span_id();
 
         // 创建可运行任务
         let runnable = Box::new(DelegateTaskRunnable {

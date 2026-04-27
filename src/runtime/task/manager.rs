@@ -112,7 +112,8 @@ impl TaskManager {
             
             // 重新注册 (修复：去掉未使用的 _rx)
             let (tx, _) = oneshot::channel();
-            self.registry.insert(meta.task_id, (meta.clone(), Some(tx), None));
+            let task_id = meta.task_id.clone();
+            self.registry.insert(task_id, (meta.clone(), Some(tx), None));
             
             // 重新调度
             self.scheduler.schedule(meta).await;
@@ -145,7 +146,7 @@ impl TaskManager {
 
         // 修复：去掉未使用的 rx
         let (tx, _) = oneshot::channel();
-        let task_id = meta.task_id;
+        let task_id = meta.task_id.clone();
 
         // 1. 存入注册表
         match kind {
@@ -162,11 +163,11 @@ impl TaskManager {
                     Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence).await;
                 });
                 
-                self.registry.insert(task_id, (meta, Some(tx), Some(handle)));
+                self.registry.insert(task_id.clone(), (meta, Some(tx), Some(handle)));
             }
             TaskKind::Once(_) | TaskKind::Cron(_) => {
                 meta.status = TaskStatus::Scheduled;
-                self.registry.insert(task_id, (meta.clone(), Some(tx), None));
+                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), None));
                 self.scheduler.schedule(meta.clone()).await;
                 let _ = self.persistence.save(&meta).await;
             }
@@ -188,7 +189,7 @@ impl TaskManager {
             self.send_status_update(&meta).await;
             
             // 清理
-            self.scheduler.cancel(task_id).await;
+            self.scheduler.cancel(task_id.clone()).await;
             let _ = self.persistence.delete(&task_id.to_string()).await;
             true
         } else {
@@ -197,15 +198,15 @@ impl TaskManager {
     }
 
     /// 获取状态
-    pub async fn get_status(&self, task_id: TaskId) -> Option<TaskMeta> {
-        self.registry.get(&task_id).map(|r| r.value().0.clone())
+    pub async fn get_status(&self, task_id: &TaskId) -> Option<TaskMeta> {
+        self.registry.get(task_id).map(|r| r.value().0.clone())
     }
 
     /// 等待任务完成
     pub async fn wait(&self, task_id: TaskId) -> Option<anyhow::Result<()>> {
         // 简化版自旋等待
         loop {
-            if let Some(meta) = self.get_status(task_id).await {
+            if let Some(meta) = self.get_status(&task_id).await {
                 match meta.status {
                     TaskStatus::Completed => return Some(Ok(())),
                     TaskStatus::Failed(e) => return Some(Err(anyhow::anyhow!(e))),
@@ -259,7 +260,7 @@ impl TaskManager {
         scheduler: Arc<TaskScheduler>,
         persistence: Arc<dyn TaskPersistence>, // 修复：传入 persistence
     ) {
-        let task_id = meta.task_id;
+        let task_id = meta.task_id.clone();
         
         // 发送开始通知
         Self::send_task_notification_static(&meta, TaskNotificationType::Started, &bus).await;
@@ -326,7 +327,7 @@ impl TaskManager {
     
         let msg = TaskMessage {
             session_id: meta.session_id.clone(),
-            span_id: TaskMessage::generate_span_id(),
+            span_id: crate::runtime::id_generator::generate_span_id(),
             r#type: TaskMessageType::Completed,
             timestamp: chrono::Utc::now(),
             content,
@@ -359,7 +360,7 @@ impl TaskManager {
             
         let msg = TaskMessage {
             session_id: meta.session_id.clone(),
-            span_id: TaskMessage::generate_span_id(),
+            span_id: crate::runtime::id_generator::generate_span_id(),
             r#type: msg_type,
             timestamp: chrono::Utc::now(),
             content,

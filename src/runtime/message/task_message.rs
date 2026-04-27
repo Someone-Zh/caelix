@@ -19,10 +19,3 @@ pub struct TaskMessage {
     pub timestamp: DateTime<Utc>,
     pub content: String,
 }
-
-impl TaskMessage {
-    /// 生成唯一的 span_id
-    pub fn generate_span_id() -> String {
-        uuid::Uuid::new_v4().to_string()
-    }
-}

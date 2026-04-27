@@ -3,16 +3,16 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use uuid::Uuid;
+use crate::runtime::id_generator;
 
 // ==================== ID 定义 ====================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskId(pub Uuid);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TaskId(pub String);
 
 impl TaskId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self(id_generator::generate_task_id())
     }
 }
 

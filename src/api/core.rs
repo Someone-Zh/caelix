@@ -68,8 +68,8 @@ impl CaelixApi for CaelixApiImpl {
     }
 
     fn create_session(&self) -> String {
-        // 生成 UUID 作为 session_id
-        let session_id = uuid::Uuid::new_v4().to_string();
+        // 使用中央ID生成器生成 session_id
+        let session_id = crate::runtime::id_generator::generate_session_id();
         // 在 runtime SessionManager 中创建配置
         let ctx = self.context.clone();
         let session_id_clone = session_id.clone();
@@ -128,7 +128,7 @@ impl CaelixApi for CaelixApiImpl {
         // 在后台执行 agent 并通过消息总线推送流式内容
         tokio::spawn(async move {
             // 发送开始消息
-            let start_span_id = AgentMessage::generate_span_id();
+            let start_span_id = crate::runtime::id_generator::generate_span_id();
             let start_msg = AgentMessage {
                 session_id: session_id.clone(),
                 span_id: start_span_id.clone(),
@@ -146,7 +146,7 @@ impl CaelixApi for CaelixApiImpl {
                     // 发送错误消息
                     let error_msg = NotificationMessage {
                         session_id: session_id.clone(),
-                        span_id: NotificationMessage::generate_span_id(),
+                        span_id: crate::runtime::id_generator::generate_span_id(),
                         r#type: NotificationType::Error,
                         timestamp: chrono::Utc::now(),
                         content: format!("Provider '{}' not found", provider_name),
@@ -163,7 +163,7 @@ impl CaelixApi for CaelixApiImpl {
                     // 发送错误消息
                     let error_msg = NotificationMessage {
                         session_id: session_id.clone(),
-                        span_id: NotificationMessage::generate_span_id(),
+                        span_id: crate::runtime::id_generator::generate_span_id(),
                         r#type: NotificationType::Error,
                         timestamp: chrono::Utc::now(),
                         content: format!("Agent '{}' not found", agent_name),
@@ -195,7 +195,7 @@ impl CaelixApi for CaelixApiImpl {
                 // 发送错误消息并返回
                 let error_msg = NotificationMessage {
                     session_id: session_id.clone(),
-                    span_id: NotificationMessage::generate_span_id(),
+                    span_id: crate::runtime::id_generator::generate_span_id(),
                     r#type: NotificationType::Error,
                     timestamp: chrono::Utc::now(),
                     content: format!("Init hook failed: {:?}", e),
@@ -219,7 +219,7 @@ impl CaelixApi for CaelixApiImpl {
                 // 发送错误消息并返回
                 let error_msg = NotificationMessage {
                     session_id: session_id.clone(),
-                    span_id: NotificationMessage::generate_span_id(),
+                    span_id: crate::runtime::id_generator::generate_span_id(),
                     r#type: NotificationType::Error,
                     timestamp: chrono::Utc::now(),
                     content: format!("Pre-process hook failed: {:?}", e),
@@ -252,7 +252,7 @@ impl CaelixApi for CaelixApiImpl {
                     // 发送错误消息
                     let error_msg = NotificationMessage {
                         session_id: session_id.clone(),
-                        span_id: NotificationMessage::generate_span_id(),
+                        span_id: crate::runtime::id_generator::generate_span_id(),
                         r#type: NotificationType::Error,
                         timestamp: chrono::Utc::now(),
                         content: format!("Agent execution failed: {:?}", e),
@@ -280,7 +280,7 @@ impl CaelixApi for CaelixApiImpl {
                                 // 发送流式内容块
                                 let chunk_msg = AgentMessage {
                                     session_id: session_id.clone(),
-                                    span_id: AgentMessage::generate_span_id(),
+                                    span_id: crate::runtime::id_generator::generate_span_id(),
                                     r#type: AgentMessageType::Chunk,
                                     timestamp: chrono::Utc::now(),
                                     content: content.clone(),
@@ -291,7 +291,7 @@ impl CaelixApi for CaelixApiImpl {
                                 // 发送工具调用通知
                                 let tool_msg = NotificationMessage {
                                     session_id: session_id.clone(),
-                                    span_id: NotificationMessage::generate_span_id(),
+                                    span_id: crate::runtime::id_generator::generate_span_id(),
                                     r#type: NotificationType::Info,
                                     timestamp: chrono::Utc::now(),
                                     content: format!("调用工具: {}({})", name, arguments),
@@ -302,7 +302,7 @@ impl CaelixApi for CaelixApiImpl {
                                 // 发送结束标记
                                 let finish_msg = AgentMessage {
                                     session_id: session_id.clone(),
-                                    span_id: AgentMessage::generate_span_id(),
+                                    span_id: crate::runtime::id_generator::generate_span_id(),
                                     r#type: AgentMessageType::ChunkEnd,
                                     timestamp: chrono::Utc::now(),
                                     content: String::new(),
@@ -325,7 +325,7 @@ impl CaelixApi for CaelixApiImpl {
                         // 发送错误消息
                         let error_msg = NotificationMessage {
                             session_id: session_id.clone(),
-                            span_id: NotificationMessage::generate_span_id(),
+                            span_id: crate::runtime::id_generator::generate_span_id(),
                             r#type: NotificationType::Error,
                             timestamp: chrono::Utc::now(),
                             content: format!("Stream error: {:?}", e),
