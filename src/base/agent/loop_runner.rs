@@ -114,23 +114,36 @@ pub async fn run_agent_loop(
                     arguments: clean_args,
                 })).await;
             }
-
             // 无工具则退出
             if final_tool_calls.is_empty() {
+                 let new_message = ChatMessage::assistant(
+                    full_content,
+                );
+                current_messages.push(new_message);
                 break;
+            } else {
+                let new_message = ChatMessage::assistant_tool_calls(
+                    full_content,
+                    final_tool_calls.clone(),
+                );
+                current_messages.push(new_message);
             }
-
+            
+            
             // 执行工具
             let mut tool_results = Vec::new();
             for tc in &final_tool_calls {
                 match execute_tool(
                     &agent.tools,
-                    tc.name.clone(),
-                    tc.arguments.to_string(),
-                    &tx
+                    tc,
                 ).await {
                     Ok((name, result)) => {
-                        tool_results.push((tc.id.clone(), name, result));
+                        tool_results.push((tc.id.clone(), name.clone(), result.clone()));
+                        // 返回工具结果
+                        let _ = tx.send(Ok(AgentOutputChunk::ToolResult {
+                            tool_name: name,
+                            result: result,
+                        })).await;
                     }
                     Err(e) => {
                         let _ = tx.send(Err(e)).await;
@@ -138,15 +151,12 @@ pub async fn run_agent_loop(
                     }
                 }
             }
-            current_messages.push(ChatMessage::assistant_tool_calls(
-                full_content,
-                final_tool_calls,
-            ));
 
             // 追加工具返回结果
             for (tc_id, _, result) in tool_results {
                 current_messages.push(ChatMessage::tool(tc_id, result));
             }
+
         }
 
         let _ = tx.send(Ok(AgentOutputChunk::Finish { reason: "stop".into() })).await;
