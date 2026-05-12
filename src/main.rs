@@ -21,6 +21,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
     
+    // 检查是否请求帮助
+    if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
+        print_usage();
+        return Ok(());
+    }
+    
     // 使用 CaelixContext 初始化
     println!("🔧 初始化 Caelix 上下文...");
     let context = CaelixContext::new();
@@ -34,6 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() > 1 {
         // 用户显式指定了后端
         match args[1].as_str() {
+            "cli" => {
+                println!("💻 启动 CLI 后端...");
+                backends::cli::run_cli(api).await?;
+            }
             #[cfg(feature = "http-server")]
             "http" => {
                 println!("🌐 启动 HTTP Server 后端...");
@@ -56,8 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        // 没有指定参数，根据启用的 features 自动选择
-        start_default_backend(api).await?;
+        // 没有指定参数，默认启动 CLI 后端
+        println!("💻 启动 CLI 后端...");
+        backends::cli::run_cli(api).await?;
     }
     
     Ok(())
@@ -66,10 +77,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// 打印使用说明
 fn print_usage() {
     println!("\n用法:");
+    println!("  caelix [options]       - 启动 CLI 界面 (默认)");
+    println!("  caelix cli [options]   - 启动 CLI 界面");
     #[cfg(feature = "http-server")]
-    println!("  caelix http [port]  - 启动 HTTP 服务器 (默认端口 3000)");
+    println!("  caelix http [port]     - 启动 HTTP 服务器 (默认端口 3000)");
     #[cfg(feature = "tui")]
-    println!("  caelix tui          - 启动 TUI 界面");
+    println!("  caelix tui             - 启动 TUI 界面");
+    println!("\nCLI 选项:");
+    println!("  -s, --session <ID>     - 指定会话 ID");
+    println!("  -a, --agent <NAME>     - 指定使用的 Agent");
+    println!("  -p, --provider <NAME>  - 指定提供商");
+    println!("  -m, --model <NAME>     - 指定模型");
     println!("\n可用的 features:");
     #[cfg(feature = "http-server")]
     println!("  - http-server");
@@ -77,37 +95,11 @@ fn print_usage() {
     println!("  - tui");
 }
 
-/// 根据启用的 features 自动启动默认后端
+/// 根据启用的 features 自动启动默认后端（已弃用，CLI 为默认）
+#[allow(dead_code)]
 async fn start_default_backend(_api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(all(feature = "http-server", feature = "tui"))]
-    {
-        // 同时启用了多个 features，需要用户指定
-        eprintln!("⚠️  检测到多个后端可用，请指定要启动的后端:");
-        print_usage();
-        return Err("Multiple backends enabled, please specify one".into());
-    }
-    
-    #[cfg(all(feature = "http-server", not(feature = "tui")))]
-    {
-        println!("🌐 启动 HTTP Server 后端...");
-        backends::http::start_http_server(_api, 3000).await?;
-        return Ok(());
-    }
-    
-    #[cfg(all(feature = "tui", not(feature = "http-server")))]
-    {
-        println!("🖥️  启动 TUI 后端...");
-        backends::tui::run_tui(_api).await?;
-        return Ok(());
-    }
-    
-    #[cfg(not(any(feature = "http-server", feature = "tui")))]
-    {
-        // 没有启用任何 features，运行演示模式
-        println!("⚠️  未启用任何后端，运行演示模式...");
-        run_demo(_api).await;
-        return Ok(());
-    }
+    // CLI 现在是默认后端，此函数保留用于兼容性
+    backends::cli::run_cli(_api).await
 }
 
 #[allow(dead_code)] // 演示模式使用
