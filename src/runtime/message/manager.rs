@@ -10,13 +10,15 @@ use crate::runtime::message::types::{SessionState, SessionConfig};
 use anyhow::Result;
 use futures::Stream;
 use futures::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 pub struct SessionManager {
@@ -26,17 +28,22 @@ pub struct SessionManager {
     states: Arc<tokio::sync::RwLock<HashMap<String, SessionState>>>,
     // Agent 消息缓冲：(session_id, span_id) -> Vec<AgentMessage>
     agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String), Vec<AgentMessage>>>>,
-    // Notification 消息缓冲：session_id -> Vec<NotificationMessage>
-    notification_buffers: Arc<tokio::sync::RwLock<HashMap<String, Vec<NotificationMessage>>>>,
-    // Task 消息缓冲：session_id -> Vec<TaskMessage>
-    task_buffers: Arc<tokio::sync::RwLock<HashMap<String, Vec<TaskMessage>>>>,
-    // 存储消费者任务句柄
-    _store_handle: JoinHandle<()>,
+    // Notification 消息通道和历史记录
+    notification_channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
+    notification_history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
+    // Task 消息通道和历史记录
+    task_channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<TaskMessage>>>>,
+    task_history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<TaskMessage>>>>,
+    // 三个独立的消费者任务句柄
+    _agent_handle: JoinHandle<()>,
+    _notification_handle: JoinHandle<()>,
+    _task_handle: JoinHandle<()>,
 }
 
 // 缓冲区大小限制
-const MAX_NOTIFICATION_BUFFER_SIZE: usize = 500;
-const MAX_TASK_BUFFER_SIZE: usize = 500;
+const NOTIFICATION_CHANNEL_CAPACITY: usize = 1000;
+const TASK_CHANNEL_CAPACITY: usize = 1000;
+const MAX_HISTORY_SIZE: usize = 1000; // 每个 session 保留的历史消息数
 
 impl std::fmt::Debug for SessionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,76 +53,162 @@ impl std::fmt::Debug for SessionManager {
     }
 }
 
+// ==================== 独立的消费者函数 ====================
+
+/// Agent 消息消费者（保持现有逻辑）
+async fn run_agent_consumer(
+    mut rx: broadcast::Receiver<AgentMessage>,
+    storage: Arc<dyn StorageBackend>,
+    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String), Vec<AgentMessage>>>>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                match msg.r#type {
+                    AgentMessageType::Msg => {
+                        // 持久化 Msg 类型
+                        if let Err(e) = storage.append_agent_message(&msg).await {
+                            eprintln!("[Storage Error] Failed to append agent message: {}", e);
+                        }
+                    }
+                    AgentMessageType::Chunk => {
+                        // 积累 Chunk 消息
+                        let key = (msg.session_id.clone(), msg.span_id.clone());
+                        let mut buffers = agent_buffers.write().await;
+                        buffers.entry(key).or_insert_with(Vec::new).push(msg);
+                    }
+                    AgentMessageType::ChunkEnd => {
+                        // 清空该 span_id 的缓冲
+                        let key = (msg.session_id.clone(), msg.span_id.clone());
+                        let mut buffers = agent_buffers.write().await;
+                        buffers.remove(&key);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// Notification 消息消费者（带背压）
+async fn run_notification_consumer(
+    mut rx: broadcast::Receiver<NotificationMessage>,
+    channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
+    history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                let session_id = msg.session_id.clone();
+                
+                // 获取或创建通道
+                let sender = {
+                    let mut channs = channels.write().await;
+                    channs.entry(session_id.clone())
+                        .or_insert_with(|| {
+                            let (tx, _rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+                            tx
+                        })
+                        .clone()
+                };
+                
+                // 尝试发送（如果通道满会阻塞，实现背压）
+                if sender.send(msg.clone()).await.is_err() {
+                    // 接收者已断开，清理通道
+                    let mut channs = channels.write().await;
+                    channs.remove(&session_id);
+                    continue;
+                }
+                
+                // 同时保存到历史记录（限制大小）
+                let mut hist = history.write().await;
+                let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
+                if hist_vec.len() >= MAX_HISTORY_SIZE {
+                    hist_vec.pop_front();
+                }
+                hist_vec.push_back(msg);
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// Task 消息消费者（带背压）
+async fn run_task_consumer(
+    mut rx: broadcast::Receiver<TaskMessage>,
+    channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<TaskMessage>>>>,
+    history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<TaskMessage>>>>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                let session_id = msg.session_id.clone();
+                
+                // 获取或创建通道
+                let sender = {
+                    let mut channs = channels.write().await;
+                    channs.entry(session_id.clone())
+                        .or_insert_with(|| {
+                            let (tx, _rx) = mpsc::channel(TASK_CHANNEL_CAPACITY);
+                            tx
+                        })
+                        .clone()
+                };
+                
+                // 尝试发送（如果通道满会阻塞，实现背压）
+                if sender.send(msg.clone()).await.is_err() {
+                    // 接收者已断开，清理通道
+                    let mut channs = channels.write().await;
+                    channs.remove(&session_id);
+                    continue;
+                }
+                
+                // 同时保存到历史记录（限制大小）
+                let mut hist = history.write().await;
+                let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
+                if hist_vec.len() >= MAX_HISTORY_SIZE {
+                    hist_vec.pop_front();
+                }
+                hist_vec.push_back(msg);
+            }
+            Err(_) => break,
+        }
+    }
+}
+
 impl SessionManager {
     pub fn new(bus: MessageBus, storage: Arc<dyn StorageBackend>) -> Self {
         let states = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let agent_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let notification_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let task_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let notification_channels = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let notification_history = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let task_channels = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let task_history = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         
+        // 克隆引用用于异步任务
         let agent_buffers_clone = agent_buffers.clone();
-        let notification_buffers_clone = notification_buffers.clone();
-        let task_buffers_clone = task_buffers.clone();
+        let notif_channels_clone = notification_channels.clone();
+        let notif_history_clone = notification_history.clone();
+        let task_channels_clone = task_channels.clone();
+        let task_history_clone = task_history.clone();
         let storage_clone = storage.clone();
         
-        let mut agent_rx = bus.subscribe_agent();
-        let mut notification_rx = bus.subscribe_notification();
-        let mut task_rx = bus.subscribe_task();
+        // 订阅三个通道
+        let agent_rx = bus.subscribe_agent();
+        let notification_rx = bus.subscribe_notification();
+        let task_rx = bus.subscribe_task();
 
-        // 启动存储消费者任务 (单线程顺序写入)
-        let _store_handle = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    // 处理 Agent 消息
-                    Ok(msg) = agent_rx.recv() => {
-                        match msg.r#type {
-                            AgentMessageType::Msg => {
-                                // 持久化 Msg 类型
-                                if let Err(e) = storage_clone.append_agent_message(&msg).await {
-                                    eprintln!("[Storage Error] Failed to append agent message: {}", e);
-                                }
-                            }
-                            AgentMessageType::Chunk => {
-                                // 积累 Chunk 消息
-                                let key = (msg.session_id.clone(), msg.span_id.clone());
-                                let mut buffers = agent_buffers_clone.write().await;
-                                buffers.entry(key).or_insert_with(Vec::new).push(msg);
-                            }
-                            AgentMessageType::ChunkEnd => {
-                                // 清空该 span_id 的缓冲
-                                let key = (msg.session_id.clone(), msg.span_id.clone());
-                                let mut buffers = agent_buffers_clone.write().await;
-                                buffers.remove(&key);
-                            }
-                        }
-                    }
-                    // 处理 Notification 消息
-                    Ok(msg) = notification_rx.recv() => {
-                        // 积累通知消息，但限制大小
-                        let mut buffers = notification_buffers_clone.write().await;
-                        let buffer = buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new);
-                        
-                        // 如果超过限制，移除最早的消息
-                        if buffer.len() >= MAX_NOTIFICATION_BUFFER_SIZE {
-                            buffer.remove(0);
-                        }
-                        buffer.push(msg);
-                    }
-                    // 处理 Task 消息
-                    Ok(msg) = task_rx.recv() => {
-                        // 积累任务消息，但限制大小
-                        let mut buffers = task_buffers_clone.write().await;
-                        let buffer = buffers.entry(msg.session_id.clone()).or_insert_with(Vec::new);
-                        
-                        // 如果超过限制，移除最早的消息
-                        if buffer.len() >= MAX_TASK_BUFFER_SIZE {
-                            buffer.remove(0);
-                        }
-                        buffer.push(msg);
-                    }
-                    else => break,
-                }
-            }
+        // 启动三个独立的消费者任务
+        let _agent_handle = tokio::spawn(async move {
+            run_agent_consumer(agent_rx, storage_clone, agent_buffers_clone).await;
+        });
+        
+        let _notification_handle = tokio::spawn(async move {
+            run_notification_consumer(notification_rx, notif_channels_clone, notif_history_clone).await;
+        });
+        
+        let _task_handle = tokio::spawn(async move {
+            run_task_consumer(task_rx, task_channels_clone, task_history_clone).await;
         });
 
         Self {
@@ -123,9 +216,13 @@ impl SessionManager {
             storage,
             states,
             agent_buffers,
-            notification_buffers,
-            task_buffers,
-            _store_handle,
+            notification_channels,
+            notification_history,
+            task_channels,
+            task_history,
+            _agent_handle,
+            _notification_handle,
+            _task_handle,
         }
     }
 
@@ -199,33 +296,27 @@ impl SessionManager {
         Vec<NotificationMessage>,
         Pin<Box<dyn Stream<Item = Result<NotificationMessage, broadcast::error::RecvError>> + Send>>,
     )> {
-        // 1. Flush 积累的通知消息
-        let mut accumulated = Vec::new();
+        // 1. 从历史记录中获取累积消息
+        let accumulated = {
+            let mut hist = self.notification_history.write().await;
+            hist.remove(&session_id)
+                .map(|deque| deque.into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        
+        // 2. 创建新的 mpsc 通道供订阅者使用
+        let (tx, rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        
+        // 3. 注册通道
         {
-            let mut buffers = self.notification_buffers.write().await;
-            if let Some(msgs) = buffers.remove(&session_id) {
-                accumulated = msgs;
-            }
+            let mut channels = self.notification_channels.write().await;
+            channels.insert(session_id.clone(), tx);
         }
         
-        // 按 timestamp 排序
-        accumulated.sort_by_key(|m| m.timestamp);
-
-        // 2. 订阅实时
-        let rx = self.bus.subscribe_notification();
-        let session_id_clone = session_id.clone();
+        // 4. 将 mpsc::Receiver 转换为 Stream
+        let stream = ReceiverStream::new(rx)
+            .map(Ok::<_, RecvError>); // 转换为 Result 类型
         
-        let stream = BroadcastStream::new(rx)
-            .filter_map(move |res| {
-                let keep = res.as_ref().map_or(true, |m| m.session_id == session_id_clone);
-                std::future::ready(if keep { Some(res) } else { None })
-            })
-            .map(|item| {
-                item.map_err(|e| match e {
-                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
-                })
-            });
-
         Ok((accumulated, Box::pin(stream)))
     }
 
@@ -237,33 +328,27 @@ impl SessionManager {
         Vec<TaskMessage>,
         Pin<Box<dyn Stream<Item = Result<TaskMessage, broadcast::error::RecvError>> + Send>>,
     )> {
-        // 1. Flush 积累的任务消息
-        let mut accumulated = Vec::new();
+        // 1. 从历史记录中获取累积消息
+        let accumulated = {
+            let mut hist = self.task_history.write().await;
+            hist.remove(&session_id)
+                .map(|deque| deque.into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        
+        // 2. 创建新的 mpsc 通道供订阅者使用
+        let (tx, rx) = mpsc::channel(TASK_CHANNEL_CAPACITY);
+        
+        // 3. 注册通道
         {
-            let mut buffers = self.task_buffers.write().await;
-            if let Some(msgs) = buffers.remove(&session_id) {
-                accumulated = msgs;
-            }
+            let mut channels = self.task_channels.write().await;
+            channels.insert(session_id.clone(), tx);
         }
         
-        // 按 timestamp 排序
-        accumulated.sort_by_key(|m| m.timestamp);
-
-        // 2. 订阅实时
-        let rx = self.bus.subscribe_task();
-        let session_id_clone = session_id.clone();
+        // 4. 将 mpsc::Receiver 转换为 Stream
+        let stream = ReceiverStream::new(rx)
+            .map(Ok::<_, RecvError>); // 转换为 Result 类型
         
-        let stream = BroadcastStream::new(rx)
-            .filter_map(move |res| {
-                let keep = res.as_ref().map_or(true, |m| m.session_id == session_id_clone);
-                std::future::ready(if keep { Some(res) } else { None })
-            })
-            .map(|item| {
-                item.map_err(|e| match e {
-                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
-                })
-            });
-
         Ok((accumulated, Box::pin(stream)))
     }
 
