@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use crate::base::tool::GetSkillDetailTool;
-use crate::enhancement::hooks::{AgentHook, HookScope, InitContext};
+use crate::enhancement::hooks::{AgentHook, HookScope, InitContext, HookCapability};
 use crate::manager::SkillManager;
 use async_trait::async_trait;
 #[cfg(feature = "logging")]
@@ -37,6 +37,11 @@ impl SkillHook {
 impl AgentHook for SkillHook {
     fn name(&self) -> &str {
         "skill_hook"
+    }
+    
+    fn capabilities(&self) -> HookCapability {
+        // SkillHook只关心Init阶段
+        HookCapability::INIT
     }
     
     fn scope(&self) -> &HookScope {

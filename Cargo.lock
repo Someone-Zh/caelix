@@ -233,6 +233,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "bitflags 2.11.0",
  "chrono",
  "clap",
  "cron",

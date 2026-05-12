@@ -10,6 +10,8 @@ use tokio_stream::StreamExt;
 
 use super::converter::convert_chunk;
 use super::tool_executor::execute_tool;
+use crate::runtime::context::RuntimeContext;
+use crate::enhancement::hooks::{BaseContext, PreToolExecContext, MessageUpdateContext};
 
 pub async fn run_agent_loop(
     agent: AgentSpec,
@@ -120,6 +122,28 @@ pub async fn run_agent_loop(
                     full_content,
                 );
                 current_messages.push(new_message);
+                
+                // 调用消息更新钩子
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                    let base_ctx = BaseContext {
+                        session_id: runtime_ctx.get_session_id().to_string(),
+                        request_id: runtime_ctx.get_request_id().to_string(),
+                        span_id: runtime_ctx.get_span_id().to_string(),
+                        agent_name: agent.name.clone(),
+                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
+                    };
+                    
+                    let msg_ctx = MessageUpdateContext {
+                        base: base_ctx,
+                        messages: Arc::new(current_messages.clone()),
+                    };
+                    
+                    let hook_registry = &runtime_ctx.get_caelix_context().hook_registry;
+                    if let Err(e) = hook_registry.execute_message_update(&msg_ctx).await {
+                        eprintln!("Warning: Message update hook failed: {}", e);
+                    }
+                }
+                
                 break;
             } else {
                 let new_message = ChatMessage::assistant_tool_calls(
@@ -127,12 +151,56 @@ pub async fn run_agent_loop(
                     final_tool_calls.clone(),
                 );
                 current_messages.push(new_message);
+                
+                // 调用消息更新钩子
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                    let base_ctx = BaseContext {
+                        session_id: runtime_ctx.get_session_id().to_string(),
+                        request_id: runtime_ctx.get_request_id().to_string(),
+                        span_id: runtime_ctx.get_span_id().to_string(),
+                        agent_name: agent.name.clone(),
+                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
+                    };
+                    
+                    let msg_ctx = MessageUpdateContext {
+                        base: base_ctx,
+                        messages: Arc::new(current_messages.clone()),
+                    };
+                    
+                    let hook_registry = &runtime_ctx.get_caelix_context().hook_registry;
+                    if let Err(e) = hook_registry.execute_message_update(&msg_ctx).await {
+                        eprintln!("Warning: Message update hook failed: {}", e);
+                    }
+                }
             }
             
             
             // 执行工具
             let mut tool_results = Vec::new();
             for tc in &final_tool_calls {
+                // 在执行工具前调用钩子
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                    let base_ctx = BaseContext {
+                        session_id: runtime_ctx.get_session_id().to_string(),
+                        request_id: runtime_ctx.get_request_id().to_string(),
+                        span_id: runtime_ctx.get_span_id().to_string(),
+                        agent_name: agent.name.clone(),
+                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
+                    };
+                    
+                    let mut tool_ctx = PreToolExecContext {
+                        base: base_ctx,
+                        tool_name: tc.name.clone(),
+                        tool_args: tc.arguments.clone(),
+                    };
+                    
+                    let hook_registry = &runtime_ctx.get_caelix_context().hook_registry;
+                    if let Err(e) = hook_registry.execute_pre_tool_exec(&mut tool_ctx).await {
+                        eprintln!("Warning: Pre-tool-exec hook failed: {}", e);
+                        // 继续执行工具，不因钩子失败而中断
+                    }
+                }
+                
                 match execute_tool(
                     &agent.tools,
                     tc,
@@ -155,6 +223,27 @@ pub async fn run_agent_loop(
             // 追加工具返回结果
             for (tc_id, _, result) in tool_results {
                 current_messages.push(ChatMessage::tool(tc_id, result));
+            }
+            
+            // 调用消息更新钩子（工具结果添加后）
+            if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                let base_ctx = BaseContext {
+                    session_id: runtime_ctx.get_session_id().to_string(),
+                    request_id: runtime_ctx.get_request_id().to_string(),
+                    span_id: runtime_ctx.get_span_id().to_string(),
+                    agent_name: agent.name.clone(),
+                    agent_group: agent.group.as_ref().map(|g| g.to_string()),
+                };
+                
+                let msg_ctx = MessageUpdateContext {
+                    base: base_ctx,
+                    messages: Arc::new(current_messages.clone()),
+                };
+                
+                let hook_registry = &runtime_ctx.get_caelix_context().hook_registry;
+                if let Err(e) = hook_registry.execute_message_update(&msg_ctx).await {
+                    eprintln!("Warning: Message update hook failed: {}", e);
+                }
             }
 
         }

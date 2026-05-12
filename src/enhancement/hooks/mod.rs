@@ -4,6 +4,21 @@ pub mod loader;
 use crate::base::agent::{AgentSpec, AgentOutputChunk};
 use crate::base::provider::ChatMessage;
 use async_trait::async_trait;
+use bitflags::bitflags;
+use std::sync::Arc;
+
+/// Hook能力声明 - 位标志枚举
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct HookCapability: u32 {
+        const INIT = 1 << 0;              // Agent初始化阶段
+        const PRE_PROCESS = 1 << 1;       // Agent执行前阶段
+        const POST_PROCESS = 1 << 2;      // Agent执行后阶段
+        const ERROR = 1 << 3;             // 错误处理阶段
+        const PRE_TOOL_EXEC = 1 << 4;     // 工具执行前阶段（新增）
+        const ON_MESSAGE_UPDATE = 1 << 5; // 消息更新时阶段（新增）
+    }
+}
 
 /// Hook作用范围类型
 #[derive(Debug, Clone)]
@@ -80,20 +95,20 @@ pub struct InitContext<'a> {
 }
 
 /// Pre阶段上下文
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[allow(dead_code)] // 在异步闭包中使用
-pub struct PreContext {
+pub struct PreContext<'a> {
     pub base: BaseContext,
-    pub messages: Vec<ChatMessage>,
+    pub messages: &'a mut Vec<ChatMessage>, // 改为可变引用，避免克隆
 }
 
 /// Post阶段上下文
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[allow(dead_code)] // 在异步闭包中使用
-pub struct PostContext {
+pub struct PostContext<'a> {
     pub base: BaseContext,
-    pub input_messages: Vec<ChatMessage>,
-    pub output_chunks: Vec<AgentOutputChunk>,
+    pub input_messages: &'a [ChatMessage], // 改为切片引用，避免克隆
+    pub output_chunks: &'a [AgentOutputChunk], // 改为切片引用，避免克隆
 }
 
 /// Hook阶段枚举
@@ -114,12 +129,35 @@ pub struct ErrorContext {
     pub stage: HookStage,  // 标识在哪个阶段出错
 }
 
+/// 消息更新上下文
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // 在异步闭包中使用
+pub struct MessageUpdateContext {
+    pub base: BaseContext,
+    pub messages: Arc<Vec<ChatMessage>>, // 使用Arc避免克隆
+}
+
+/// 工具执行前上下文
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // 在异步闭包中使用
+pub struct PreToolExecContext {
+    pub base: BaseContext,
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+}
+
 /// Agent增强钩子trait
 /// 允许在Agent生命周期的不同阶段进行增强
 #[async_trait]
 pub trait AgentHook: Send + Sync {
     /// 钩子名称
     fn name(&self) -> &str;
+    
+    /// 声明该钩子关注的阶段（能力声明）
+    /// 默认返回全部阶段，实现者可以重写以优化性能
+    fn capabilities(&self) -> HookCapability {
+        HookCapability::all()
+    }
     
     /// 钩子作用范围
     #[allow(dead_code)] // trait方法，由实现者使用
@@ -144,19 +182,31 @@ pub trait AgentHook: Send + Sync {
     
     /// Pre-Process钩子：Agent执行前调用，可修改输入消息
     #[allow(dead_code)] // trait方法，由实现者使用
-    async fn on_pre_process(&self, _ctx: &mut PreContext) -> Result<(), anyhow::Error> {
+    async fn on_pre_process(&self, _ctx: &mut PreContext<'_>) -> Result<(), anyhow::Error> {
         Ok(())  // 默认空实现
     }
     
     /// Post-Process钩子：Agent执行后调用，只读输出
     #[allow(dead_code)] // trait方法，由实现者使用
-    async fn on_post_process(&self, _ctx: &PostContext) -> Result<(), anyhow::Error> {
+    async fn on_post_process(&self, _ctx: &PostContext<'_>) -> Result<(), anyhow::Error> {
         Ok(())  // 默认空实现
     }
     
     /// On-Error钩子：出错时调用
     #[allow(dead_code)] // trait方法，由实现者使用
     async fn on_error(&self, _ctx: &ErrorContext) -> Result<(), anyhow::Error> {
+        Ok(())  // 默认空实现
+    }
+    
+    /// Pre-Tool-Execution钩子：工具执行前调用
+    #[allow(dead_code)] // trait方法，由实现者使用
+    async fn on_pre_tool_exec(&self, _ctx: &mut PreToolExecContext) -> Result<(), anyhow::Error> {
+        Ok(())  // 默认空实现
+    }
+    
+    /// On-Message-Update钩子：消息更新时调用
+    #[allow(dead_code)] // trait方法，由实现者使用
+    async fn on_message_update(&self, _ctx: &MessageUpdateContext) -> Result<(), anyhow::Error> {
         Ok(())  // 默认空实现
     }
 }
