@@ -46,6 +46,13 @@ impl ApiError {
     }
 }
 
+/// 从 AgentError 转换为 ApiError
+impl From<crate::base::AgentError> for ApiError {
+    fn from(err: crate::base::AgentError) -> Self {
+        ApiError::InternalError(err.to_string())
+    }
+}
+
 /// 聊天请求
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatRequest {

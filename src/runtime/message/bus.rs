@@ -25,12 +25,14 @@ impl MessageBus {
     }
 
     /// 发送 Agent 消息
+    #[allow(dead_code)] // 为将来外部访问预留
     pub fn send_agent(&self, msg: AgentMessage) -> Result<(), broadcast::error::SendError<AgentMessage>> {
         self.agent_sender.send(msg)?;
         Ok(())
     }
 
     /// 发送通知消息
+    #[allow(dead_code)] // 为将来外部访问预留
     pub fn send_notification(&self, msg: NotificationMessage) -> Result<(), broadcast::error::SendError<NotificationMessage>> {
         self.notification_sender.send(msg)?;
         Ok(())

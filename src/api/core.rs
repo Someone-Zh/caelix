@@ -8,10 +8,8 @@ use crate::config::CaelixContext;
 use crate::base::agent::{AgentOutputChunk, Agent};
 use crate::base::provider::{ChatMessage, LlmConfig, LlmType};
 use crate::runtime::message::agent_message::{AgentMessage, AgentMessageType};
-use crate::runtime::message::notification_message::{NotificationMessage, NotificationType};
+use crate::runtime::message::notification_message::NotificationMessage;
 use crate::runtime::TaskMeta;
-use crate::enhancement::hooks::{BaseContext, InitContext, PreContext, PostContext, ErrorContext, HookStage};
-use uuid::Uuid;
 
 /// API 核心实现
 pub struct CaelixApiImpl {
@@ -88,7 +86,73 @@ impl CaelixApi for CaelixApiImpl {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<AgentOutputChunk, ApiError>>, ApiError> {
-        Err(ApiError::InternalError("暂未实现".to_string()))
+        // 1. 验证会话存在
+        if !self.context.session_manager.session_exists(&request.session_id).await {
+            return Err(ApiError::session_not_found(&request.session_id));
+        }
+        
+        // 2. 确定使用的agent名称（默认使用第一个或从请求中获取）
+        let agent_name = request.agent.as_deref().unwrap_or("default");
+        
+        // 3. 通过agent_manager获取AgentSpec
+        let agent_spec = self.context.agent_manager.get(agent_name).await
+            .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+        
+        // 4. 确定provider和model
+        let default_provider = self.get_default_provider();
+        let default_model = self.get_default_model();
+        let provider_name = request.provider.as_deref()
+            .unwrap_or(&default_provider);
+        let model_name = request.model.as_deref()
+            .unwrap_or(&default_model);
+        
+        // 5. 通过llm_provider_manager获取对应的Provider实例
+        let provider = {
+            let provider_manager = self.context.llm_provider_manager.read().await;
+            provider_manager.get_provider(provider_name)
+                .ok_or_else(|| ApiError::provider_not_found(provider_name))?
+                .clone()
+        };
+        
+        // 6. 构建LlmConfig
+        let config = LlmConfig {
+            model_name: model_name.to_string(),
+        };
+        
+        // 7. 构建消息列表（从会话历史 + 当前消息）
+        // 注意：AgentMessage只存储content，我们需要根据上下文推断role
+        // 简化处理：假设历史消息交替为user和assistant
+        let history_messages = self.context.session_manager
+            .get_session_messages(&request.session_id)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string()))?;
+        
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        for (i, msg) in history_messages.iter().enumerate() {
+            if msg.r#type == AgentMessageType::Msg {
+                // 简单启发式：偶数索引为user，奇数索引为assistant
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                messages.push(ChatMessage {
+                    role: role.to_string(),
+                    content: msg.content.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
+        
+        // 添加当前用户消息
+        messages.push(ChatMessage::user(request.message.clone()));
+        
+        // 8. 调用AgentSpec的execute方法获取流
+        let stream = agent_spec.execute(messages, provider, &config).await?;
+        
+        // 9. 转换流类型: AgentError -> ApiError
+        let converted_stream = stream.map(|result| {
+            result.map_err(ApiError::from)
+        });
+        
+        Ok(Box::pin(converted_stream))
     }
 
     async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError> {

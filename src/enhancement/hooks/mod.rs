@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bitflags::bitflags;
 use std::sync::Arc;
 
-/// Hook能力声明 - 位标志枚举
+// Hook能力声明 - 位标志枚举
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct HookCapability: u32 {
