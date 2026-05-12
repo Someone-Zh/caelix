@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 根据 features 和参数启动相应的后端
     if args.len() > 1 {
-        // 用户显式指定了后端
+        // 用户显式指定了后端或选项
         match args[1].as_str() {
             "cli" => {
                 println!("💻 启动 CLI 后端...");
@@ -58,6 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "tui" => {
                 println!("🖥️  启动 TUI 后端...");
                 backends::tui::run_tui(api).await?;
+            }
+            // 如果第一个参数是选项（以-开头），则默认启动CLI后端并传递所有参数
+            arg if arg.starts_with('-') => {
+                println!("💻 启动 CLI 后端...");
+                backends::cli::run_cli(api).await?;
             }
             _ => {
                 eprintln!("❌ 未知的后端: {}", args[1]);

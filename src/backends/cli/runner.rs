@@ -36,15 +36,25 @@ struct CliArgs {
 pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数，跳过第一个参数（后端名称）
     let all_args: Vec<String> = std::env::args().collect();
-    let cli_args = if all_args.len() > 1 && (all_args[1] == "cli" || all_args[1].starts_with('-')) {
+    
+    let cli_args: Vec<String> = if all_args.len() > 1 && (all_args[1] == "cli" || all_args[1].starts_with('-')) {
         // 如果第一个参数是"cli"或是选项，从适当的位置开始
         if all_args.len() > 1 && all_args[1] == "cli" {
-            all_args[2..].to_vec()
+            // 如果是 "caelix cli ..." 格式，跳过 "caelix" 和 "cli"
+            let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
+            args.extend_from_slice(&all_args[2..]);
+            args
         } else {
-            all_args[1..].to_vec()
+            // 如果是 "caelix -a ..." 格式，跳过 "caelix" 但保留程序名
+            let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
+            args.extend_from_slice(&all_args[1..]);
+            args
         }
     } else {
-        all_args[1..].to_vec()
+        // 其他情况，只跳过程序名
+        let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
+        args.extend_from_slice(&all_args[1..]);
+        args
     };
     
     let args = CliArgs::parse_from(cli_args);
@@ -113,15 +123,26 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     let default_provider = api.get_default_provider();
     let default_model = api.get_default_model();
     
+    let provider_specified = args.provider.is_some();
+    let model_specified = args.model.is_some();
+    
     let provider = args.provider.unwrap_or_else(|| {
         println!("✅ 使用默认 Provider: {}", default_provider);
         default_provider
     });
     
+    if provider_specified {
+        println!("✅ 使用指定 Provider: {}", provider);
+    }
+    
     let model = args.model.unwrap_or_else(|| {
         println!("✅ 使用默认 Model: {}", default_model);
         default_model
     });
+    
+    if model_specified {
+        println!("✅ 使用指定 Model: {}", model);
+    }
 
     println!("\n💡 提示: 按 Ctrl+D 结束多行输入,输入 /quit 退出\n");
 

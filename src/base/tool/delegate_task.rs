@@ -39,7 +39,13 @@ impl DelegateTaskTool {
         let agent_spec = match context.agent_manager.get(agent_name).await {
             Some(agent) => agent,
             None => {
-                return (String::new(), vec![format!("未找到名为 '{}' 的 agent", agent_name)]);
+                // 获取所有可用的 agent 名称
+                let available_agents = context.agent_manager.list_all_names().await;
+                let error_msg = format!(
+                    "未找到名为 '{}' 的 agent\n\n可用的 agents: {:?}\n\n请检查 agent 名称是否正确，建议使用英文名（如 'collector_agent' 而不是 '收集专家'）",
+                    agent_name, available_agents
+                );
+                return (String::new(), vec![error_msg]);
             }
         };
 
@@ -191,7 +197,11 @@ impl Runnable for DelegateTaskRunnable {
         let agent_spec = match context.agent_manager.get(&self.agent_name).await {
             Some(agent) => agent,
             None => {
-                return Err(anyhow::anyhow!("未找到名为 '{}' 的 agent", self.agent_name));
+                let available_agents = context.agent_manager.list_all_names().await;
+                return Err(anyhow::anyhow!(
+                    "未找到名为 '{}' 的 agent\n\n可用的 agents: {:?}\n\n请检查 agent 名称是否正确，建议使用英文名（如 'collector_agent' 而不是 '收集专家'）",
+                    self.agent_name, available_agents
+                ));
             }
         };
 

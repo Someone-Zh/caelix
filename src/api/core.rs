@@ -108,7 +108,7 @@ impl CaelixApi for CaelixApiImpl {
         let work_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let runtime_ctx = crate::runtime::context::RuntimeContext::new(
             Some(request.session_id.clone()),
-            None,
+            Some(crate::runtime::id_generator::generate_request_id()),
             work_dir,
             provider_name.to_string(),
             model_name.to_string(),
@@ -177,6 +177,7 @@ impl CaelixApi for CaelixApiImpl {
             // 发送用户消息到消息总线
             let user_msg = AgentMessage {
                 session_id: request_clone.session_id.clone(),
+                request_id: crate::runtime::id_generator::generate_request_id(),
                 span_id: crate::runtime::id_generator::generate_span_id(),
                 r#type: AgentMessageType::Msg,
                 timestamp: chrono::Utc::now(),

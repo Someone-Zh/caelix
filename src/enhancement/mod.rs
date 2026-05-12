@@ -395,7 +395,8 @@ impl HookRegistry {
         agent_spec: &mut AgentSpec,
         session_id: Option<&str>,
     ) -> Result<(), anyhow::Error> {
-        let hooks = self.hooks.read().await;
+        // 直接使用预分类的 init_hooks，而不是遍历所有 hooks
+        let hooks = self.init_hooks.read().await;
         let session_id = session_id.unwrap_or("init").to_string();
         
         for hook in hooks.iter() {
@@ -408,7 +409,7 @@ impl HookRegistry {
                     request_id: format!("{}-init", session_id),
                     span_id: format!("{}-init", session_id),
                     agent_name: agent_spec.name.clone(),
-                    agent_group: agent_spec.group.as_ref().map(|g| g.to_string()),  // Arc<String> -> Option<String>
+                    agent_group: agent_spec.group.as_ref().map(|g| g.to_string()),
                 };
                 
                 // 创建InitContext

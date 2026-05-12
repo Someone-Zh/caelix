@@ -2,6 +2,10 @@ use crate::enhancement::hooks::{AgentHook, HookCapability, MessageUpdateContext}
 use crate::runtime::message::agent_message::{AgentMessage, AgentMessageType};
 use async_trait::async_trait;
 use chrono::Utc;
+#[cfg(feature = "logging")]
+use serde_json::json;
+#[cfg(feature = "logging")]
+use crate::debug_log;
 
 /// MessageBusHook - 负责将消息更新发送到消息总线并持久化
 pub struct MessageBusHook;
@@ -24,6 +28,21 @@ impl AgentHook for MessageBusHook {
     }
 
     async fn on_message_update(&self, ctx: &MessageUpdateContext) -> Result<(), anyhow::Error> {
+        #[cfg(feature = "logging")]
+        {
+            debug_log!(
+                "DEBUG",
+                &ctx.base.session_id,
+                &ctx.base.request_id,
+                &ctx.base.span_id,
+                &format!("message_bus_hook.rs:{}", line!()),
+                json!({
+                    "event": "message_bus_hook_start",
+                    "messages_count": ctx.messages.len()
+                })
+            );
+        }
+        
         // 获取最新的消息（最后一条）
         if let Some(latest_msg) = ctx.messages.last() {
             // 将整个 ChatMessage 序列化为 JSON 字符串，保留角色、工具调用等完整信息
@@ -39,6 +58,7 @@ impl AgentHook for MessageBusHook {
             // 创建 AgentMessage
             let agent_msg = AgentMessage {
                 session_id: ctx.base.session_id.clone(),
+                request_id: ctx.base.request_id.clone(),
                 span_id: ctx.base.span_id.clone(),
                 r#type: AgentMessageType::Msg,
                 timestamp: Utc::now(),
@@ -53,8 +73,39 @@ impl AgentHook for MessageBusHook {
                 
                 // 发送消息到消息总线
                 // SessionManager 的存储消费者会自动持久化 Msg 类型的消息
-                if let Err(e) = caelix_context.message_bus.send_agent(agent_msg) {
+                if let Err(e) = caelix_context.message_bus.send_agent(agent_msg.clone()) {
                     eprintln!("Warning: Failed to send message to bus: {}", e);
+                    
+                    #[cfg(feature = "logging")]
+                    {
+                        debug_log!(
+                            "ERROR",
+                            &ctx.base.session_id,
+                            &ctx.base.request_id,
+                            &ctx.base.span_id,
+                            &format!("message_bus_hook.rs:{}", line!()),
+                            json!({
+                                "event": "message_bus_send_failed",
+                                "error": e.to_string()
+                            })
+                        );
+                    }
+                } else {
+                    #[cfg(feature = "logging")]
+                    {
+                        debug_log!(
+                            "DEBUG",
+                            &ctx.base.session_id,
+                            &ctx.base.request_id,
+                            &ctx.base.span_id,
+                            &format!("message_bus_hook.rs:{}", line!()),
+                            json!({
+                                "event": "message_bus_send_success",
+                                "message_type": "Msg",
+                                "content_length": agent_msg.content.len()
+                            })
+                        );
+                    }
                 }
             } else {
                 eprintln!("Warning: No runtime context available for message bus hook");

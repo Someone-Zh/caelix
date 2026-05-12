@@ -48,6 +48,12 @@ impl AgentManager {
         agents.remove(name)
     }
 
+    /// 获取所有注册的 agent 名称列表
+    pub async fn list_all_names(&self) -> Vec<String> {
+        let agents = self.agents.read().await;
+        agents.keys().cloned().collect()
+    }
+
 }
 
 /// 智能体注册中心错误

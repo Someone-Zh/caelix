@@ -83,9 +83,12 @@ impl TaskManager {
                             let scheduler = scheduler_clone.clone();
                             let persistence = persistence_clone.clone(); // 传给执行函数
                             
-                            // Spawn 执行
+                            // Spawn 执行，携带 RuntimeContext
+                            let runtime_ctx = crate::runtime::context::RuntimeContext::current();
                             tokio::spawn(async move {
-                                Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence).await;
+                                crate::runtime::context::RuntimeContext::scope(runtime_ctx, async {
+                                    Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence).await;
+                                }).await;
                             });
                         }
                     }
@@ -158,9 +161,12 @@ impl TaskManager {
                 let scheduler = self.scheduler.clone();
                 let persistence = self.persistence.clone();
                 
-                // 立即 Spawn
+                // 立即 Spawn，携带 RuntimeContext
+                let runtime_ctx = crate::runtime::context::RuntimeContext::current();
                 let handle = tokio::spawn(async move {
-                    Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence).await;
+                    crate::runtime::context::RuntimeContext::scope(runtime_ctx, async {
+                        Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence).await;
+                    }).await;
                 });
                 
                 self.registry.insert(task_id.clone(), (meta, Some(tx), Some(handle)));
