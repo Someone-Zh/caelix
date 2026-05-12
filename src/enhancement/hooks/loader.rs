@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use crate::enhancement::hooks::skill_hook::SkillHook;
+use crate::enhancement::hooks::message_bus_hook::MessageBusHook;
 use crate::manager::SkillManager;
 use crate::enhancement::HookRegistry;
 
@@ -20,6 +21,10 @@ impl HookLoader {
         // 注册技能钩子
         let skill_hook = Arc::new(SkillHook::new(skill_manager));
         hook_registry.register_hook(skill_hook).await;
+        
+        // 注册消息总线钩子
+        let message_bus_hook = Arc::new(MessageBusHook::new());
+        hook_registry.register_hook(message_bus_hook).await;
         
         println!("Built-in hooks loaded. Total hooks: {}", hook_registry.hook_count().await);
         Ok(())

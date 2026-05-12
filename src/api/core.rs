@@ -86,9 +86,12 @@ impl CaelixApi for CaelixApiImpl {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<AgentOutputChunk, ApiError>>, ApiError> {
-        // 1. 验证会话存在
+        // 1. 如果会话不存在则创建
         if !self.context.session_manager.session_exists(&request.session_id).await {
-            return Err(ApiError::session_not_found(&request.session_id));
+            self.context.session_manager
+                .create_session_config(request.session_id.clone())
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string()))?;
         }
         
         // 2. 确定使用的agent名称（默认使用第一个或从请求中获取）
@@ -120,29 +123,47 @@ impl CaelixApi for CaelixApiImpl {
         };
         
         // 7. 构建消息列表（从会话历史 + 当前消息）
-        // 注意：AgentMessage只存储content，我们需要根据上下文推断role
-        // 简化处理：假设历史消息交替为user和assistant
+        // AgentMessage.content 现在存储的是 ChatMessage 的 JSON 字符串
         let history_messages = self.context.session_manager
             .get_session_messages(&request.session_id)
             .await
             .map_err(|e| ApiError::InternalError(e.to_string()))?;
         
         let mut messages: Vec<ChatMessage> = Vec::new();
-        for (i, msg) in history_messages.iter().enumerate() {
+        for msg in history_messages.iter() {
             if msg.r#type == AgentMessageType::Msg {
-                // 简单启发式：偶数索引为user，奇数索引为assistant
-                let role = if i % 2 == 0 { "user" } else { "assistant" };
-                messages.push(ChatMessage {
-                    role: role.to_string(),
-                    content: msg.content.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
+                // 尝试从 JSON 字符串反序列化为 ChatMessage
+                match serde_json::from_str::<ChatMessage>(&msg.content) {
+                    Ok(chat_msg) => {
+                        // 成功反序列化，使用完整的 ChatMessage
+                        messages.push(chat_msg);
+                    }
+                    Err(_) => {
+                        // 降级处理：如果不是 JSON 格式，则当作纯文本处理
+                        // 这种情况可能是旧数据或手动发送的简单消息
+                        messages.push(ChatMessage {
+                            role: "user".to_string(),
+                            content: msg.content.clone(),
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    }
+                }
             }
         }
         
         // 添加当前用户消息
         messages.push(ChatMessage::user(request.message.clone()));
+        
+        // 发送用户消息到消息总线
+        let user_msg = AgentMessage {
+            session_id: request.session_id.clone(),
+            span_id: crate::runtime::id_generator::generate_span_id(),
+            r#type: AgentMessageType::Msg,
+            timestamp: chrono::Utc::now(),
+            content: request.message.clone(),
+        };
+        let _ = self.context.message_bus.send_agent(user_msg);
         
         // 8. 调用AgentSpec的execute方法获取流
         let stream = agent_spec.execute(messages, provider, &config).await?;
@@ -197,11 +218,18 @@ impl CaelixApi for CaelixApiImpl {
                 
                 let summary = messages.first()
                     .map(|msg| {
-                        let chars: Vec<char> = msg.content.chars().collect();
+                        // AgentMessage.content 现在是 ChatMessage 的 JSON 字符串
+                        let actual_content = if let Ok(chat_msg) = serde_json::from_str::<ChatMessage>(&msg.content) {
+                            chat_msg.content
+                        } else {
+                            msg.content.clone()
+                        };
+                        
+                        let chars: Vec<char> = actual_content.chars().collect();
                         if chars.len() > 15 {
                             chars[..15].iter().collect::<String>() + "..."
                         } else {
-                            msg.content.clone()
+                            actual_content
                         }
                     })
                     .unwrap_or_else(|| "新会话".to_string());

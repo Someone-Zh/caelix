@@ -155,10 +155,19 @@ impl CommandHandler {
                 if let Ok(messages) = api_clone.get_session_messages(&session_id).await {
                     if let Some(tx) = tx {
                         for msg in messages {
-                            // AgentMessage 没有 role 字段，所有消息都视为 Assistant 回复
+                            // AgentMessage.content 现在是 ChatMessage 的 JSON 字符串
+                            // 尝试解析 JSON 提取实际内容
+                            let display_content = if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
+                                // 成功解析，使用 ChatMessage 的 content 字段
+                                chat_msg.content
+                            } else {
+                                // 降级处理：直接使用原始 content（可能是旧数据）
+                                msg.content
+                            };
+                            
                             let tui_msg = TuiMessage {
                                 msg_type: TuiMessageType::Assistant,
-                                content: msg.content,
+                                content: display_content,
                                 timestamp: Instant::now(),
                             };
                             let _ = tx.send(super::state::AppMessage::AddMessage(tui_msg)).await;

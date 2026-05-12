@@ -68,11 +68,18 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             if !messages.is_empty() {
                 println!("\n📜 历史对话 ({} 条消息):", messages.len());
                 for (i, msg) in messages.iter().enumerate() {
+                    // AgentMessage.content 现在是 ChatMessage 的 JSON 字符串
+                    let display_content = if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
+                        chat_msg.content
+                    } else {
+                        msg.content.clone()
+                    };
+                    
                     println!("  [{}] {}: {}", i + 1, msg.timestamp.format("%H:%M:%S"), 
-                             if msg.content.len() > 100 { 
-                                 &msg.content[..100] 
+                             if display_content.len() > 100 { 
+                                 &display_content[..100] 
                              } else { 
-                                 &msg.content 
+                                 &display_content 
                              });
                 }
                 println!();
