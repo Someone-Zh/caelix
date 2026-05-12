@@ -114,7 +114,7 @@ async fn run_demo(api: Arc<CaelixApiImpl>) {
     println!("默认模型: {}", default_model);
     
     // 创建会话
-    let session_id = api.create_session();
+    let session_id = api.create_session().await;
     println!("\n✅ 创建会话: {}", session_id);
     
     // 获取 agent 列表

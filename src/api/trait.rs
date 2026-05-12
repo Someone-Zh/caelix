@@ -26,7 +26,7 @@ pub trait CaelixApi: Send + Sync {
     async fn set_session_model(&self, session_id: &str, model: &str) -> Result<(), ApiError>;
     
     /// 创建新会话
-    fn create_session(&self) -> String;
+    async fn create_session(&self) -> String;
     
     /// 获取所有 agent 名称列表
     async fn list_agents(&self) -> Vec<String>;

@@ -30,7 +30,7 @@ pub async fn get_default_config(
 pub async fn create_session(
     State(api): State<ApiState>,
 ) -> Json<CreateSessionResponse> {
-    let session_id = api.create_session();
+    let session_id = api.create_session().await;
     Json(CreateSessionResponse { session_id })
 }
 
@@ -81,6 +81,7 @@ pub async fn chat_stream(
     State(api): State<ApiState>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>, StatusCode> {
+    // RuntimeContext 在 API 层内部管理
     let stream = api.chat_stream(request)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

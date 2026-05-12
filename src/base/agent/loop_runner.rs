@@ -22,9 +22,33 @@ pub async fn run_agent_loop(
     let (tx, rx) = tokio::sync::mpsc::channel(128);
     let agent = Arc::new(agent);
 
+    // 获取当前的 RuntimeContext（如果存在）
+    let runtime_ctx = std::panic::catch_unwind(|| {
+        crate::runtime::context::RuntimeContext::current()
+    }).ok();
+
     tokio::spawn(async move {
-        let mut current_messages = messages;
-        loop {
+        // 如果有 RuntimeContext，在 scope 中执行
+        if let Some(ctx) = runtime_ctx {
+            crate::runtime::context::RuntimeContext::scope(ctx, async move {
+                run_agent_loop_inner(agent, messages, llm_provider, config, tx).await;
+            }).await;
+        } else {
+            run_agent_loop_inner(agent, messages, llm_provider, config, tx).await;
+        }
+    });
+
+    Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+}
+
+async fn run_agent_loop_inner(
+    agent: Arc<AgentSpec>,
+    mut current_messages: Vec<ChatMessage>,
+    llm_provider: Arc<dyn LlmProvider>,
+    config: LlmConfig,
+    tx: tokio::sync::mpsc::Sender<Result<AgentOutputChunk, AgentError>>,
+) {
+    loop {
             let tool_defs = agent.get_tool_definitions();
             let mut stream = match llm_provider.chat_stream(&current_messages, &tool_defs, &config).await {
                 Ok(s) => s,
@@ -249,7 +273,4 @@ pub async fn run_agent_loop(
         }
 
         let _ = tx.send(Ok(AgentOutputChunk::Finish { reason: "stop".into() })).await;
-    });
-
-    Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
 }

@@ -57,7 +57,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         println!("✅ 使用指定会话: {}", sid);
         sid
     } else {
-        let new_session = api.create_session();
+        let new_session = api.create_session().await;
         println!("✅ 创建新会话: {}", new_session);
         new_session
     };
@@ -162,7 +162,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             agent: selected_agent.clone(),
         };
 
-        // 调用 chat_stream
+        // 调用 chat_stream（RuntimeContext 在 API 层内部管理）
         match api.chat_stream(request).await {
             Ok(mut stream) => {
                 // 处理流式响应

@@ -28,6 +28,7 @@ impl CaelixApiImpl {
     pub fn message_bus(&self) -> &Arc<crate::runtime::message::MessageBus> {
         &self.context.message_bus
     }
+  
 }
 
 #[async_trait]
@@ -65,15 +66,16 @@ impl CaelixApi for CaelixApiImpl {
             .map_err(|e| ApiError::InternalError(e.to_string()))
     }
 
-    fn create_session(&self) -> String {
+    async fn create_session(&self) -> String {
         // 使用中央ID生成器生成 session_id
         let session_id = crate::runtime::id_generator::generate_session_id();
-        // 在 runtime SessionManager 中创建配置
-        let ctx = self.context.clone();
-        let session_id_clone = session_id.clone();
-        tokio::spawn(async move {
-            let _ = ctx.session_manager.create_session_config(session_id_clone).await;
-        });
+        // 在 runtime SessionManager 中创建配置（等待完成）
+        if let Err(e) = self.context.session_manager
+            .create_session_config(session_id.clone())
+            .await
+        {
+            eprintln!("⚠️  创建会话配置失败: {:?}", e);
+        }
         session_id
     }
 
@@ -94,14 +96,7 @@ impl CaelixApi for CaelixApiImpl {
                 .map_err(|e| ApiError::InternalError(e.to_string()))?;
         }
         
-        // 2. 确定使用的agent名称（默认使用第一个或从请求中获取）
-        let agent_name = request.agent.as_deref().unwrap_or("default");
-        
-        // 3. 通过agent_manager获取AgentSpec
-        let agent_spec = self.context.agent_manager.get(agent_name).await
-            .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
-        
-        // 4. 确定provider和model
+        // 2. 确定provider和model（用于创建RuntimeContext）
         let default_provider = self.get_default_provider();
         let default_model = self.get_default_model();
         let provider_name = request.provider.as_deref()
@@ -109,71 +104,98 @@ impl CaelixApi for CaelixApiImpl {
         let model_name = request.model.as_deref()
             .unwrap_or(&default_model);
         
-        // 5. 通过llm_provider_manager获取对应的Provider实例
-        let provider = {
-            let provider_manager = self.context.llm_provider_manager.read().await;
-            provider_manager.get_provider(provider_name)
-                .ok_or_else(|| ApiError::provider_not_found(provider_name))?
-                .clone()
-        };
+        // 3. 创建 RuntimeContext
+        let work_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let runtime_ctx = crate::runtime::context::RuntimeContext::new(
+            Some(request.session_id.clone()),
+            None,
+            work_dir,
+            provider_name.to_string(),
+            model_name.to_string(),
+            false,
+            self.context.clone(),
+        );
         
-        // 6. 构建LlmConfig
-        let config = LlmConfig {
-            model_name: model_name.to_string(),
-        };
+        // 4. 在 RuntimeContext scope 中执行所有操作
+        let ctx_clone = self.context.clone();
+        let request_clone = request.clone();
         
-        // 7. 构建消息列表（从会话历史 + 当前消息）
-        // AgentMessage.content 现在存储的是 ChatMessage 的 JSON 字符串
-        let history_messages = self.context.session_manager
-            .get_session_messages(&request.session_id)
-            .await
-            .map_err(|e| ApiError::InternalError(e.to_string()))?;
-        
-        let mut messages: Vec<ChatMessage> = Vec::new();
-        for msg in history_messages.iter() {
-            if msg.r#type == AgentMessageType::Msg {
-                // 尝试从 JSON 字符串反序列化为 ChatMessage
-                match serde_json::from_str::<ChatMessage>(&msg.content) {
-                    Ok(chat_msg) => {
-                        // 成功反序列化，使用完整的 ChatMessage
-                        messages.push(chat_msg);
-                    }
-                    Err(_) => {
-                        // 降级处理：如果不是 JSON 格式，则当作纯文本处理
-                        // 这种情况可能是旧数据或手动发送的简单消息
-                        messages.push(ChatMessage {
-                            role: "user".to_string(),
-                            content: msg.content.clone(),
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
+        let result = crate::runtime::context::RuntimeContext::scope(runtime_ctx, async move {
+            // 4.1 确定使用的agent名称（默认使用第一个或从请求中获取）
+            let agent_name = request_clone.agent.as_deref().unwrap_or("default");
+            
+            // 4.2 通过agent_manager获取AgentSpec
+            let agent_spec = ctx_clone.agent_manager.get(agent_name).await
+                .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+            
+            // 4.3 通过llm_provider_manager获取对应的Provider实例
+            let provider = {
+                let provider_manager = ctx_clone.llm_provider_manager.read().await;
+                provider_manager.get_provider(provider_name)
+                    .ok_or_else(|| ApiError::provider_not_found(provider_name))?
+                    .clone()
+            };
+            
+            // 4.4 构建LlmConfig
+            let config = LlmConfig {
+                model_name: model_name.to_string(),
+            };
+            
+            // 4.5 构建消息列表（从会话历史 + 当前消息）
+            // AgentMessage.content 现在存储的是 ChatMessage 的 JSON 字符串
+            let history_messages = ctx_clone.session_manager
+                .get_session_messages(&request_clone.session_id)
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string()))?;
+            
+            let mut messages: Vec<ChatMessage> = Vec::new();
+            for msg in history_messages.iter() {
+                if msg.r#type == AgentMessageType::Msg {
+                    // 尝试从 JSON 字符串反序列化为 ChatMessage
+                    match serde_json::from_str::<ChatMessage>(&msg.content) {
+                        Ok(chat_msg) => {
+                            // 成功反序列化，使用完整的 ChatMessage
+                            messages.push(chat_msg);
+                        }
+                        Err(_) => {
+                            // 降级处理：如果不是 JSON 格式，则当作纯文本处理
+                            // 这种情况可能是旧数据或手动发送的简单消息
+                            messages.push(ChatMessage {
+                                role: "user".to_string(),
+                                content: msg.content.clone(),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        }
                     }
                 }
             }
-        }
+            
+            // 添加当前用户消息
+            messages.push(ChatMessage::user(request_clone.message.clone()));
+            
+            // 发送用户消息到消息总线
+            let user_msg = AgentMessage {
+                session_id: request_clone.session_id.clone(),
+                span_id: crate::runtime::id_generator::generate_span_id(),
+                r#type: AgentMessageType::Msg,
+                timestamp: chrono::Utc::now(),
+                content: request_clone.message.clone(),
+            };
+            let _ = ctx_clone.message_bus.send_agent(user_msg);
+            
+            // 4.6 调用AgentSpec的execute方法获取流
+            let stream = agent_spec.execute(messages, provider, &config).await?;
+            
+            // 4.7 转换流类型: AgentError -> ApiError
+            let converted_stream = stream.map(|result| {
+                result.map_err(ApiError::from)
+            });
+            
+            Ok(Box::pin(converted_stream) as BoxStream<'static, Result<AgentOutputChunk, ApiError>>)
+        }).await;
         
-        // 添加当前用户消息
-        messages.push(ChatMessage::user(request.message.clone()));
-        
-        // 发送用户消息到消息总线
-        let user_msg = AgentMessage {
-            session_id: request.session_id.clone(),
-            span_id: crate::runtime::id_generator::generate_span_id(),
-            r#type: AgentMessageType::Msg,
-            timestamp: chrono::Utc::now(),
-            content: request.message.clone(),
-        };
-        let _ = self.context.message_bus.send_agent(user_msg);
-        
-        // 8. 调用AgentSpec的execute方法获取流
-        let stream = agent_spec.execute(messages, provider, &config).await?;
-        
-        // 9. 转换流类型: AgentError -> ApiError
-        let converted_stream = stream.map(|result| {
-            result.map_err(ApiError::from)
-        });
-        
-        Ok(Box::pin(converted_stream))
+        result
     }
 
     async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError> {

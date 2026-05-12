@@ -79,10 +79,14 @@ impl CommandHandler {
                 });
             }
             "new" => {
-                // 创建新session
-                let new_session_id = api.create_session();
-                app.session_id = Some(new_session_id.clone());
-                app.status_message = format!("新会话已创建: {}", &new_session_id[..8]);
+                // 创建新session（使用 tokio::spawn 处理异步调用）
+                let api_clone = api.clone();
+                let tx = app.message_tx.clone();
+                
+                // 先生成一个临时的 session_id 用于显示
+                let temp_session_id = crate::runtime::id_generator::generate_session_id();
+                app.session_id = Some(temp_session_id.clone());
+                app.status_message = format!("正在创建新会话: {}", &temp_session_id[..8]);
                 
                 // 清空当前对话
                 app.messages.clear();
@@ -91,6 +95,16 @@ impl CommandHandler {
                 // 返回聊天视图
                 app.view_stack.clear();
                 app.active_view = AppView::Chat;
+                
+                // 在后台异步创建会话配置
+                tokio::spawn(async move {
+                    let new_session_id = api_clone.create_session().await;
+                    if let Some(tx) = tx {
+                        let _ = tx.send(super::state::AppMessage::UpdateStatus(
+                            format!("新会话已创建: {}", &new_session_id[..8])
+                        )).await;
+                    }
+                });
             }
             "providers" => {
                 // 加载provider列表

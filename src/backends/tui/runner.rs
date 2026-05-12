@@ -27,8 +27,8 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     // 创建应用状态
     let mut app = App::new();
     
-    // 创建会话
-    let session_id = api.create_session();
+    // 创建会话（需要异步调用）
+    let session_id = api.create_session().await;
     app.session_id = Some(session_id.clone());
     app.status_message = format!("会话已创建: {}", &session_id[..8]);
 
@@ -144,7 +144,7 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                     let session_clone = session_id.clone();
                     let tx = app.message_tx.clone().unwrap();
                     
-                    // 在后台任务中处理异步调用
+                    // 在后台任务中处理异步调用（RuntimeContext 在 API 层内部管理）
                     tokio::spawn(async move {
                         // 设置加载状态
                         let _ = tx.send(AppMessage::SetLoading(true)).await;
