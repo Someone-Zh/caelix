@@ -15,7 +15,7 @@ use crate::debug_log;
 use super::converter::convert_chunk;
 use super::tool_executor::execute_tool;
 use crate::runtime::context::RuntimeContext;
-use crate::enhancement::hooks::{BaseContext, PreToolExecContext, MessageUpdateContext};
+use crate::enhancement::hooks::{BaseContext, PreToolExecContext, PostToolExecContext, MessageUpdateContext};
 
 pub async fn run_agent_loop(
     agent: AgentSpec,
@@ -345,12 +345,47 @@ async fn run_agent_loop_inner(
                     &agent.tools,
                     tc,
                 ).await {
-                    Ok((name, result)) => {
-                        tool_results.push((tc.id.clone(), name.clone(), result.clone()));
+                    Ok((name, tool_result)) => {
+                        // 在执行工具后调用钩子，允许修改结果
+                        let mut final_result = tool_result.clone();
+                        
+                        if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                            let base_ctx = BaseContext {
+                                session_id: runtime_ctx.get_session_id().to_string(),
+                                request_id: runtime_ctx.get_request_id().to_string(),
+                                span_id: runtime_ctx.get_span_id().to_string(),
+                                agent_name: agent.name.clone(),
+                                agent_group: agent.group.as_ref().map(|g| g.to_string()),
+                            };
+                            
+                            let mut post_tool_ctx = PostToolExecContext {
+                                base: base_ctx,
+                                tool_name: name.clone(),
+                                tool_args: tc.arguments.clone(),
+                                tool_result: final_result.clone(),
+                            };
+                            
+                            let hook_registry = &runtime_ctx.get_caelix_context().hook_registry;
+                            if let Err(e) = hook_registry.execute_post_tool_exec(&mut post_tool_ctx).await {
+                                eprintln!("Warning: Post-tool-exec hook failed: {}", e);
+                                // 继续执行，不因钩子失败而中断
+                            }
+                            
+                            // 使用可能被钩子修改后的结果
+                            final_result = post_tool_ctx.tool_result;
+                        }
+                        
+                        // 将ToolResult转换为字符串用于存储和发送
+                        let result_str = match &final_result.error {
+                            Some(err) => format!("工具执行错误：{}", err),
+                            None => final_result.output.clone(),
+                        };
+                        
+                        tool_results.push((tc.id.clone(), name.clone(), result_str.clone()));
                         // 返回工具结果
                         let _ = tx.send(Ok(AgentOutputChunk::ToolResult {
                             tool_name: name.clone(),
-                            result: result.clone(),
+                            result: result_str.clone(),
                         })).await;
                         
                         #[cfg(feature = "logging")]
@@ -365,7 +400,7 @@ async fn run_agent_loop_inner(
                                     json!({
                                         "event": "tool_result_sent",
                                         "tool_name": name,
-                                        "result_length": result.len()
+                                        "result_length": result_str.len()
                                     })
                                 );
                             }

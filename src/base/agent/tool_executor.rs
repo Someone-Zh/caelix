@@ -1,11 +1,12 @@
 use crate::base::{AgentError, Tool,ToolCall};
+use crate::base::tool::ToolResult;
 use serde_json::Value;
 use std::sync::Arc;
 
 pub async fn execute_tool(
     tools: &[Arc<dyn Tool>],
     tool_call: &ToolCall,
-) -> Result<(String, String), AgentError> {
+) -> Result<(String, ToolResult), AgentError> {
     let tool_name = &tool_call.name;
     let raw_args = &tool_call.arguments;
     // 查找工具
@@ -19,10 +20,5 @@ pub async fn execute_tool(
     let args_json: Value = serde_json::from_str(clean_json_str).unwrap();
 
     let result = tool.execute(args_json).await;
-
-    let result_str = match result.error {
-        Some(err) => format!("工具执行错误：{}", err),
-        None => result.output.to_string(),
-    };
-    Ok((tool.name().to_string(), result_str))
+    Ok((tool.name().to_string(), result))
 }

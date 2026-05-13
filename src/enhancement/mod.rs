@@ -3,7 +3,7 @@ pub mod commands;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::enhancement::hooks::{AgentHook, InitContext, PreContext, PostContext, ErrorContext, BaseContext, HookCapability, PreToolExecContext, MessageUpdateContext};
+use crate::enhancement::hooks::{AgentHook, InitContext, PreContext, PostContext, ErrorContext, BaseContext, HookCapability, PreToolExecContext, PostToolExecContext, MessageUpdateContext};
 use crate::base::agent::AgentSpec;
 
 /// 钩子注册中心
@@ -17,6 +17,7 @@ pub struct HookRegistry {
     post_hooks: Arc<RwLock<Vec<Arc<dyn AgentHook>>>>,
     error_hooks: Arc<RwLock<Vec<Arc<dyn AgentHook>>>>,
     pre_tool_exec_hooks: Arc<RwLock<Vec<Arc<dyn AgentHook>>>>,
+    post_tool_exec_hooks: Arc<RwLock<Vec<Arc<dyn AgentHook>>>>,
     message_update_hooks: Arc<RwLock<Vec<Arc<dyn AgentHook>>>>,
 }
 
@@ -38,6 +39,7 @@ impl HookRegistry {
             post_hooks: Arc::new(RwLock::new(Vec::new())),
             error_hooks: Arc::new(RwLock::new(Vec::new())),
             pre_tool_exec_hooks: Arc::new(RwLock::new(Vec::new())),
+            post_tool_exec_hooks: Arc::new(RwLock::new(Vec::new())),
             message_update_hooks: Arc::new(RwLock::new(Vec::new())),
         }
     }
@@ -67,6 +69,9 @@ impl HookRegistry {
         }
         if caps.contains(HookCapability::PRE_TOOL_EXEC) {
             self.pre_tool_exec_hooks.write().await.push(hook.clone());
+        }
+        if caps.contains(HookCapability::POST_TOOL_EXEC) {
+            self.post_tool_exec_hooks.write().await.push(hook.clone());
         }
         if caps.contains(HookCapability::ON_MESSAGE_UPDATE) {
             self.message_update_hooks.write().await.push(hook.clone());
@@ -331,6 +336,53 @@ impl HookRegistry {
                             "event": "hook_execute_complete",
                             "hook_name": hook.name(),
                             "stage": "pre_tool_exec",
+                            "result": "success"
+                        })
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 执行Post-Tool-Execution阶段钩子
+    #[allow(dead_code)] // 公共API，供将来使用
+    pub async fn execute_post_tool_exec(&self, ctx: &mut PostToolExecContext) -> Result<(), anyhow::Error> {
+        let hooks = self.post_tool_exec_hooks.read().await;
+        for hook in hooks.iter() {
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_start",
+                            "hook_name": hook.name(),
+                            "stage": "post_tool_exec",
+                            "agent_name": ctx.base.agent_name,
+                            "tool_name": ctx.tool_name
+                        })
+                    );
+                }
+                
+                hook.on_post_tool_exec(ctx).await?;
+                
+                #[cfg(feature = "logging")]
+                {
+                    crate::debug_log!(
+                        "DEBUG",
+                        &ctx.base.session_id,
+                        &ctx.base.request_id,
+                        &ctx.base.span_id,
+                        &format!("mod.rs:{}", line!()),
+                        serde_json::json!({
+                            "event": "hook_execute_complete",
+                            "hook_name": hook.name(),
+                            "stage": "post_tool_exec",
                             "result": "success"
                         })
                     );

@@ -1,9 +1,11 @@
 pub mod skill_hook;
 pub mod loader;
 pub mod message_bus_hook;
+pub mod tool_result_check_hook;
 
 use crate::base::agent::{AgentSpec, AgentOutputChunk};
 use crate::base::provider::ChatMessage;
+use crate::base::tool::ToolResult;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use std::sync::Arc;
@@ -18,6 +20,7 @@ bitflags! {
         const ERROR = 1 << 3;             // 错误处理阶段
         const PRE_TOOL_EXEC = 1 << 4;     // 工具执行前阶段（新增）
         const ON_MESSAGE_UPDATE = 1 << 5; // 消息更新时阶段（新增）
+        const POST_TOOL_EXEC = 1 << 6;    // 工具执行后阶段（可修改结果）
     }
 }
 
@@ -147,6 +150,17 @@ pub struct PreToolExecContext {
     pub tool_args: serde_json::Value,
 }
 
+/// 工具执行后上下文（可修改结果）
+#[derive(Debug, Clone)]
+pub struct PostToolExecContext {
+    pub base: BaseContext,
+    #[allow(dead_code)] // 为将来扩展预留
+    pub tool_name: String,
+    #[allow(dead_code)] // 为将来扩展预留
+    pub tool_args: serde_json::Value,
+    pub tool_result: ToolResult,  // 可变，允许钩子修改
+}
+
 /// Agent增强钩子trait
 /// 允许在Agent生命周期的不同阶段进行增强
 #[async_trait]
@@ -202,6 +216,12 @@ pub trait AgentHook: Send + Sync {
     /// Pre-Tool-Execution钩子：工具执行前调用
     #[allow(dead_code)] // trait方法，由实现者使用
     async fn on_pre_tool_exec(&self, _ctx: &mut PreToolExecContext) -> Result<(), anyhow::Error> {
+        Ok(())  // 默认空实现
+    }
+    
+    /// Post-Tool-Execution钩子：工具执行后调用，可修改结果
+    #[allow(dead_code)] // trait方法，由实现者使用
+    async fn on_post_tool_exec(&self, _ctx: &mut PostToolExecContext) -> Result<(), anyhow::Error> {
         Ok(())  // 默认空实现
     }
     
