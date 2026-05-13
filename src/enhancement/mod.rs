@@ -96,7 +96,8 @@ impl HookRegistry {
                     );
                 }
                 
-                println!("Executing init hook: {}", hook.name());
+                // 移除 println，改用 debug_log
+                // println!("Executing init hook: {}", hook.name());
                 hook.on_init(ctx).await?;
                 
                 #[cfg(feature = "logging")]
@@ -143,7 +144,8 @@ impl HookRegistry {
                     );
                 }
                 
-                println!("Executing pre-process hook: {}", hook.name());
+                // 移除 println，改用 debug_log
+                // println!("Executing pre-process hook: {}", hook.name());
                 hook.on_pre_process(ctx).await?;
                 
                 #[cfg(feature = "logging")]
@@ -190,7 +192,8 @@ impl HookRegistry {
                     );
                 }
                 
-                println!("Executing post-process hook: {}", hook.name());
+                // 移除 println，改用 debug_log
+                // println!("Executing post-process hook: {}", hook.name());
                 hook.on_post_process(ctx).await?;
                 
                 #[cfg(feature = "logging")]
@@ -237,7 +240,8 @@ impl HookRegistry {
                     );
                 }
                 
-                println!("Executing error hook: {}", hook.name());
+                // 移除 println，改用 debug_log
+                // println!("Executing error hook: {}", hook.name());
                 // Error钩子失败不中断，只记录日志
                 if let Err(e) = hook.on_error(ctx).await {
                     eprintln!("Error hook {} failed: {:?}", hook.name(), e);
@@ -311,7 +315,8 @@ impl HookRegistry {
                     );
                 }
                 
-                println!("Executing pre-tool-exec hook: {}", hook.name());
+                // 移除 println，改用 debug_log
+                // println!("Executing pre-tool-exec hook: {}", hook.name());
                 hook.on_pre_tool_exec(ctx).await?;
                 
                 #[cfg(feature = "logging")]
@@ -359,7 +364,8 @@ impl HookRegistry {
                     );
                 }
                 
-                println!("Executing message-update hook: {}", hook.name());
+                // 移除 println，改用 debug_log
+                // println!("Executing message-update hook: {}", hook.name());
                 hook.on_message_update(ctx).await?;
                 
                 #[cfg(feature = "logging")]

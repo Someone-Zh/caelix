@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value as JsonValue};
 use futures::StreamExt;
+use std::sync::Arc;
 
 use crate::base::tool::{ToolResult, Tool};
 use crate::base::agent::Agent;
@@ -146,6 +147,7 @@ impl DelegateTaskTool {
             task_content: task_content.to_string(),
             session_id: session_id.clone(),
             span_id: span_id.clone(),
+            caelix_context: context.clone(), // 存储 CaelixContext 引用
         });
 
         // 提交任务到任务管理器
@@ -176,6 +178,7 @@ struct DelegateTaskRunnable {
     task_content: String,
     session_id: String,
     span_id: String,
+    caelix_context: Arc<crate::config::CaelixContext>, // 存储 CaelixContext 引用
 }
 
 impl std::fmt::Debug for DelegateTaskRunnable {
@@ -190,8 +193,8 @@ impl std::fmt::Debug for DelegateTaskRunnable {
 #[async_trait::async_trait]
 impl Runnable for DelegateTaskRunnable {
     async fn run(&self) -> anyhow::Result<()> {
-        // 从 RuntimeContext 获取 CaelixContext
-        let context = RuntimeContext::caelix_context();
+        // 使用存储的 CaelixContext
+        let context = &self.caelix_context;
         
         // 从上下文获取 agent
         let agent_spec = match context.agent_manager.get(&self.agent_name).await {

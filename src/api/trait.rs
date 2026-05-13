@@ -3,6 +3,8 @@
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use futures::Stream;
+use std::pin::Pin;
 use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::base::agent::AgentOutputChunk;
 use crate::runtime::message::agent_message::AgentMessage;
@@ -54,4 +56,23 @@ pub trait CaelixApi: Send + Sync {
     
     /// 获取会话通知历史
     async fn get_session_notifications(&self, session_id: &str) -> Result<Vec<NotificationMessage>, ApiError>;
+    
+    /// 异步触发聊天流（后台执行）
+    /// 
+    /// 该方法会立即返回，聊天过程在后台异步执行
+    /// 所有流式输出块会通过消息总线以 AgentMessageType::Chunk 类型发送
+    /// 调用方可通过 subscribe_chat_stream 订阅结果
+    async fn chat_stream_async(
+        &self,
+        request: ChatRequest,
+    ) -> Result<String, ApiError>;  // 返回 request_id 用于追踪
+    
+    /// 订阅聊天流
+    /// 
+    /// 返回一个 Stream，持续接收指定 session 的 Agent 消息
+    /// 可以通过取消 Stream 来主动断开订阅
+    async fn subscribe_chat_stream(
+        &self,
+        session_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = AgentMessage> + Send>>, ApiError>;
 }

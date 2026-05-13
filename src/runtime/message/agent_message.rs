@@ -18,4 +18,6 @@ pub struct AgentMessage {
     pub r#type: AgentMessageType,
     pub timestamp: DateTime<Utc>,
     pub content: String,
+    #[serde(default)]
+    pub agent_name: Option<String>,
 }

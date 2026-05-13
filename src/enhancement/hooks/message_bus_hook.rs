@@ -63,6 +63,7 @@ impl AgentHook for MessageBusHook {
                 r#type: AgentMessageType::Msg,
                 timestamp: Utc::now(),
                 content: content_json,
+                agent_name: Some(ctx.base.agent_name.clone()),
             };
 
             // 通过 RuntimeContext 获取 CaelixContext 和 MessageBus

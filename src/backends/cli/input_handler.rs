@@ -3,29 +3,35 @@
 use std::io::{self, BufRead, Write};
 
 /// 读取用户输入,支持多行输入
-/// 用户输入直到按下 Ctrl+D (EOF) 才算结束
+/// 用户使用回车换行继续输入，输入空行则提交结束
 /// 返回完整的输入内容
 pub fn read_multiline_input() -> io::Result<Option<String>> {
     let stdin = io::stdin();
     let mut lines = Vec::new();
     
-    print!("> ");
-    io::stdout().flush()?;
-    
-    for line in stdin.lock().lines() {
-        match line {
-            Ok(l) => {
-                // 收集所有行,直到遇到 EOF (Ctrl+D)
-                lines.push(l);
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+        
+        let mut line = String::new();
+        let bytes_read = stdin.lock().read_line(&mut line)?;
+        
+        if bytes_read == 0 {
+            // EOF (Ctrl+D)
+            if lines.is_empty() {
+                return Ok(None);
             }
-            Err(_e) => {
-                // Ctrl+D 导致 EOF
-                if lines.is_empty() {
-                    return Ok(None);
-                }
-                break;
-            }
+            break;
         }
+        
+        let trimmed = line.trim_end_matches(|c| c == '\n' || c == '\r').to_string();
+        
+        if trimmed.is_empty() && !lines.is_empty() {
+            // 空行且已有内容，提交
+            break;
+        }
+        
+        lines.push(trimmed);
     }
     
     if lines.is_empty() {

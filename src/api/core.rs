@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use futures::Stream;
 use futures::StreamExt;
+use std::pin::Pin;
 use crate::api::CaelixApi;
 use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::config::CaelixContext;
@@ -182,6 +184,7 @@ impl CaelixApi for CaelixApiImpl {
                 r#type: AgentMessageType::Msg,
                 timestamp: chrono::Utc::now(),
                 content: request_clone.message.clone(),
+                agent_name: request_clone.agent.clone(),
             };
             let _ = ctx_clone.message_bus.send_agent(user_msg);
             
@@ -314,5 +317,217 @@ impl CaelixApi for CaelixApiImpl {
         // 注意：通知消息不再持久化，只能从内存缓冲中获取
         // 这里返回空列表，实际应该通过订阅接口获取
         Ok(Vec::new())
+    }
+
+    async fn chat_stream_async(
+        &self,
+        request: ChatRequest,
+    ) -> Result<String, ApiError> {
+        // 1. 如果会话不存在则创建
+        if !self.context.session_manager.session_exists(&request.session_id).await {
+            self.context.session_manager
+                .create_session_config(request.session_id.clone())
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string()))?;
+        }
+        
+        // 2. 生成 request_id
+        let request_id = crate::runtime::id_generator::generate_request_id();
+        
+        // 3. 确定 provider 和 model
+        let default_provider = self.get_default_provider();
+        let default_model = self.get_default_model();
+        let provider_name = request.provider.clone()
+            .unwrap_or(default_provider);
+        let model_name = request.model.clone()
+            .unwrap_or(default_model);
+        
+        // 4. 克隆必要的依赖
+        let ctx_clone = self.context.clone();
+        let request_clone = request.clone();
+        let request_id_clone = request_id.clone();
+        
+        // 5. 在后台启动任务
+        tokio::spawn(async move {
+            // 5.1 创建 RuntimeContext
+            let work_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let runtime_ctx = crate::runtime::context::RuntimeContext::new(
+                Some(request_clone.session_id.clone()),
+                Some(request_id_clone.clone()),
+                work_dir,
+                provider_name.to_string(),
+                model_name.to_string(),
+                false,
+                ctx_clone.clone(),
+            );
+            
+            // 5.2 在 RuntimeContext scope 中执行
+            let result = crate::runtime::context::RuntimeContext::scope(runtime_ctx, async move {
+                // 获取 agent
+                let agent_name = request_clone.agent.as_deref().unwrap_or("default");
+                let agent_spec = ctx_clone.agent_manager.get(agent_name).await
+                    .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+                
+                // 获取 provider
+                let provider = {
+                    let provider_manager = ctx_clone.llm_provider_manager.read().await;
+                    provider_manager.get_provider(&provider_name)
+                        .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
+                        .clone()
+                };
+                
+                // 构建 LlmConfig
+                let config = LlmConfig {
+                    model_name: model_name.to_string(),
+                };
+                
+                // 构建消息列表
+                let history_messages = ctx_clone.session_manager
+                    .get_session_messages(&request_clone.session_id)
+                    .await
+                    .map_err(|e| ApiError::InternalError(e.to_string()))?;
+                
+                let mut messages: Vec<ChatMessage> = Vec::new();
+                for msg in history_messages.iter() {
+                    if msg.r#type == AgentMessageType::Msg {
+                        match serde_json::from_str::<ChatMessage>(&msg.content) {
+                            Ok(chat_msg) => messages.push(chat_msg),
+                            Err(_) => {
+                                messages.push(ChatMessage {
+                                    role: "user".to_string(),
+                                    content: msg.content.clone(),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                // 添加当前用户消息
+                messages.push(ChatMessage::user(request_clone.message.clone()));
+                
+                // 发送用户消息到消息总线
+                let user_msg = AgentMessage {
+                    session_id: request_clone.session_id.clone(),
+                    request_id: request_id_clone.clone(),
+                    span_id: crate::runtime::id_generator::generate_span_id(),
+                    r#type: AgentMessageType::Msg,
+                    timestamp: chrono::Utc::now(),
+                    content: request_clone.message.clone(),
+                    agent_name: request_clone.agent.clone(),
+                };
+                let _ = ctx_clone.message_bus.send_agent(user_msg);
+                
+                // 执行 agent 并处理流
+                let stream = agent_spec.execute(messages, provider, &config).await?;
+                
+                // 遍历流并将每个 chunk 发送到消息总线
+                use futures::StreamExt;
+                let mut stream = stream;
+                while let Some(chunk_result) = stream.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            // 将 AgentOutputChunk 转换为字符串
+                            let content = match &chunk {
+                                AgentOutputChunk::Content { content } => content.clone(),
+                                AgentOutputChunk::Reasoning { content } => format!("[思考] {}", content),
+                                AgentOutputChunk::ToolCall { name, arguments, .. } => {
+                                    format!("[工具调用] {}({})", name, arguments)
+                                }
+                                AgentOutputChunk::ToolResult { tool_name, result } => {
+                                    format!("[工具结果] {}: {}", tool_name, result)
+                                }
+                                AgentOutputChunk::Finish { .. } => String::new(),
+                            };
+                            
+                            // 创建 Chunk 消息
+                            let chunk_msg = AgentMessage {
+                                session_id: request_clone.session_id.clone(),
+                                request_id: request_id_clone.clone(),
+                                span_id: crate::runtime::id_generator::generate_span_id(),
+                                r#type: AgentMessageType::Chunk,
+                                timestamp: chrono::Utc::now(),
+                                content,
+                                agent_name: request_clone.agent.clone(),
+                            };
+                            
+                            // 发送到消息总线
+                            if let Err(e) = ctx_clone.message_bus.send_agent(chunk_msg) {
+                                eprintln!("⚠️  发送 chunk 到消息总线失败: {:?}", e);
+                            }
+                            
+                            // 如果是 Finish，发送 ChunkEnd 标记
+                            if matches!(chunk, AgentOutputChunk::Finish { .. }) {
+                                let end_msg = AgentMessage {
+                                    session_id: request_clone.session_id.clone(),
+                                    request_id: request_id_clone.clone(),
+                                    span_id: crate::runtime::id_generator::generate_span_id(),
+                                    r#type: AgentMessageType::ChunkEnd,
+                                    timestamp: chrono::Utc::now(),
+                                    content: String::new(),
+                                    agent_name: request_clone.agent.clone(),
+                                };
+                                let _ = ctx_clone.message_bus.send_agent(end_msg);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Agent 执行错误: {:?}", e);
+                            break;
+                        }
+                    }
+                }
+                
+                Ok::<_, ApiError>(())
+            }).await;
+            
+            if let Err(e) = result {
+                eprintln!("❌ chat_stream_async 执行失败: {:?}", e);
+            }
+        });
+        
+        // 6. 立即返回 request_id
+        Ok(request_id)
+    }
+
+    async fn subscribe_chat_stream(
+        &self,
+        session_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = AgentMessage> + Send>>, ApiError> {
+        // 验证会话存在
+        if !self.context.session_manager.session_exists(session_id).await {
+            return Err(ApiError::session_not_found(session_id));
+        }
+        
+        // 使用 SessionManager 的 subscribe_agent 方法
+        let (history, stream) = self.context.session_manager
+            .subscribe_agent(session_id.to_string())
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string()))?;
+        
+        // 先发送历史消息，然后订阅实时消息
+        // 将 Vec<AgentMessage> 转换为 Stream
+        use futures::stream;
+        
+        let history_stream = stream::iter(history);
+        
+        // 合并历史流和实时流
+        let session_id_owned = session_id.to_string();
+        let merged_stream = history_stream.chain(stream.map(move |result| {
+            result.unwrap_or_else(|e| {
+                // 处理接收错误，创建一个错误消息
+                AgentMessage {
+                    session_id: session_id_owned.clone(),
+                    request_id: String::new(),
+                    span_id: String::new(),
+                    r#type: AgentMessageType::Chunk,
+                    timestamp: chrono::Utc::now(),
+                    content: format!("订阅错误: {:?}", e),
+                    agent_name: None,
+                }
+            })
+        }));
+        
+        Ok(Box::pin(merged_stream))
     }
 }

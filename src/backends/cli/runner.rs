@@ -1,12 +1,10 @@
-/// CLI主循环运行器
-
 use std::sync::Arc;
 use std::io::Write;
 use clap::Parser;
 use futures::StreamExt;
 
 use crate::api::{CaelixApi, CaelixApiImpl, ChatRequest};
-use crate::base::agent::AgentOutputChunk;
+use crate::runtime::message::agent_message::AgentMessageType;
 use super::input_handler::read_multiline_input;
 use super::commands::handle_command;
 
@@ -144,7 +142,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         println!("✅ 使用指定 Model: {}", model);
     }
 
-    println!("\n💡 提示: 按 Ctrl+D 结束多行输入,输入 /quit 退出\n");
+    println!("\n💡 提示: 输入空行提交消息,输入 /quit 退出\n");
 
     // 主循环
     loop {
@@ -175,6 +173,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         // 发送消息
         println!("\n🤖 AI 正在回复...\n");
 
+        let input_clone = input.clone();
         let request = ChatRequest {
             session_id: session_id.clone(),
             message: input,
@@ -183,38 +182,55 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             agent: selected_agent.clone(),
         };
 
-        // 调用 chat_stream（RuntimeContext 在 API 层内部管理）
-        match api.chat_stream(request).await {
-            Ok(mut stream) => {
-                // 处理流式响应
-                while let Some(chunk_result) = stream.next().await {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            match chunk {
-                                AgentOutputChunk::Content { content } => {
-                                    print!("{}", content);
-                                    let _ = std::io::stdout().flush();
+        // 使用新的异步接口
+        match api.chat_stream_async(request).await {
+            Ok(request_id) => {
+                println!("📡 任务已提交，request_id: {}", request_id);
+                
+                // 订阅消息流
+                match api.subscribe_chat_stream(&session_id).await {
+                    Ok(mut stream) => {
+                        while let Some(msg) = stream.next().await {
+                            // 只处理当前 request 的消息
+                            if msg.request_id == request_id {
+                                match msg.r#type {
+                                    AgentMessageType::Chunk => {
+                                        print!("{}", msg.content);
+                                        let _ = std::io::stdout().flush();
+                                    }
+                                    AgentMessageType::ChunkEnd => {
+                                        println!();
+                                        // 当前请求已结束，但继续监听后续消息（如委派任务）
+                                    }
+                                    AgentMessageType::Msg => {
+                                        // 用户消息或其他完整消息，可以选择性显示
+                                        if msg.content != input_clone {
+                                            // 尝试解析为 ChatMessage 以获取更友好的显示
+                                            if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
+                                                println!("\n💬 [{}] {}", 
+                                                    msg.agent_name.as_deref().unwrap_or("AI"),
+                                                    chat_msg.content);
+                                            } else {
+                                                println!("\n💬 [{}] {}", 
+                                                    msg.agent_name.as_deref().unwrap_or("AI"),
+                                                    msg.content);
+                                            }
+                                        }
+                                    }
                                 }
-                                AgentOutputChunk::ToolCall { name, arguments, .. } => {
-                                    println!("\n🔧 调用工具: {}({})", name, arguments);
-                                }
-                                AgentOutputChunk::Finish { .. } => {
-                                    println!();
-                                    break;
-                                }
-                                _ => {}
                             }
-                        }
-                        Err(e) => {
-                            eprintln!("\n❌ 流式响应错误: {:?}", e);
-                            break;
+                            
+                            // 为了支持委派任务，我们持续监听所有相关消息
+                            // 用户可以通过 Ctrl+C 手动中断
                         }
                     }
+                    Err(e) => {
+                        eprintln!("❌ 订阅失败: {:?}", e);
+                    }
                 }
-                println!(); // 添加换行
             }
             Err(e) => {
-                eprintln!("❌ 聊天错误: {:?}", e);
+                eprintln!("❌ 提交任务失败: {:?}", e);
             }
         }
 
