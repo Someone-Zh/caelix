@@ -1,11 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use chrono::{DateTime, Utc};
 use crate::base::tool::Tool;
 
 /// Agent 输出流分片
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentOutputChunk {
+    Start { timestamp: DateTime<Utc> },
+    CallProvider { 
+        timestamp: DateTime<Utc>,
+        provider: String,
+        model: String 
+    },
     Reasoning { content: String },
     Content { content: String },
     ToolCall {
@@ -23,6 +30,8 @@ pub enum AgentOutputChunk {
 impl std::fmt::Display for AgentOutputChunk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AgentOutputChunk::Start { .. } => write!(f, ""),
+            AgentOutputChunk::CallProvider { .. } => write!(f, ""),
             AgentOutputChunk::Reasoning { content } => write!(f, "{}", content),
             AgentOutputChunk::Content { content } => write!(f, "{}", content),
             AgentOutputChunk::ToolCall { name, .. } => write!(f, "[工具调用: {}]", name),

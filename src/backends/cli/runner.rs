@@ -5,6 +5,7 @@ use futures::StreamExt;
 
 use crate::api::{CaelixApi, CaelixApiImpl, ChatRequest};
 use crate::runtime::message::agent_message::AgentMessageType;
+use crate::runtime::message::task_message::TaskMessageType;
 use super::input_handler::read_multiline_input;
 use super::commands::handle_command;
 
@@ -144,6 +145,42 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 
     println!("\n💡 提示: 输入空行提交消息,输入 /quit 退出\n");
 
+    // 启动后台任务监听任务和通知消息
+    let session_id_clone = session_id.clone();
+    let message_bus = api.message_bus().clone();
+    
+    // 监听任务消息
+    tokio::spawn(async move {
+        let mut task_receiver = message_bus.subscribe_task();
+        while let Ok(task_msg) = task_receiver.recv().await {
+            if task_msg.session_id == session_id_clone {
+                let timestamp = task_msg.timestamp.format("%H:%M:%S");
+                let status_icon = match task_msg.r#type {
+                    TaskMessageType::Started => "🚀",
+                    TaskMessageType::Completed => "✅",
+                    TaskMessageType::Failed => "❌",
+                    TaskMessageType::Progress => "⏳",
+                };
+                println!("\n[{}] {} [任务] {}", timestamp, status_icon, task_msg.content);
+                let _ = std::io::stdout().flush();
+            }
+        }
+    });
+    
+    // 监听通知消息
+    let session_id_clone2 = session_id.clone();
+    let message_bus2 = api.message_bus().clone();
+    tokio::spawn(async move {
+        let mut notif_receiver = message_bus2.subscribe_notification();
+        while let Ok(notif_msg) = notif_receiver.recv().await {
+            if notif_msg.session_id == session_id_clone2 {
+                let timestamp = notif_msg.timestamp.format("%H:%M:%S");
+                println!("\n[{}] 🔔 [通知] {}", timestamp, notif_msg.content);
+                let _ = std::io::stdout().flush();
+            }
+        }
+    });
+
     // 主循环
     loop {
         // 读取用户输入
@@ -190,38 +227,61 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                 // 订阅消息流
                 match api.subscribe_chat_stream(&session_id).await {
                     Ok(mut stream) => {
-                        while let Some(msg) = stream.next().await {
-                            // 只处理当前 request 的消息
-                            if msg.request_id == request_id {
-                                match msg.r#type {
-                                    AgentMessageType::Chunk => {
-                                        print!("{}", msg.content);
-                                        let _ = std::io::stdout().flush();
-                                    }
-                                    AgentMessageType::ChunkEnd => {
-                                        println!();
-                                        // 当前请求已结束，但继续监听后续消息（如委派任务）
-                                    }
-                                    AgentMessageType::Msg => {
-                                        // 用户消息或其他完整消息，可以选择性显示
-                                        if msg.content != input_clone {
-                                            // 尝试解析为 ChatMessage 以获取更友好的显示
-                                            if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
-                                                println!("\n💬 [{}] {}", 
-                                                    msg.agent_name.as_deref().unwrap_or("AI"),
-                                                    chat_msg.content);
-                                            } else {
-                                                println!("\n💬 [{}] {}", 
-                                                    msg.agent_name.as_deref().unwrap_or("AI"),
-                                                    msg.content);
+                        use tokio::time::{timeout, Duration};
+                        
+                        // 设置超时时间，用于等待异步任务的结果
+                        let idle_timeout = Duration::from_secs(10); // 10秒无新消息则退出
+                        
+                        loop {
+                            // 使用 timeout 包装 stream.next()
+                            match timeout(idle_timeout, stream.next()).await {
+                                Ok(Some(msg)) => {
+                                    // 处理当前 session 的所有消息（包括异步任务的结果）
+                                    match msg.r#type {
+                                        AgentMessageType::Chunk => {
+                                            // 只打印当前 request 的 chunk
+                                            if msg.request_id == request_id {
+                                                // Chunk 是流式输出，直接打印内容，不加时间戳和换行
+                                                print!("{}", msg.content);
+                                                let _ = std::io::stdout().flush();
+                                            }
+                                        }
+                                        AgentMessageType::ChunkEnd => {
+                                            // 流结束后换行，但不立即退出，继续等待异步任务
+                                            if msg.request_id == request_id {
+                                                println!(); // 流结束后换行
+                                            }
+                                        }
+                                        AgentMessageType::Msg => {
+                                            // 显示所有完整消息（包括异步任务的结果）
+                                            if msg.content != input_clone {
+                                                let timestamp = msg.timestamp.format("%H:%M:%S");
+                                                // 尝试解析为 ChatMessage 以获取更友好的显示
+                                                if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
+                                                    println!("\n[{}] 💬 [{}] {}", 
+                                                        timestamp,
+                                                        msg.agent_name.as_deref().unwrap_or("AI"),
+                                                        chat_msg.content);
+                                                } else {
+                                                    println!("\n[{}] 💬 [{}] {}", 
+                                                        timestamp,
+                                                        msg.agent_name.as_deref().unwrap_or("AI"),
+                                                        msg.content);
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                Ok(None) => {
+                                    // 流结束，退出
+                                    break;
+                                }
+                                Err(_) => {
+                                    // 超时，退出监听
+                                    println!("\n⏱️  监听超时，返回主菜单");
+                                    break;
+                                }
                             }
-                            
-                            // 为了支持委派任务，我们持续监听所有相关消息
-                            // 用户可以通过 Ctrl+C 手动中断
                         }
                     }
                     Err(e) => {

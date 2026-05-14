@@ -52,8 +52,22 @@ async fn run_agent_loop_inner(
     config: LlmConfig,
     tx: tokio::sync::mpsc::Sender<Result<AgentOutputChunk, AgentError>>,
 ) {
+    // 发送 Start 事件
+    let _ = tx.send(Ok(AgentOutputChunk::Start { 
+        timestamp: chrono::Utc::now() 
+    })).await;
+    
     loop {
             let tool_defs = agent.get_tool_definitions();
+            
+            // 发送 CallProvider 事件
+            let provider_name = llm_provider.config().name.clone();
+            let _ = tx.send(Ok(AgentOutputChunk::CallProvider {
+                timestamp: chrono::Utc::now(),
+                provider: provider_name,
+                model: config.model_name.clone(),
+            })).await;
+            
             let mut stream = match llm_provider.chat_stream(&current_messages, &tool_defs, &config).await {
                 Ok(s) => s,
                 Err(e) => {

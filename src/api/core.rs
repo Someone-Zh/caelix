@@ -430,13 +430,19 @@ impl CaelixApi for CaelixApiImpl {
                         Ok(chunk) => {
                             // 将 AgentOutputChunk 转换为字符串
                             let content = match &chunk {
+                                AgentOutputChunk::Start { timestamp } => {
+                                    format!("\n[开始] {}", timestamp.format("%H:%M:%S"))
+                                },
+                                AgentOutputChunk::CallProvider { timestamp, provider, model } => {
+                                    format!("\n[调用模型] {} {}@{}", timestamp.format("%H:%M:%S"), provider, model)
+                                },
                                 AgentOutputChunk::Content { content } => content.clone(),
                                 AgentOutputChunk::Reasoning { content } => format!("[思考] {}", content),
                                 AgentOutputChunk::ToolCall { name, arguments, .. } => {
-                                    format!("[工具调用] {}({})", name, arguments)
+                                    format!("\n[工具调用] {}({})", name, arguments)
                                 }
                                 AgentOutputChunk::ToolResult { tool_name, result } => {
-                                    format!("[工具结果] {}: {}", tool_name, result)
+                                    format!("\n[工具结果] {}: {}", tool_name, result)
                                 }
                                 AgentOutputChunk::Finish { .. } => String::new(),
                             };
