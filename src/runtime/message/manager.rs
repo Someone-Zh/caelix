@@ -26,8 +26,8 @@ pub struct SessionManager {
     storage: Arc<dyn StorageBackend>,
     // 内存状态：session_id -> state
     states: Arc<tokio::sync::RwLock<HashMap<String, SessionState>>>,
-    // Agent 消息缓冲：(session_id, span_id) -> Vec<AgentMessage>
-    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String), Vec<AgentMessage>>>>,
+    // Agent 消息缓冲：(session_id, request_id, span_id) -> Vec<AgentMessage>
+    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>>,
     // Notification 消息通道和历史记录
     notification_channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
     notification_history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
@@ -59,7 +59,7 @@ impl std::fmt::Debug for SessionManager {
 async fn run_agent_consumer(
     mut rx: broadcast::Receiver<AgentMessage>,
     storage: Arc<dyn StorageBackend>,
-    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String), Vec<AgentMessage>>>>,
+    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>>,
 ) {
     loop {
         match rx.recv().await {
@@ -72,14 +72,14 @@ async fn run_agent_consumer(
                         }
                     }
                     AgentMessageType::Chunk => {
-                        // 积累 Chunk 消息
-                        let key = (msg.session_id.clone(), msg.span_id.clone());
+                        // 积累 Chunk 消息 - 使用 (session_id, request_id, span_id) 作为唯一标识
+                        let key = (msg.session_id.clone(), msg.request_id.clone(), msg.span_id.clone());
                         let mut buffers = agent_buffers.write().await;
                         buffers.entry(key).or_insert_with(Vec::new).push(msg);
                     }
                     AgentMessageType::ChunkEnd => {
-                        // 清空该 span_id 的缓冲
-                        let key = (msg.session_id.clone(), msg.span_id.clone());
+                        // 清空该 (session_id, request_id, span_id) 的缓冲 - 只清理对应请求的缓冲
+                        let key = (msg.session_id.clone(), msg.request_id.clone(), msg.span_id.clone());
                         let mut buffers = agent_buffers.write().await;
                         buffers.remove(&key);
                     }
@@ -179,7 +179,8 @@ async fn run_task_consumer(
 impl SessionManager {
     pub fn new(bus: MessageBus, storage: Arc<dyn StorageBackend>) -> Self {
         let states = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let agent_buffers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>> = 
+            Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let notification_channels = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let notification_history = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let task_channels = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
@@ -246,10 +247,10 @@ impl SessionManager {
         let mut accumulated = Vec::new();
         {
             // 先收集 keys（快速读取）
-            let keys_to_remove: Vec<(String, String)> = {
+            let keys_to_remove: Vec<(String, String, String)> = {
                 let buffers = self.agent_buffers.read().await;
                 buffers.keys()
-                    .filter(|(sess_id, _)| sess_id == &session_id)
+                    .filter(|(sess_id, _, _)| sess_id == &session_id)
                     .cloned()
                     .collect()
             };
@@ -439,5 +440,15 @@ impl SessionManager {
     /// 获取会话的完整 Agent 消息历史
     pub async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>> {
         self.storage.read_agent_messages(session_id).await
+    }
+    
+    /// 获取 agent_buffers 引用（用于信号处理）
+    pub fn get_agent_buffers(&self) -> &Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>> {
+        &self.agent_buffers
+    }
+    
+    /// 获取 storage 引用（用于信号处理）
+    pub fn get_storage(&self) -> &Arc<dyn StorageBackend> {
+        &self.storage
     }
 }

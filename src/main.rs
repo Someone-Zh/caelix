@@ -10,6 +10,7 @@ mod utils;
 use std::sync::Arc;
 use crate::config::CaelixContext;
 use crate::api::{CaelixApi, CaelixApiImpl};
+use tokio::signal;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,6 +36,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 创建 API 实现
     let api = Arc::new(CaelixApiImpl::new(caelix_ctx.clone()));
+    
+    // 启动信号监听任务
+    let session_manager_clone = caelix_ctx.session_manager.clone();
+    tokio::spawn(async move {
+        signal_ctrl_c(session_manager_clone).await;
+    });
     
     // 根据 features 和参数启动相应的后端
     if args.len() > 1 {
@@ -98,6 +105,42 @@ fn print_usage() {
     println!("  - http-server");
     #[cfg(feature = "tui")]
     println!("  - tui");
+}
+
+/// Ctrl+C 信号处理器
+async fn signal_ctrl_c(session_manager: Arc<crate::runtime::message::manager::SessionManager>) {
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            println!("\n⚠️  收到退出信号，正在保存未持久化的消息...");
+            
+            // Flush 所有 agent_buffers 中的 Chunk 消息
+            flush_pending_messages(session_manager).await;
+            
+            println!("✅ 消息已保存，安全退出");
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("❌ 无法监听 Ctrl+C 信号: {}", err);
+        }
+    }
+}
+
+/// Flush 待持久化的消息
+async fn flush_pending_messages(session_manager: Arc<crate::runtime::message::manager::SessionManager>) {
+    use crate::runtime::message::agent_message::AgentMessageType;
+    
+    // 访问 agent_buffers 并持久化所有待处理的 Chunk 消息
+    let buffers = session_manager.get_agent_buffers().read().await;
+    for ((_session_id, _request_id, _span_id), messages) in buffers.iter() {
+        for msg in messages {
+            // 只持久化 Msg 类型的消息（Chunk 不需要持久化）
+            if msg.r#type == AgentMessageType::Msg {
+                if let Err(e) = session_manager.get_storage().append_agent_message(msg).await {
+                    eprintln!("⚠️  保存消息失败: {:?}", e);
+                }
+            }
+        }
+    }
 }
 
 /// 根据启用的 features 自动启动默认后端（已弃用，CLI 为默认）

@@ -53,6 +53,13 @@ impl From<crate::base::AgentError> for ApiError {
     }
 }
 
+/// 从 anyhow::Error 转换为 ApiError
+impl From<anyhow::Error> for ApiError {
+    fn from(err: anyhow::Error) -> Self {
+        ApiError::InternalError(err.to_string())
+    }
+}
+
 /// 聊天请求
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatRequest {
@@ -120,4 +127,12 @@ pub struct ProviderInfo {
     pub name: String,
     pub llm_type: String,
     pub models: Vec<String>,
+}
+
+/// 异步聊天响应
+#[derive(Debug, Serialize, Clone)]
+pub struct ChatAsyncResult {
+    pub request_id: String,
+    pub span_id: String,
+    pub session_id: String,
 }

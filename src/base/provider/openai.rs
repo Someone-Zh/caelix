@@ -291,7 +291,11 @@ impl LlmProvider for OpenAIProvider {
         // 记录请求开始
         #[cfg(feature = "logging")]
         {
-            if RuntimeContext::is_debug_enabled() {
+            // 安全地检查 debug 模式，如果 context 不存在则跳过日志
+            let should_log = std::panic::catch_unwind(|| RuntimeContext::is_debug_enabled())
+                .unwrap_or(false);
+            
+            if should_log {
                 debug_log_ctx!(
                     "DEBUG",
                     "OpenAIProvider::chat_stream::Request",
@@ -340,7 +344,11 @@ impl LlmProvider for OpenAIProvider {
                 buffer.extend_from_slice(&bytes);
                 #[cfg(feature = "logging")]
                 {
-                    if RuntimeContext::is_debug_enabled() {
+                    // 安全地检查 debug 模式，如果 context 不存在则跳过日志
+                    let should_log = std::panic::catch_unwind(|| RuntimeContext::is_debug_enabled())
+                        .unwrap_or(false);
+                    
+                    if should_log {
                         debug_log_ctx!(
                             "DEBUG",
                             "OpenAIProvider::chat_stream::Response",

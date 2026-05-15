@@ -290,6 +290,9 @@ impl TaskManager {
             m.updated_at = Utc::now();
             meta = m.clone();
             
+            // 持久化状态更新
+            let _ = persistence.save(&meta).await;
+            
             // 通知等待者
             if let Some(tx) = opt_tx.take() {
                 let _ = tx.send(result.map_err(|e| anyhow::anyhow!(e)));

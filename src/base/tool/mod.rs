@@ -8,6 +8,7 @@ pub mod file_search;
 pub mod file_read;
 pub mod delegate_task;
 pub mod get_skill;
+pub mod list_tasks;
 
 
 pub use traits::{Tool, ToolCall,ToolDefinition,ToolResult};
@@ -17,4 +18,5 @@ pub use file_search::SmartSearchTool;
 pub use file_read::ReadFileTool;
 pub use delegate_task::DelegateTaskTool;
 pub use get_skill::GetSkillDetailTool;
+pub use list_tasks::ListTasksTool;
 pub use traits::ApiToolCall;

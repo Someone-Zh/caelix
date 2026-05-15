@@ -221,67 +221,56 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 
         // 使用新的异步接口
         match api.chat_stream_async(request).await {
-            Ok(request_id) => {
-                println!("📡 任务已提交，request_id: {}", request_id);
+            Ok(result) => {
+                println!("📡 任务已提交，request_id: {}, span_id: {}", result.request_id, result.span_id);
                 
                 // 订阅消息流
-                match api.subscribe_chat_stream(&session_id).await {
+                match api.subscribe_chat_stream(&result.session_id).await {
                     Ok(mut stream) => {
-                        use tokio::time::{timeout, Duration};
+                        let target_span_id = result.span_id.clone();
+                        let mut received_end = false;
                         
-                        // 设置超时时间，用于等待异步任务的结果
-                        let idle_timeout = Duration::from_secs(10); // 10秒无新消息则退出
-                        
-                        loop {
-                            // 使用 timeout 包装 stream.next()
-                            match timeout(idle_timeout, stream.next()).await {
-                                Ok(Some(msg)) => {
-                                    // 处理当前 session 的所有消息（包括异步任务的结果）
-                                    match msg.r#type {
-                                        AgentMessageType::Chunk => {
-                                            // 只打印当前 request 的 chunk
-                                            if msg.request_id == request_id {
-                                                // Chunk 是流式输出，直接打印内容，不加时间戳和换行
-                                                print!("{}", msg.content);
-                                                let _ = std::io::stdout().flush();
-                                            }
-                                        }
-                                        AgentMessageType::ChunkEnd => {
-                                            // 流结束后换行，但不立即退出，继续等待异步任务
-                                            if msg.request_id == request_id {
-                                                println!(); // 流结束后换行
-                                            }
-                                        }
-                                        AgentMessageType::Msg => {
-                                            // 显示所有完整消息（包括异步任务的结果）
-                                            if msg.content != input_clone {
-                                                let timestamp = msg.timestamp.format("%H:%M:%S");
-                                                // 尝试解析为 ChatMessage 以获取更友好的显示
-                                                if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
-                                                    println!("\n[{}] 💬 [{}] {}", 
-                                                        timestamp,
-                                                        msg.agent_name.as_deref().unwrap_or("AI"),
-                                                        chat_msg.content);
-                                                } else {
-                                                    println!("\n[{}] 💬 [{}] {}", 
-                                                        timestamp,
-                                                        msg.agent_name.as_deref().unwrap_or("AI"),
-                                                        msg.content);
-                                                }
-                                            }
+                        while let Some(msg) = stream.next().await {
+                            match msg.r#type {
+                                AgentMessageType::Chunk => {
+                                    // 只打印当前 request 和 span_id 的 chunk
+                                    if msg.request_id == result.request_id && msg.span_id == target_span_id {
+                                        // Chunk 是流式输出，直接打印内容，不加时间戳和换行
+                                        print!("{}", msg.content);
+                                        let _ = std::io::stdout().flush();
+                                    }
+                                }
+                                AgentMessageType::ChunkEnd => {
+                                    // ✅ 关键修改：检查是否是目标 span_id 的结束标记
+                                    if msg.span_id == target_span_id {
+                                        println!(); // 流结束后换行
+                                        received_end = true;
+                                        break; // 退出循环，重新开始接收用户输入
+                                    }
+                                }
+                                AgentMessageType::Msg => {
+                                    // 显示所有完整消息（包括异步任务的结果）
+                                    if msg.content != input_clone {
+                                        let timestamp = msg.timestamp.format("%H:%M:%S");
+                                        // 尝试解析为 ChatMessage 以获取更友好的显示
+                                        if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
+                                            println!("\n[{}] 💬 [{}] {}", 
+                                                timestamp,
+                                                msg.agent_name.as_deref().unwrap_or("AI"),
+                                                chat_msg.content);
+                                        } else {
+                                            println!("\n[{}] 💬 [{}] {}", 
+                                                timestamp,
+                                                msg.agent_name.as_deref().unwrap_or("AI"),
+                                                msg.content);
                                         }
                                     }
                                 }
-                                Ok(None) => {
-                                    // 流结束，退出
-                                    break;
-                                }
-                                Err(_) => {
-                                    // 超时，退出监听
-                                    println!("\n⏱️  监听超时，返回主菜单");
-                                    break;
-                                }
                             }
+                        }
+                        
+                        if !received_end {
+                            println!("\n⚠️  未收到结束信号，可能需要手动中断");
                         }
                     }
                     Err(e) => {

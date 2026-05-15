@@ -1,10 +1,9 @@
 use async_trait::async_trait;
 use serde_json::{json, Value as JsonValue};
-use futures::StreamExt;
 use std::sync::Arc;
 
 use crate::base::tool::{ToolResult, Tool};
-use crate::base::agent::Agent;
+use crate::base::agent::execute_agent_with_messaging;
 use crate::base::provider::ChatMessage;
 use crate::base::LlmConfig;
 use crate::runtime::{RuntimeContext, TaskKind, Runnable};
@@ -34,7 +33,27 @@ impl DelegateTaskTool {
     /// 从 RuntimeContext 获取所需的管理器，执行 agent 并仅返回 Content 内容
     async fn execute_agent_task(&self, agent_name: &str, task_content: &str) -> (String, Vec<String>) {
         // 从 RuntimeContext 获取 CaelixContext
-        let context = RuntimeContext::caelix_context();
+        let context = match std::panic::catch_unwind(|| RuntimeContext::caelix_context()) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                return (String::new(), vec!["无法获取运行时上下文".into()]);
+            }
+        };
+        
+        // 获取当前 session_id（用于消息总线）
+        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
+            Ok(id) => id,
+            Err(_) => {
+                return (String::new(), vec!["无法获取会话ID".into()]);
+            }
+        };
+        let request_id = crate::runtime::id_generator::generate_request_id();
+        let span_id = match std::panic::catch_unwind(|| RuntimeContext::span_id()) {
+            Ok(id) => id,
+            Err(_) => {
+                return (String::new(), vec!["无法获取 Span ID".into()]);
+            }
+        };
         
         // 从上下文获取 agent
         let agent_spec = match context.agent_manager.get(agent_name).await {
@@ -50,12 +69,24 @@ impl DelegateTaskTool {
             }
         };
 
-        // 获取 provider
+        // 获取 provider - 使用当前上下文的 provider
+        let provider_name = match std::panic::catch_unwind(|| RuntimeContext::provider()) {
+            Ok(name) => name,
+            Err(_) => {
+                return (String::new(), vec!["无法获取 Provider 名称".into()]);
+            }
+        };
         let provider_manager = context.llm_provider_manager.read().await;
-        let provider = match provider_manager.get_provider("bailian") {
-            Some(p) => p,
+        let provider = match provider_manager.get_provider(&provider_name) {
+            Some(p) => p.clone(),
             None => {
-                return (String::new(), vec!["未找到默认的 LLM provider".into()]);
+                // 降级：尝试获取第一个可用的 provider
+                match provider_manager.get_all_providers().first() {
+                    Some((_, p)) => p.clone(),
+                    None => {
+                        return (String::new(), vec!["未找到可用的 LLM provider".into()]);
+                    }
+                }
             }
         };
 
@@ -65,41 +96,30 @@ impl DelegateTaskTool {
         ];
 
         // 配置
+        let model_name = match std::panic::catch_unwind(|| RuntimeContext::model()) {
+            Ok(name) => name,
+            Err(_) => {
+                return (String::new(), vec!["无法获取 Model 名称".into()]);
+            }
+        };
         let config = LlmConfig {
-            model_name: provider.config().default_model().to_string(),
+            model_name,
         };
 
-        // 执行 agent
-        let mut stream = match agent_spec.execute(messages, provider.clone(), &config).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                return (String::new(), vec![format!("执行 agent 失败：{:?}", e)]);
-            }
-        };
-
-        // 收集结果 - 仅保留 Content 类型
-        let mut result_content = String::new();
-        let mut errors = Vec::new();
-        
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(chunk) => {
-                    use crate::base::agent::AgentOutputChunk;
-                    match chunk {
-                        AgentOutputChunk::Content { content } => {
-                            result_content.push_str(&content);
-                        }
-                        // 忽略 Reasoning、ToolCall、ToolResult、Finish
-                        _ => {}
-                    }
-                }
-                Err(e) => {
-                    errors.push(format!("{:?}", e));
-                }
-            }
+        // ✅ 使用公共执行器（会自动发送流到消息总线）
+        match execute_agent_with_messaging(
+            agent_spec,
+            messages,
+            provider,
+            &config,
+            session_id,
+            request_id,
+            span_id,
+            Some(agent_name.to_string()),
+        ).await {
+            Ok(content) => (content, Vec::new()),
+            Err(e) => (String::new(), vec![format!("执行 agent 失败：{:?}", e)]),
         }
-
-        (result_content, errors)
     }
 
     /// 同步执行委派任务
@@ -123,7 +143,15 @@ impl DelegateTaskTool {
     /// 异步执行委派任务
     async fn execute_async(&self, agent_name: &str, task_name: &str, task_content: &str) -> ToolResult {
         // 从 RuntimeContext 获取 CaelixContext 和 task_manager
-        let context = RuntimeContext::caelix_context();
+        let context = match std::panic::catch_unwind(|| RuntimeContext::caelix_context()) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("无法获取运行时上下文".into()),
+                };
+            }
+        };
         
         // 检查是否有 task_manager
         let task_manager = match &context.task_manager {
@@ -137,7 +165,16 @@ impl DelegateTaskTool {
         };
 
         // 生成 session_id 和 span_id
-        let session_id = format!("delegate_{}", agent_name);
+        // 使用当前上下文的 session_id，确保消息能被正确订阅
+        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
+            Ok(id) => id,
+            Err(_) => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("无法获取会话ID".into()),
+                };
+            }
+        };
         let span_id = crate::runtime::id_generator::generate_span_id();
 
         // 创建可运行任务
@@ -208,12 +245,24 @@ impl Runnable for DelegateTaskRunnable {
             }
         };
 
-        // 获取 provider
+        // 获取 provider - 使用当前上下文的 provider
+        let provider_name = match std::panic::catch_unwind(|| RuntimeContext::provider()) {
+            Ok(name) => name,
+            Err(_) => {
+                return Err(anyhow::anyhow!("无法获取 Provider 名称，可能不在有效的运行时上下文中"));
+            }
+        };
         let provider_manager = context.llm_provider_manager.read().await;
-        let provider = match provider_manager.get_provider("bailian") {
-            Some(p) => p,
+        let provider = match provider_manager.get_provider(&provider_name) {
+            Some(p) => p.clone(),
             None => {
-                return Err(anyhow::anyhow!("未找到默认的 LLM provider"));
+                // 降级：尝试获取第一个可用的 provider
+                match provider_manager.get_all_providers().first() {
+                    Some((_, p)) => p.clone(),
+                    None => {
+                        return Err(anyhow::anyhow!("未找到可用的 LLM provider"));
+                    }
+                }
             }
         };
 
@@ -222,39 +271,28 @@ impl Runnable for DelegateTaskRunnable {
             ChatMessage::user(self.task_content.clone()),
         ];
 
-        // 配置
+        // 配置 - 使用当前上下文的 model
+        let model_name = match std::panic::catch_unwind(|| RuntimeContext::model()) {
+            Ok(name) => name,
+            Err(_) => {
+                return Err(anyhow::anyhow!("无法获取 Model 名称，可能不在有效的运行时上下文中"));
+            }
+        };
         let config = LlmConfig {
-            model_name: provider.config().default_model().to_string(),
+            model_name,
         };
 
-        // 执行 agent
-        let mut stream = match agent_spec.execute(messages, provider.clone(), &config).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                return Err(anyhow::anyhow!("执行 agent 失败：{:?}", e));
-            }
-        };
-
-        // 收集结果 - 仅保留 Content 类型
-        let mut result_content = String::new();
-        
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(chunk) => {
-                    use crate::base::agent::AgentOutputChunk;
-                    match chunk {
-                        AgentOutputChunk::Content { content } => {
-                            result_content.push_str(&content);
-                        }
-                        // 忽略 Reasoning、ToolCall、ToolResult、Finish
-                        _ => {}
-                    }
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("执行过程中出现错误：{:?}", e));
-                }
-            }
-        }
+        // ✅ 使用公共执行器（会自动发送流到消息总线）
+        let _result = execute_agent_with_messaging(
+            agent_spec,
+            messages,
+            provider.clone(),
+            &config,
+            self.session_id.clone(),
+            crate::runtime::id_generator::generate_request_id(),  // 生成新的 request_id
+            self.span_id.clone(),
+            Some(self.agent_name.clone()),
+        ).await?;
 
         Ok(())
     }

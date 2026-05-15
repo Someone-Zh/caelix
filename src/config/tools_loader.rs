@@ -15,6 +15,8 @@ pub fn create_all_builtin_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(crate::base::tool::SmartSearchTool),
         // 文件读取工具
         Arc::new(crate::base::tool::ReadFileTool),
+        // 任务列表工具
+        Arc::new(crate::base::tool::ListTasksTool::new()),
     ]
 }
 

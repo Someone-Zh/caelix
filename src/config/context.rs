@@ -42,6 +42,10 @@ pub struct CaelixContext {
     /// Debug 模式是否启用
     #[allow(dead_code)] // 为将来使用预留
     pub debug_enabled: bool,
+    /// 默认 Provider 名称（初始化时设置）
+    pub default_provider: String,
+    /// 默认 Model 名称（初始化时设置）
+    pub default_model: String,
 }
 
 impl CaelixContext {
@@ -112,6 +116,9 @@ impl CaelixContext {
             message_bus: Arc::new(bus),
             task_manager: Some(task_manager),
             debug_enabled,
+            // 默认配置将在 init() 中设置
+            default_provider: String::new(),
+            default_model: String::new(),
         }
         
     }
@@ -257,6 +264,32 @@ impl CaelixContext {
         
         // 初始化命令
         self.init_commands().await?;
+        
+        // 恢复持久化的任务
+        if let Some(tm) = &self.task_manager {
+            if let Err(e) = tm.restore().await {
+                eprintln!("⚠️  恢复任务失败: {:?}", e);
+            } else {
+                println!("✅ 已恢复持久化的任务");
+            }
+        }
+        
+        // 设置默认 provider 和 model（获取第一个）
+        let provider_manager = self.llm_provider_manager.read().await;
+        let providers = provider_manager.get_all_providers();
+        
+        if let Some((name, provider)) = providers.first() {
+            // 安全地设置默认值（此时 init 还未返回，没有其他线程访问）
+            let ctx_ptr = self as *const CaelixContext as *mut CaelixContext;
+            unsafe {
+                (*ctx_ptr).default_provider = name.clone();
+                let config = provider.config();
+                let model = config.default_model();
+                if !model.is_empty() {
+                    (*ctx_ptr).default_model = model.to_string();
+                }
+            }
+        }
         
         Ok(())
     }

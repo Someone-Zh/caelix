@@ -36,15 +36,13 @@ impl CaelixApiImpl {
 #[async_trait]
 impl CaelixApi for CaelixApiImpl {
     fn get_default_provider(&self) -> String {
-        // 从配置中获取第一个可用的提供者作为默认
-        // 这里简化处理，实际应该从配置文件读取
-        "bailian".to_string()
+        // 从 context 中读取初始化时设置的默认 provider
+        self.context.default_provider.clone()
     }
 
     fn get_default_model(&self) -> String {
-        // 从配置中获取默认模型
-        // 这里简化处理，实际应该从配置文件读取
-        "qwen-max".to_string()
+        // 从 context 中读取初始化时设置的默认 model
+        self.context.default_model.clone()
     }
 
     async fn set_session_provider(&self, session_id: &str, provider: &str) -> Result<(), ApiError> {
@@ -322,7 +320,7 @@ impl CaelixApi for CaelixApiImpl {
     async fn chat_stream_async(
         &self,
         request: ChatRequest,
-    ) -> Result<String, ApiError> {
+    ) -> Result<crate::api::types::ChatAsyncResult, ApiError> {
         // 1. 如果会话不存在则创建
         if !self.context.session_manager.session_exists(&request.session_id).await {
             self.context.session_manager
@@ -331,8 +329,9 @@ impl CaelixApi for CaelixApiImpl {
                 .map_err(|e| ApiError::InternalError(e.to_string()))?;
         }
         
-        // 2. 生成 request_id
+        // 2. 生成 request_id 和 span_id
         let request_id = crate::runtime::id_generator::generate_request_id();
+        let span_id = crate::runtime::id_generator::generate_span_id();
         
         // 3. 确定 provider 和 model
         let default_provider = self.get_default_provider();
@@ -346,6 +345,7 @@ impl CaelixApi for CaelixApiImpl {
         let ctx_clone = self.context.clone();
         let request_clone = request.clone();
         let request_id_clone = request_id.clone();
+        let span_id_clone = span_id.clone();
         
         // 5. 在后台启动任务
         tokio::spawn(async move {
@@ -411,7 +411,7 @@ impl CaelixApi for CaelixApiImpl {
                 let user_msg = AgentMessage {
                     session_id: request_clone.session_id.clone(),
                     request_id: request_id_clone.clone(),
-                    span_id: crate::runtime::id_generator::generate_span_id(),
+                    span_id: span_id_clone.clone(),  // 使用预先生成的 span_id
                     r#type: AgentMessageType::Msg,
                     timestamp: chrono::Utc::now(),
                     content: request_clone.message.clone(),
@@ -419,70 +419,17 @@ impl CaelixApi for CaelixApiImpl {
                 };
                 let _ = ctx_clone.message_bus.send_agent(user_msg);
                 
-                // 执行 agent 并处理流
-                let stream = agent_spec.execute(messages, provider, &config).await?;
-                
-                // 遍历流并将每个 chunk 发送到消息总线
-                use futures::StreamExt;
-                let mut stream = stream;
-                while let Some(chunk_result) = stream.next().await {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            // 将 AgentOutputChunk 转换为字符串
-                            let content = match &chunk {
-                                AgentOutputChunk::Start { timestamp } => {
-                                    format!("\n[开始] {}", timestamp.format("%H:%M:%S"))
-                                },
-                                AgentOutputChunk::CallProvider { timestamp, provider, model } => {
-                                    format!("\n[调用模型] {} {}@{}", timestamp.format("%H:%M:%S"), provider, model)
-                                },
-                                AgentOutputChunk::Content { content } => content.clone(),
-                                AgentOutputChunk::Reasoning { content } => format!("[思考] {}", content),
-                                AgentOutputChunk::ToolCall { name, arguments, .. } => {
-                                    format!("\n[工具调用] {}({})", name, arguments)
-                                }
-                                AgentOutputChunk::ToolResult { tool_name, result } => {
-                                    format!("\n[工具结果] {}: {}", tool_name, result)
-                                }
-                                AgentOutputChunk::Finish { .. } => String::new(),
-                            };
-                            
-                            // 创建 Chunk 消息
-                            let chunk_msg = AgentMessage {
-                                session_id: request_clone.session_id.clone(),
-                                request_id: request_id_clone.clone(),
-                                span_id: crate::runtime::id_generator::generate_span_id(),
-                                r#type: AgentMessageType::Chunk,
-                                timestamp: chrono::Utc::now(),
-                                content,
-                                agent_name: request_clone.agent.clone(),
-                            };
-                            
-                            // 发送到消息总线
-                            if let Err(e) = ctx_clone.message_bus.send_agent(chunk_msg) {
-                                eprintln!("⚠️  发送 chunk 到消息总线失败: {:?}", e);
-                            }
-                            
-                            // 如果是 Finish，发送 ChunkEnd 标记
-                            if matches!(chunk, AgentOutputChunk::Finish { .. }) {
-                                let end_msg = AgentMessage {
-                                    session_id: request_clone.session_id.clone(),
-                                    request_id: request_id_clone.clone(),
-                                    span_id: crate::runtime::id_generator::generate_span_id(),
-                                    r#type: AgentMessageType::ChunkEnd,
-                                    timestamp: chrono::Utc::now(),
-                                    content: String::new(),
-                                    agent_name: request_clone.agent.clone(),
-                                };
-                                let _ = ctx_clone.message_bus.send_agent(end_msg);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("❌ Agent 执行错误: {:?}", e);
-                            break;
-                        }
-                    }
-                }
+                // ✅ 使用公共执行器（会自动发送流到消息总线）
+                let _result = crate::base::agent::execute_agent_with_messaging(
+                    agent_spec,
+                    messages,
+                    provider,
+                    &config,
+                    request_clone.session_id.clone(),
+                    request_id_clone.clone(),
+                    span_id_clone.clone(),
+                    request_clone.agent.clone(),
+                ).await?;
                 
                 Ok::<_, ApiError>(())
             }).await;
@@ -492,8 +439,12 @@ impl CaelixApi for CaelixApiImpl {
             }
         });
         
-        // 6. 立即返回 request_id
-        Ok(request_id)
+        // 6. 立即返回完整信息
+        Ok(crate::api::types::ChatAsyncResult {
+            request_id,
+            span_id,
+            session_id: request.session_id,
+        })
     }
 
     async fn subscribe_chat_stream(

@@ -65,7 +65,7 @@ pub trait CaelixApi: Send + Sync {
     async fn chat_stream_async(
         &self,
         request: ChatRequest,
-    ) -> Result<String, ApiError>;  // 返回 request_id 用于追踪
+    ) -> Result<crate::api::types::ChatAsyncResult, ApiError>;  // 返回 request_id、span_id 和 session_id
     
     /// 订阅聊天流
     /// 

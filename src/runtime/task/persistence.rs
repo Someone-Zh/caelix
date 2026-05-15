@@ -39,12 +39,7 @@ impl FilePersistence {
 #[async_trait]
 impl TaskPersistence for FilePersistence {
     async fn save(&self, meta: &TaskMeta) -> Result<()> {
-        // 只有定时和周期任务需要持久化
-        match meta.kind {
-            crate::runtime::task::types::TaskKind::Async => return Ok(()),
-            _ => {}
-        }
-
+        // 所有任务都需要持久化，包括 Async 任务
         self.ensure_dir().await?;
         let path = self.get_task_path(&meta.task_id.to_string());
         let json = serde_json::to_string_pretty(meta)?;
