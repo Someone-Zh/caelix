@@ -1,7 +1,7 @@
 use crate::enhancement::hooks::{AgentHook, HookCapability, PostToolExecContext};
 use async_trait::async_trait;
 
-const MAX_RESULT_SIZE: usize = 1024; // 1KB
+const MAX_RESULT_SIZE: usize = 102400; // 10KB
 
 /// ToolResultSizeCheckHook - 检查工具结果大小，超过1KB则截断
 pub struct ToolResultSizeCheckHook;
