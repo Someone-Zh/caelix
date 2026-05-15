@@ -26,6 +26,7 @@ impl MessageBus {
 
     /// 发送 Agent 消息
     #[allow(dead_code)] // 为将来外部访问预留
+    #[allow(clippy::result_large_err)]
     pub fn send_agent(&self, msg: AgentMessage) -> Result<(), broadcast::error::SendError<AgentMessage>> {
         self.agent_sender.send(msg)?;
         Ok(())

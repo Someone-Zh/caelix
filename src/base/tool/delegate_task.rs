@@ -7,6 +7,7 @@ use crate::base::agent::execute_agent_with_messaging;
 use crate::base::provider::ChatMessage;
 use crate::base::LlmConfig;
 use crate::runtime::{RuntimeContext, TaskKind, Runnable};
+use crate::runtime::context::RuntimeContextSnapshot;
 
 /// 委派任务工具
 /// 允许一个 agent 委派任务给另一个 agent 执行
@@ -33,7 +34,7 @@ impl DelegateTaskTool {
     /// 从 RuntimeContext 获取所需的管理器，执行 agent 并仅返回 Content 内容
     async fn execute_agent_task(&self, agent_name: &str, task_content: &str) -> (String, Vec<String>) {
         // 从 RuntimeContext 获取 CaelixContext
-        let context = match std::panic::catch_unwind(|| RuntimeContext::caelix_context()) {
+        let context = match std::panic::catch_unwind(RuntimeContext::caelix_context) {
             Ok(ctx) => ctx,
             Err(_) => {
                 return (String::new(), vec!["无法获取运行时上下文".into()]);
@@ -41,14 +42,14 @@ impl DelegateTaskTool {
         };
         
         // 获取当前 session_id（用于消息总线）
-        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
+        let session_id = match std::panic::catch_unwind(RuntimeContext::session_id) {
             Ok(id) => id,
             Err(_) => {
                 return (String::new(), vec!["无法获取会话ID".into()]);
             }
         };
         let request_id = crate::runtime::id_generator::generate_request_id();
-        let span_id = match std::panic::catch_unwind(|| RuntimeContext::span_id()) {
+        let span_id = match std::panic::catch_unwind(RuntimeContext::span_id) {
             Ok(id) => id,
             Err(_) => {
                 return (String::new(), vec!["无法获取 Span ID".into()]);
@@ -69,12 +70,12 @@ impl DelegateTaskTool {
             }
         };
 
-        // 获取 provider - 使用当前上下文的 provider
-        let provider_name = match std::panic::catch_unwind(|| RuntimeContext::provider()) {
-            Ok(name) => name,
-            Err(_) => {
-                return (String::new(), vec!["无法获取 Provider 名称".into()]);
-            }
+        // 获取 provider - 优先使用当前上下文的 provider，否则使用默认值
+        let provider_name = if let Ok(name) = std::panic::catch_unwind(RuntimeContext::provider) {
+            name
+        } else {
+            // 回退到默认 provider
+            context.default_provider.clone()
         };
         let provider_manager = context.llm_provider_manager.read().await;
         let provider = match provider_manager.get_provider(&provider_name) {
@@ -95,12 +96,12 @@ impl DelegateTaskTool {
             ChatMessage::user(task_content.to_string()),
         ];
 
-        // 配置
-        let model_name = match std::panic::catch_unwind(|| RuntimeContext::model()) {
-            Ok(name) => name,
-            Err(_) => {
-                return (String::new(), vec!["无法获取 Model 名称".into()]);
-            }
+        // 配置 - 优先使用当前上下文的 model，否则使用默认值
+        let model_name = if let Ok(name) = std::panic::catch_unwind(RuntimeContext::model) {
+            name
+        } else {
+            // 回退到默认 model
+            context.default_model.clone()
         };
         let config = LlmConfig {
             model_name,
@@ -143,7 +144,7 @@ impl DelegateTaskTool {
     /// 异步执行委派任务
     async fn execute_async(&self, agent_name: &str, task_name: &str, task_content: &str) -> ToolResult {
         // 从 RuntimeContext 获取 CaelixContext 和 task_manager
-        let context = match std::panic::catch_unwind(|| RuntimeContext::caelix_context()) {
+        let context = match std::panic::catch_unwind(RuntimeContext::caelix_context) {
             Ok(ctx) => ctx,
             Err(_) => {
                 return ToolResult {
@@ -166,7 +167,7 @@ impl DelegateTaskTool {
 
         // 生成 session_id 和 span_id
         // 使用当前上下文的 session_id，确保消息能被正确订阅
-        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
+        let session_id = match std::panic::catch_unwind(RuntimeContext::session_id) {
             Ok(id) => id,
             Err(_) => {
                 return ToolResult {
@@ -178,6 +179,9 @@ impl DelegateTaskTool {
         let span_id = crate::runtime::id_generator::generate_span_id();
 
         // 创建可运行任务
+        // 捕获当前 RuntimeContext 快照，用于异步执行时恢复上下文
+        let snapshot = RuntimeContextSnapshot::try_from_current();
+        
         let runnable = Box::new(DelegateTaskRunnable {
             agent_name: agent_name.to_string(),
             task_name: task_name.to_string(),
@@ -185,6 +189,7 @@ impl DelegateTaskTool {
             session_id: session_id.clone(),
             span_id: span_id.clone(),
             caelix_context: context.clone(), // 存储 CaelixContext 引用
+            runtime_context_snapshot: snapshot,
         });
 
         // 提交任务到任务管理器
@@ -216,6 +221,8 @@ struct DelegateTaskRunnable {
     session_id: String,
     span_id: String,
     caelix_context: Arc<crate::config::CaelixContext>, // 存储 CaelixContext 引用
+    // 新增：存储 RuntimeContext 快照，避免依赖 task-local storage
+    runtime_context_snapshot: Option<RuntimeContextSnapshot>,
 }
 
 impl std::fmt::Debug for DelegateTaskRunnable {
@@ -223,6 +230,7 @@ impl std::fmt::Debug for DelegateTaskRunnable {
         f.debug_struct("DelegateTaskRunnable")
             .field("agent_name", &self.agent_name)
             .field("task_content", &self.task_content)
+            .field("has_snapshot", &self.runtime_context_snapshot.is_some())
             .finish()
     }
 }
@@ -245,13 +253,14 @@ impl Runnable for DelegateTaskRunnable {
             }
         };
 
-        // 获取 provider - 使用当前上下文的 provider
-        let provider_name = match std::panic::catch_unwind(|| RuntimeContext::provider()) {
-            Ok(name) => name,
-            Err(_) => {
-                return Err(anyhow::anyhow!("无法获取 Provider 名称，可能不在有效的运行时上下文中"));
-            }
+        // 获取 provider - 优先使用快照中的 provider，否则使用默认值
+        let provider_name = if let Some(snapshot) = &self.runtime_context_snapshot {
+            snapshot.provider.clone()
+        } else {
+            // 回退到默认 provider
+            context.default_provider.clone()
         };
+        
         let provider_manager = context.llm_provider_manager.read().await;
         let provider = match provider_manager.get_provider(&provider_name) {
             Some(p) => p.clone(),
@@ -271,13 +280,14 @@ impl Runnable for DelegateTaskRunnable {
             ChatMessage::user(self.task_content.clone()),
         ];
 
-        // 配置 - 使用当前上下文的 model
-        let model_name = match std::panic::catch_unwind(|| RuntimeContext::model()) {
-            Ok(name) => name,
-            Err(_) => {
-                return Err(anyhow::anyhow!("无法获取 Model 名称，可能不在有效的运行时上下文中"));
-            }
+        // 配置 - 优先使用快照中的 model，否则使用默认值
+        let model_name = if let Some(snapshot) = &self.runtime_context_snapshot {
+            snapshot.model.clone()
+        } else {
+            // 回退到默认 model
+            context.default_model.clone()
         };
+        
         let config = LlmConfig {
             model_name,
         };

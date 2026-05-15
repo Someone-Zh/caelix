@@ -1,3 +1,4 @@
+#![allow(clippy::empty_line_after_doc_comments)]
 use crate::base::provider::*;
 use std::collections::HashMap;
 use crate::base::AgentError;
@@ -6,8 +7,6 @@ use std::sync::Arc;
 /// LLM提供者管理器模块
 /// 对应架构：第一层 - 核心层
 /// 该模块定义了LLM提供者的类型、配置和管理功能
-
-
 
 /// LLM提供者管理器
 /// 用于管理和访问不同的LLM提供者

@@ -20,6 +20,7 @@ use std::sync::Arc;
 /// 
 /// # 返回
 /// 返回收集到的纯文本内容（仅 Content 类型）
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_agent_with_messaging(
     agent_spec: Arc<AgentSpec>,
     messages: Vec<ChatMessage>,

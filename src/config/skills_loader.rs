@@ -130,7 +130,7 @@ pub async fn register_all_skills(
     // 从指定目录加载所有 skill
     let skills = load_skills_from_directory(directory_path)
         .await
-        .map_err(|e| SkillRegistryError::LoadError(e))?;
+        .map_err(SkillRegistryError::LoadError)?;
     
     // 注册所有加载的 skill
     for skill in skills {

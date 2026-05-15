@@ -32,13 +32,16 @@ pub async fn run_agent_loop(
     }).ok();
 
     tokio::spawn(async move {
-        // 如果有 RuntimeContext，在 scope 中执行
+        // 如果有 RuntimeContext，在 scope 中执行；否则返回错误
         if let Some(ctx) = runtime_ctx {
             crate::runtime::context::RuntimeContext::scope(ctx, async move {
                 run_agent_loop_inner(agent, messages, llm_provider, config, tx).await;
             }).await;
         } else {
-            run_agent_loop_inner(agent, messages, llm_provider, config, tx).await;
+            // 没有 RuntimeContext 时，发送错误并退出
+            let _ = tx.send(Err(AgentError::TaskError(
+                "No RuntimeContext available. This should not happen in normal operation.".to_string()
+            ))).await;
         }
     });
 
@@ -83,13 +86,12 @@ async fn run_agent_loop_inner(
                 match result {
                     Ok(chunk) => {
                         // 安全处理思考内容
-                        if let Some(r) = &chunk.reasoning_content {
-                            if !r.is_empty() {
+                        if let Some(r) = &chunk.reasoning_content
+                            && !r.is_empty() {
                                 let _ = tx.send(Ok(AgentOutputChunk::Reasoning {
                                     content: r.clone(),
                                 })).await;
                             }
-                        }
 
                         // 安全处理文本内容
                         if let Some(c) = &chunk.content {
@@ -202,7 +204,7 @@ async fn run_agent_loop_inner(
                     }
                 }
                 
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                     let base_ctx = BaseContext {
                         session_id: runtime_ctx.get_session_id().to_string(),
                         request_id: runtime_ctx.get_request_id().to_string(),
@@ -278,7 +280,7 @@ async fn run_agent_loop_inner(
                     }
                 }
                 
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                     let base_ctx = BaseContext {
                         session_id: runtime_ctx.get_session_id().to_string(),
                         request_id: runtime_ctx.get_request_id().to_string(),
@@ -333,7 +335,7 @@ async fn run_agent_loop_inner(
             let mut tool_results = Vec::new();
             for tc in &final_tool_calls {
                 // 在执行工具前调用钩子
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                     let base_ctx = BaseContext {
                         session_id: runtime_ctx.get_session_id().to_string(),
                         request_id: runtime_ctx.get_request_id().to_string(),
@@ -363,7 +365,7 @@ async fn run_agent_loop_inner(
                         // 在执行工具后调用钩子，允许修改结果
                         let mut final_result = tool_result.clone();
                         
-                        if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+                        if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                             let base_ctx = BaseContext {
                                 session_id: runtime_ctx.get_session_id().to_string(),
                                 request_id: runtime_ctx.get_request_id().to_string(),
@@ -433,7 +435,7 @@ async fn run_agent_loop_inner(
             }
             
             // 调用消息更新钩子（工具结果添加后）
-            if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
+            if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                 let base_ctx = BaseContext {
                     session_id: runtime_ctx.get_session_id().to_string(),
                     request_id: runtime_ctx.get_request_id().to_string(),

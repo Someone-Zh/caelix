@@ -98,7 +98,7 @@ pub async fn register_all_agents(context: &CaelixContext, directory_path: &str) 
     // 从指定目录加载所有 agent
     let mut agents = load_agents_from_directory(directory_path, &tool_manager, context)
         .await
-        .map_err(|e| AgentRegistryError::LoadError(e))?;
+        .map_err(AgentRegistryError::LoadError)?;
     
     // 对每个agent应用init-hooks进行增强
     for agent in agents.iter_mut() {

@@ -2,16 +2,13 @@ use serde::{Deserialize, Serialize};
 
 /// 命令种类
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default)]
 pub enum CommandType {
+    #[default]
     Prompt,   // 提示词
     Shell,    // Shell 命令
 }
 
-impl Default for CommandType {
-    fn default() -> Self {
-        Self::Prompt
-    }
-}
 
 /// 命令定义
 #[derive(Debug, Clone, Serialize, Deserialize)]

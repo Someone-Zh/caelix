@@ -134,11 +134,10 @@ async fn flush_pending_messages(session_manager: Arc<crate::runtime::message::ma
     for ((_session_id, _request_id, _span_id), messages) in buffers.iter() {
         for msg in messages {
             // 只持久化 Msg 类型的消息（Chunk 不需要持久化）
-            if msg.r#type == AgentMessageType::Msg {
-                if let Err(e) = session_manager.get_storage().append_agent_message(msg).await {
+            if msg.r#type == AgentMessageType::Msg
+                && let Err(e) = session_manager.get_storage().append_agent_message(msg).await {
                     eprintln!("⚠️  保存消息失败: {:?}", e);
                 }
-            }
         }
     }
 }

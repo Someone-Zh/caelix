@@ -1,9 +1,10 @@
+#![allow(clippy::empty_line_after_doc_comments)]
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use crate::base::ProviderConfig;
-/// Provider配置结
 
+/// Provider配置结
 
 /// 加载提供商配置
 pub fn load_provider_configs(caelix_home: &Path) -> Result<HashMap<String, ProviderConfig>, Box<dyn std::error::Error>> {
@@ -11,7 +12,7 @@ pub fn load_provider_configs(caelix_home: &Path) -> Result<HashMap<String, Provi
     
     // 如果目录不存在，创建它
     if !caelix_home.exists() {
-        fs::create_dir_all(&caelix_home)?;
+        fs::create_dir_all(caelix_home)?;
     }
     
     // 如果配置文件不存在，创建一个空的配置文件

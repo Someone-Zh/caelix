@@ -65,7 +65,7 @@ pub fn to_tool_json(tool: &ToolDefinition) -> JsonValue {
 }
 
 pub fn to_tools_array(definitions: &[ToolDefinition]) -> Vec<JsonValue> {
-    definitions.iter().map(|d| to_tool_json(d)).collect()
+    definitions.iter().map(to_tool_json).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -177,11 +177,10 @@ impl OpenAIProvider {
         tool_buffer: &mut Vec<ToolCallBuffer>,
         response_id: &mut String,
     ) -> Result<Option<ChatResponseChunk>, AgentError> {
-        if response_id.is_empty() {
-            if let Some(id) = json["id"].as_str() {
+        if response_id.is_empty()
+            && let Some(id) = json["id"].as_str() {
                 *response_id = id.to_string();
             }
-        }
 
         let choice = match json["choices"].as_array().and_then(|c| c.first()) {
             Some(c) => c,

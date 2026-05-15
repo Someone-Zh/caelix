@@ -51,8 +51,8 @@ impl ListTasksTool {
                 Ok(msg) => {
                     if msg.session_id == session_id {
                         // 从 content 中提取 task_id (格式: "Task {task_id} completed/failed")
-                        if msg.content.contains(&task_id) {
-                            if matches!(msg.r#type, TaskMessageType::Completed | TaskMessageType::Failed) {
+                        if msg.content.contains(&task_id)
+                            && matches!(msg.r#type, TaskMessageType::Completed | TaskMessageType::Failed) {
                                 // 获取最终任务状态
                                 if let Some(meta) = task_manager.get_status(&crate::runtime::TaskId(task_id.clone())).await {
                                     return ToolResult {
@@ -61,7 +61,6 @@ impl ListTasksTool {
                                     };
                                 }
                             }
-                        }
                     }
                 }
                 Err(_) => {
@@ -76,7 +75,7 @@ impl ListTasksTool {
 
     /// 阻塞等待当前 span_id 触发的所有任务完成
     async fn wait_for_all_tasks(&self, session_id: String) -> ToolResult {
-        let context = match std::panic::catch_unwind(|| RuntimeContext::caelix_context()) {
+        let context = match std::panic::catch_unwind(RuntimeContext::caelix_context) {
             Ok(ctx) => ctx,
             Err(_) => {
                 return ToolResult {
@@ -85,7 +84,7 @@ impl ListTasksTool {
                 };
             }
         };
-        let current_span_id = match std::panic::catch_unwind(|| RuntimeContext::span_id()) {
+        let current_span_id = match std::panic::catch_unwind(RuntimeContext::span_id) {
             Ok(id) => id,
             Err(_) => {
                 return ToolResult {
@@ -134,11 +133,10 @@ impl ListTasksTool {
                     if msg.session_id == session_id {
                         // 从 content 中提取 task_id
                         for task_id in &tasks_to_wait {
-                            if msg.content.contains(task_id) && !completed_tasks.contains(task_id) {
-                                if matches!(msg.r#type, TaskMessageType::Completed | TaskMessageType::Failed) {
+                            if msg.content.contains(task_id) && !completed_tasks.contains(task_id)
+                                && matches!(msg.r#type, TaskMessageType::Completed | TaskMessageType::Failed) {
                                     completed_tasks.insert(task_id.clone());
                                 }
-                            }
                         }
                     }
                 }
@@ -195,7 +193,7 @@ impl Tool for ListTasksTool {
 
     /// 执行任务列表查询
     async fn execute(&self, input: JsonValue) -> ToolResult {
-        let context = match std::panic::catch_unwind(|| RuntimeContext::caelix_context()) {
+        let context = match std::panic::catch_unwind(RuntimeContext::caelix_context) {
             Ok(ctx) => ctx,
             Err(_) => {
                 return ToolResult {
@@ -228,7 +226,7 @@ impl Tool for ListTasksTool {
             .unwrap_or(false);
 
         // 获取 session_id
-        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
+        let session_id = match std::panic::catch_unwind(RuntimeContext::session_id) {
             Ok(id) => id,
             Err(_) => {
                 return ToolResult {

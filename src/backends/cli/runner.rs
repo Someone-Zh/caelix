@@ -149,7 +149,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     let session_id_clone = session_id.clone();
     let message_bus = api.message_bus().clone();
     
-    // 监听任务消息
+    // 监听任务消息 - 不需要 RuntimeContext，仅用于打印输出
     tokio::spawn(async move {
         let mut task_receiver = message_bus.subscribe_task();
         while let Ok(task_msg) = task_receiver.recv().await {
@@ -167,7 +167,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         }
     });
     
-    // 监听通知消息
+    // 监听通知消息 - 不需要 RuntimeContext，仅用于打印输出
     let session_id_clone2 = session_id.clone();
     let message_bus2 = api.message_bus().clone();
     tokio::spawn(async move {

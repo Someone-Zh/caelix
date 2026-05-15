@@ -63,13 +63,14 @@ impl CommandHandler {
                 app.active_view = AppView::Chat;
             }
             "session" => {
-                // 加载session列表
+                // 加载 session 列表
                 app.push_view(AppView::SessionList);
                 app.is_loading_sessions = true;
                 app.selected_session_idx = 0;
-                
+                            
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
+                // 注意：API 层内部已经处理了 RuntimeContext，这里不需要额外传递
                 tokio::spawn(async move {
                     if let Ok(sessions) = api_clone.list_sessions().await {
                         if let Some(tx) = tx {

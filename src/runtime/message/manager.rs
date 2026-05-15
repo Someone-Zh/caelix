@@ -21,13 +21,16 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
+// 类型别名，简化复杂类型
+type AgentBufferMap = HashMap<(String, String, String), Vec<AgentMessage>>;
+
 pub struct SessionManager {
     bus: MessageBus,
     storage: Arc<dyn StorageBackend>,
     // 内存状态：session_id -> state
     states: Arc<tokio::sync::RwLock<HashMap<String, SessionState>>>,
     // Agent 消息缓冲：(session_id, request_id, span_id) -> Vec<AgentMessage>
-    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>>,
+    agent_buffers: Arc<tokio::sync::RwLock<AgentBufferMap>>,
     // Notification 消息通道和历史记录
     notification_channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
     notification_history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
@@ -59,33 +62,28 @@ impl std::fmt::Debug for SessionManager {
 async fn run_agent_consumer(
     mut rx: broadcast::Receiver<AgentMessage>,
     storage: Arc<dyn StorageBackend>,
-    agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>>,
+    agent_buffers: Arc<tokio::sync::RwLock<AgentBufferMap>>,
 ) {
-    loop {
-        match rx.recv().await {
-            Ok(msg) => {
-                match msg.r#type {
-                    AgentMessageType::Msg => {
-                        // 持久化 Msg 类型
-                        if let Err(e) = storage.append_agent_message(&msg).await {
-                            eprintln!("[Storage Error] Failed to append agent message: {}", e);
-                        }
-                    }
-                    AgentMessageType::Chunk => {
-                        // 积累 Chunk 消息 - 使用 (session_id, request_id, span_id) 作为唯一标识
-                        let key = (msg.session_id.clone(), msg.request_id.clone(), msg.span_id.clone());
-                        let mut buffers = agent_buffers.write().await;
-                        buffers.entry(key).or_insert_with(Vec::new).push(msg);
-                    }
-                    AgentMessageType::ChunkEnd => {
-                        // 清空该 (session_id, request_id, span_id) 的缓冲 - 只清理对应请求的缓冲
-                        let key = (msg.session_id.clone(), msg.request_id.clone(), msg.span_id.clone());
-                        let mut buffers = agent_buffers.write().await;
-                        buffers.remove(&key);
-                    }
+    while let Ok(msg) = rx.recv().await {
+        match msg.r#type {
+            AgentMessageType::Msg => {
+                // 持久化 Msg 类型
+                if let Err(e) = storage.append_agent_message(&msg).await {
+                    eprintln!("[Storage Error] Failed to append agent message: {}", e);
                 }
             }
-            Err(_) => break,
+            AgentMessageType::Chunk => {
+                // 积累 Chunk 消息 - 使用 (session_id, request_id, span_id) 作为唯一标识
+                let key = (msg.session_id.clone(), msg.request_id.clone(), msg.span_id.clone());
+                let mut buffers = agent_buffers.write().await;
+                buffers.entry(key).or_insert_with(Vec::new).push(msg);
+            }
+            AgentMessageType::ChunkEnd => {
+                // 清空该 (session_id, request_id, span_id) 的缓冲 - 只清理对应请求的缓冲
+                let key = (msg.session_id.clone(), msg.request_id.clone(), msg.span_id.clone());
+                let mut buffers = agent_buffers.write().await;
+                buffers.remove(&key);
+            }
         }
     }
 }
@@ -96,40 +94,35 @@ async fn run_notification_consumer(
     channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
     history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
 ) {
-    loop {
-        match rx.recv().await {
-            Ok(msg) => {
-                let session_id = msg.session_id.clone();
-                
-                // 获取或创建通道
-                let sender = {
-                    let mut channs = channels.write().await;
-                    channs.entry(session_id.clone())
-                        .or_insert_with(|| {
-                            let (tx, _rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
-                            tx
-                        })
-                        .clone()
-                };
-                
-                // 尝试发送（如果通道满会阻塞，实现背压）
-                if sender.send(msg.clone()).await.is_err() {
-                    // 接收者已断开，清理通道
-                    let mut channs = channels.write().await;
-                    channs.remove(&session_id);
-                    continue;
-                }
-                
-                // 同时保存到历史记录（限制大小）
-                let mut hist = history.write().await;
-                let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
-                if hist_vec.len() >= MAX_HISTORY_SIZE {
-                    hist_vec.pop_front();
-                }
-                hist_vec.push_back(msg);
-            }
-            Err(_) => break,
+    while let Ok(msg) = rx.recv().await {
+        let session_id = msg.session_id.clone();
+        
+        // 获取或创建通道
+        let sender = {
+            let mut channs = channels.write().await;
+            channs.entry(session_id.clone())
+                .or_insert_with(|| {
+                    let (tx, _rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+                    tx
+                })
+                .clone()
+        };
+        
+        // 尝试发送（如果通道满会阻塞，实现背压）
+        if sender.send(msg.clone()).await.is_err() {
+            // 接收者已断开，清理通道
+            let mut channs = channels.write().await;
+            channs.remove(&session_id);
+            continue;
         }
+        
+        // 同时保存到历史记录（限制大小）
+        let mut hist = history.write().await;
+        let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
+        if hist_vec.len() >= MAX_HISTORY_SIZE {
+            hist_vec.pop_front();
+        }
+        hist_vec.push_back(msg);
     }
 }
 
@@ -139,47 +132,42 @@ async fn run_task_consumer(
     channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<TaskMessage>>>>,
     history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<TaskMessage>>>>,
 ) {
-    loop {
-        match rx.recv().await {
-            Ok(msg) => {
-                let session_id = msg.session_id.clone();
-                
-                // 获取或创建通道
-                let sender = {
-                    let mut channs = channels.write().await;
-                    channs.entry(session_id.clone())
-                        .or_insert_with(|| {
-                            let (tx, _rx) = mpsc::channel(TASK_CHANNEL_CAPACITY);
-                            tx
-                        })
-                        .clone()
-                };
-                
-                // 尝试发送（如果通道满会阻塞，实现背压）
-                if sender.send(msg.clone()).await.is_err() {
-                    // 接收者已断开，清理通道
-                    let mut channs = channels.write().await;
-                    channs.remove(&session_id);
-                    continue;
-                }
-                
-                // 同时保存到历史记录（限制大小）
-                let mut hist = history.write().await;
-                let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
-                if hist_vec.len() >= MAX_HISTORY_SIZE {
-                    hist_vec.pop_front();
-                }
-                hist_vec.push_back(msg);
-            }
-            Err(_) => break,
+    while let Ok(msg) = rx.recv().await {
+        let session_id = msg.session_id.clone();
+        
+        // 获取或创建通道
+        let sender = {
+            let mut channs = channels.write().await;
+            channs.entry(session_id.clone())
+                .or_insert_with(|| {
+                    let (tx, _rx) = mpsc::channel(TASK_CHANNEL_CAPACITY);
+                    tx
+                })
+                .clone()
+        };
+        
+        // 尝试发送（如果通道满会阻塞，实现背压）
+        if sender.send(msg.clone()).await.is_err() {
+            // 接收者已断开，清理通道
+            let mut channs = channels.write().await;
+            channs.remove(&session_id);
+            continue;
         }
+        
+        // 同时保存到历史记录（限制大小）
+        let mut hist = history.write().await;
+        let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
+        if hist_vec.len() >= MAX_HISTORY_SIZE {
+            hist_vec.pop_front();
+        }
+        hist_vec.push_back(msg);
     }
 }
 
 impl SessionManager {
     pub fn new(bus: MessageBus, storage: Arc<dyn StorageBackend>) -> Self {
         let states = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-        let agent_buffers: Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>> = 
+        let agent_buffers: Arc<tokio::sync::RwLock<AgentBufferMap>> = 
             Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let notification_channels = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
         let notification_history = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
@@ -200,6 +188,7 @@ impl SessionManager {
         let task_rx = bus.subscribe_task();
 
         // 启动三个独立的消费者任务
+        // 注意：这些消费者函数不需要 RuntimeContext，因为它们只处理消息分发和持久化
         let _agent_handle = tokio::spawn(async move {
             run_agent_consumer(agent_rx, storage_clone, agent_buffers_clone).await;
         });
@@ -443,7 +432,7 @@ impl SessionManager {
     }
     
     /// 获取 agent_buffers 引用（用于信号处理）
-    pub fn get_agent_buffers(&self) -> &Arc<tokio::sync::RwLock<HashMap<(String, String, String), Vec<AgentMessage>>>> {
+    pub fn get_agent_buffers(&self) -> &Arc<tokio::sync::RwLock<AgentBufferMap>> {
         &self.agent_buffers
     }
     

@@ -94,7 +94,7 @@ impl Tool for ReadFileTool {
         let end_line = input["end_line"].as_u64().map(|v| v as usize);
 
         // 行号合法性校验
-        if end_line.map_or(false, |end| end < start_line) {
+        if end_line.is_some_and(|end| end < start_line) {
             return ToolResult {
                 output: String::new(),
                 error: Some("end_line cannot be less than start_line".to_string()),
@@ -120,11 +120,10 @@ impl Tool for ReadFileTool {
             current_line += 1;
 
             // 提前终止：超过结束行直接停止
-            if let Some(end) = end_line {
-                if current_line > end {
+            if let Some(end) = end_line
+                && current_line > end {
                     break;
                 }
-            }
 
             match lines.next_line().await {
                 Ok(Some(line)) => {

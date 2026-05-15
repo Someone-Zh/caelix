@@ -1,5 +1,4 @@
 /// 输入处理和多行输入支持模块
-
 use std::io::{self, BufRead, Write};
 
 /// 读取用户输入,支持多行输入
@@ -24,7 +23,7 @@ pub fn read_multiline_input() -> io::Result<Option<String>> {
             break;
         }
         
-        let trimmed = line.trim_end_matches(|c| c == '\n' || c == '\r').to_string();
+        let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
         
         if trimmed.is_empty() && !lines.is_empty() {
             // 空行且已有内容，提交
@@ -56,7 +55,7 @@ pub fn read_single_line() -> io::Result<Option<String>> {
         Ok(None)
     } else {
         // 移除末尾的换行符
-        let trimmed = input.trim_end_matches(|c| c == '\n' || c == '\r').to_string();
+        let trimmed = input.trim_end_matches(['\n', '\r']).to_string();
         if trimmed.is_empty() {
             Ok(None)
         } else {

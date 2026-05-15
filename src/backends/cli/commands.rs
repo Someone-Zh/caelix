@@ -1,5 +1,4 @@
 /// CLI命令处理模块
-
 /// 检查是否是退出命令
 pub fn is_quit_command(input: &str) -> bool {
     let trimmed = input.trim().to_lowercase();

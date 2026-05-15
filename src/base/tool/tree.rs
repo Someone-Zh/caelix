@@ -104,8 +104,8 @@ fn generate_tree(root: &str, max_depth: usize, show_hidden: bool) -> anyhow::Res
         .into_iter()
         .filter_entry(|e| {
             // 如果show_hidden为false，过滤掉隐藏的目录
-            if !show_hidden {
-                if let Some(name) = e.file_name().to_str() {
+            if !show_hidden
+                && let Some(name) = e.file_name().to_str() {
                     // 忽略常见的版本控制和IDE目录
                     if name == ".git" || name == ".idea" || name == ".vscode" 
                        || name == "node_modules" || name == "__pycache__" {
@@ -116,7 +116,6 @@ fn generate_tree(root: &str, max_depth: usize, show_hidden: bool) -> anyhow::Res
                         return false;
                     }
                 }
-            }
             true
         });
 

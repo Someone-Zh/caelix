@@ -6,6 +6,45 @@ use std::sync::Arc;
 use crate::config::CaelixContext;
 use crate::runtime::id_generator;
 
+/// RuntimeContext 快照 - 用于在异步任务中保存上下文状态
+/// 
+/// 当需要跨异步边界传递上下文信息时，可以使用此结构保存关键信息，
+/// 避免依赖 task-local storage。
+#[derive(Debug, Clone)]
+pub struct RuntimeContextSnapshot {
+    /// Provider 名称
+    pub provider: String,
+    /// Model 名称
+    pub model: String,
+    /// 工作目录
+    pub work_dir: PathBuf,
+    /// Debug 模式是否启用
+    pub debug_enabled: bool,
+}
+
+impl RuntimeContextSnapshot {
+    /// 从当前 RuntimeContext 创建快照
+    /// 
+    /// # Panics
+    /// 如果不在有效的 RuntimeContext 中调用，会 panic
+    pub fn from_current() -> Self {
+        Self {
+            provider: RuntimeContext::provider(),
+            model: RuntimeContext::model(),
+            work_dir: RuntimeContext::work_dir(),
+            debug_enabled: RuntimeContext::is_debug_enabled(),
+        }
+    }
+    
+    /// 尝试从当前 RuntimeContext 创建快照
+    /// 
+    /// # Returns
+    /// 如果不在有效的 RuntimeContext 中，返回 None
+    pub fn try_from_current() -> Option<Self> {
+        std::panic::catch_unwind(Self::from_current).ok()
+    }
+}
+
 /// 运行时上下文 - Session 级别
 /// 
 /// 每个 Session 有独立的上下文实例，通过 tokio::task_local! 存储
@@ -57,8 +96,8 @@ impl RuntimeContext {
         debug_enabled: bool,
         caelix_context: Arc<CaelixContext>,
     ) -> Self {
-        let session_id = session_id.unwrap_or_else(|| id_generator::generate_session_id());
-        let request_id = request_id.unwrap_or_else(|| id_generator::generate_request_id());
+        let session_id = session_id.unwrap_or_else(id_generator::generate_session_id);
+        let request_id = request_id.unwrap_or_else(id_generator::generate_request_id);
         let span_id = Self::extract_span_id_from_tracing();
         
         Self {
@@ -263,6 +302,53 @@ impl RuntimeContext {
         F: FnOnce() -> R,
     {
         CURRENT_CONTEXT.sync_scope(context, f)
+    }
+    
+    /// 在指定上下文中 spawn 异步任务
+    /// 
+    /// 这是一个便捷方法，确保在 tokio::spawn 中正确传递 RuntimeContext
+    /// 
+    /// # Arguments
+    /// * `context` - 运行时上下文
+    /// * `future` - 要执行的异步任务
+    /// 
+    /// # Returns
+    /// tokio::task::JoinHandle
+    /// 
+    /// # Example
+    /// ```no_run
+    /// use caelix::runtime::context::RuntimeContext;
+    /// use std::sync::Arc;
+    /// use caelix::config::CaelixContext;
+    /// 
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let caelix_ctx = Arc::new(CaelixContext::new());
+    ///     let ctx = RuntimeContext::new(
+    ///         None,
+    ///         None,
+    ///         std::env::current_dir().unwrap(),
+    ///         "openai".to_string(),
+    ///         "gpt-4".to_string(),
+    ///         false,
+    ///         caelix_ctx,
+    ///     );
+    ///     
+    ///     let handle = RuntimeContext::spawn_with_context(ctx, async {
+    ///         let session_id = RuntimeContext::session_id();
+    ///         println!("Current session: {}", session_id);
+    ///     });
+    ///     handle.await.unwrap();
+    /// }
+    /// ```
+    pub fn spawn_with_context<F>(context: RuntimeContext, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        tokio::spawn(async move {
+            CURRENT_CONTEXT.scope(context, future).await
+        })
     }
     
     /// 创建新的 Session 并进入其上下文

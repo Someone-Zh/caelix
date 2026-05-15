@@ -1,3 +1,4 @@
+#![allow(clippy::empty_line_after_doc_comments)]
 use async_trait::async_trait;
 use std::pin::Pin;
 use tokio_stream::Stream;
@@ -10,7 +11,6 @@ use std::collections::HashMap;
 /// LLM (Large Language Model) 相关的核心数据结构和接口定义
 /// 对应架构：第一层 - 核心层
 /// 该模块定义了与LLM交互所需的基本数据类型和抽象接口
-
 
 /// 消息角色枚举
 /// 定义了在对话中不同参与者的角色

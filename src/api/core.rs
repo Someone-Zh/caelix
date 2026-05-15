@@ -120,7 +120,9 @@ impl CaelixApi for CaelixApiImpl {
         let ctx_clone = self.context.clone();
         let request_clone = request.clone();
         
-        let result = crate::runtime::context::RuntimeContext::scope(runtime_ctx, async move {
+        
+        
+        crate::runtime::context::RuntimeContext::scope(runtime_ctx, async move {
             // 4.1 确定使用的agent名称（默认使用第一个或从请求中获取）
             let agent_name = request_clone.agent.as_deref().unwrap_or("default");
             
@@ -195,9 +197,7 @@ impl CaelixApi for CaelixApiImpl {
             });
             
             Ok(Box::pin(converted_stream) as BoxStream<'static, Result<AgentOutputChunk, ApiError>>)
-        }).await;
-        
-        result
+        }).await
     }
 
     async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError> {
