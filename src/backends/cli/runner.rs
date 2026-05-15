@@ -9,6 +9,54 @@ use crate::runtime::message::task_message::TaskMessageType;
 use super::input_handler::read_multiline_input;
 use super::commands::handle_command;
 
+/// 刷新已完成的 span 缓冲区，按顺序输出
+fn flush_completed_spans(
+    completed_spans: &mut Vec<String>,
+    span_buffers: &mut std::collections::HashMap<String, String>,
+    target_span_id: &str,
+) {
+    // 按完成顺序输出每个 span 的内容
+    for span_id in completed_spans.drain(..) {
+        if let Some(content) = span_buffers.remove(&span_id) {
+            if !content.is_empty() {
+                // 如果是目标 span，直接输出（不带标题）
+                if span_id == target_span_id {
+                    print!("{}", content);
+                } else {
+                    // 异步任务的 span，带标题输出
+                    println!("\n📋 [异步任务结果] {}", content);
+                }
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
+}
+
+/// 刷新所有剩余的缓冲区（包括活跃和已完成但未输出的）
+fn flush_all_buffers(
+    active_spans: &mut Vec<String>,
+    completed_spans: &mut Vec<String>,
+    span_buffers: &mut std::collections::HashMap<String, String>,
+    target_span_id: &str,
+) {
+    // 先输出已完成的
+    flush_completed_spans(completed_spans, span_buffers, target_span_id);
+    
+    // 再输出活跃的（可能没有收到 ChunkEnd）
+    for span_id in active_spans.drain(..) {
+        if let Some(content) = span_buffers.remove(&span_id) {
+            if !content.is_empty() {
+                if span_id == target_span_id {
+                    print!("{}", content);
+                } else {
+                    println!("\n📋 [异步任务结果] {}", content);
+                }
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
+}
+
 /// CLI命令行参数
 #[derive(Parser, Debug)]
 #[command(name = "caelix")]
@@ -228,29 +276,54 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                 match api.subscribe_chat_stream(&result.session_id).await {
                     Ok(mut stream) => {
                         let target_span_id = result.span_id.clone();
-                        let mut received_end = false;
+                        
+                        // ✅ 使用缓冲区管理多个 span 的流式输出
+                        use std::collections::HashMap;
+                        let mut span_buffers: HashMap<String, String> = HashMap::new(); // span_id -> 累积内容
+                        let mut active_spans: Vec<String> = Vec::new(); // 保持顺序的活跃 span 列表
+                        let mut completed_spans: Vec<String> = Vec::new(); // 已完成的 span 列表
                         
                         while let Some(msg) = stream.next().await {
                             match msg.r#type {
                                 AgentMessageType::Chunk => {
-                                    // 只打印当前 request 和 span_id 的 chunk
-                                    if msg.request_id == result.request_id && msg.span_id == target_span_id {
-                                        // Chunk 是流式输出，直接打印内容，不加时间戳和换行
-                                        print!("{}", msg.content);
-                                        let _ = std::io::stdout().flush();
+                                    // 只处理当前会话的消息
+                                    if msg.session_id == result.session_id {
+                                        let span_id = msg.span_id.clone();
+                                        
+                                        // 如果是新的 span，加入活跃列表
+                                        if !span_buffers.contains_key(&span_id) {
+                                            span_buffers.insert(span_id.clone(), String::new());
+                                            active_spans.push(span_id.clone());
+                                        }
+                                        
+                                        // 累积 chunk 内容（不包含 [思考] 等标签）
+                                        if let Some(buffer) = span_buffers.get_mut(&span_id) {
+                                            buffer.push_str(&msg.content);
+                                        }
                                     }
                                 }
                                 AgentMessageType::ChunkEnd => {
-                                    // ✅ 关键修改：检查是否是目标 span_id 的结束标记
-                                    if msg.span_id == target_span_id {
-                                        println!(); // 流结束后换行
-                                        received_end = true;
-                                        break; // 退出循环，重新开始接收用户输入
+                                    // 标记该 span 完成
+                                    if msg.session_id == result.session_id {
+                                        let span_id = msg.span_id.clone();
+                                        
+                                        // 从活跃列表移到完成列表
+                                        if let Some(pos) = active_spans.iter().position(|s| s == &span_id) {
+                                            active_spans.remove(pos);
+                                            completed_spans.push(span_id.clone());
+                                            
+                                            // ✅ 按顺序输出已完成的 span
+                                            flush_completed_spans(
+                                                &mut completed_spans,
+                                                &mut span_buffers,
+                                                &target_span_id,
+                                            );
+                                        }
                                     }
                                 }
                                 AgentMessageType::Msg => {
-                                    // 显示所有完整消息（包括异步任务的结果）
-                                    if msg.content != input_clone {
+                                    // 显示完整消息（包括异步任务的结果）
+                                    if msg.content != input_clone && msg.span_id != target_span_id {
                                         let timestamp = msg.timestamp.format("%H:%M:%S");
                                         // 尝试解析为 ChatMessage 以获取更友好的显示
                                         if let Ok(chat_msg) = serde_json::from_str::<crate::base::provider::ChatMessage>(&msg.content) {
@@ -264,14 +337,14 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                                 msg.agent_name.as_deref().unwrap_or("AI"),
                                                 msg.content);
                                         }
+                                        let _ = std::io::stdout().flush();
                                     }
                                 }
                             }
                         }
                         
-                        if !received_end {
-                            println!("\n⚠️  未收到结束信号，可能需要手动中断");
-                        }
+                        // 最后刷新所有剩余的缓冲
+                        flush_all_buffers(&mut active_spans, &mut completed_spans, &mut span_buffers, &target_span_id);
                     }
                     Err(e) => {
                         eprintln!("❌ 订阅失败: {:?}", e);

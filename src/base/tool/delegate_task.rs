@@ -235,16 +235,37 @@ impl std::fmt::Debug for DelegateTaskRunnable {
     }
 }
 
-#[async_trait::async_trait]
-impl Runnable for DelegateTaskRunnable {
-    async fn run(&self) -> anyhow::Result<()> {
-        // 使用存储的 CaelixContext
-        let context = &self.caelix_context;
+impl DelegateTaskRunnable {
+    /// 内部执行方法 - 在 RuntimeContext scope 中调用
+    async fn execute_agent_task_inner(&self) -> anyhow::Result<()> {
+        // 从 RuntimeContext 获取 CaelixContext
+        let context = match std::panic::catch_unwind(RuntimeContext::caelix_context) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                return Err(anyhow::anyhow!("无法获取运行时上下文"));
+            }
+        };
+        
+        // 获取当前 session_id（用于消息总线）
+        let session_id = match std::panic::catch_unwind(RuntimeContext::session_id) {
+            Ok(id) => id,
+            Err(_) => {
+                return Err(anyhow::anyhow!("无法获取会话ID"));
+            }
+        };
+        let request_id = crate::runtime::id_generator::generate_request_id();
+        let span_id = match std::panic::catch_unwind(RuntimeContext::span_id) {
+            Ok(id) => id,
+            Err(_) => {
+                return Err(anyhow::anyhow!("无法获取 Span ID"));
+            }
+        };
         
         // 从上下文获取 agent
         let agent_spec = match context.agent_manager.get(&self.agent_name).await {
             Some(agent) => agent,
             None => {
+                // 获取所有可用的 agent 名称
                 let available_agents = context.agent_manager.list_all_names().await;
                 return Err(anyhow::anyhow!(
                     "未找到名为 '{}' 的 agent\n\n可用的 agents: {:?}\n\n请检查 agent 名称是否正确，建议使用英文名（如 'collector_agent' 而不是 '收集专家'）",
@@ -298,13 +319,46 @@ impl Runnable for DelegateTaskRunnable {
             messages,
             provider.clone(),
             &config,
-            self.session_id.clone(),
-            crate::runtime::id_generator::generate_request_id(),  // 生成新的 request_id
-            self.span_id.clone(),
+            session_id.clone(),
+            request_id,
+            span_id.clone(),
             Some(self.agent_name.clone()),
         ).await?;
 
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl Runnable for DelegateTaskRunnable {
+    async fn run(&self) -> anyhow::Result<()> {
+        // 如果有快照，则重建 RuntimeContext 并在其 scope 中执行
+        if let Some(snapshot) = &self.runtime_context_snapshot {
+            // 需要重建完整的 RuntimeContext
+            let caelix_ctx = self.caelix_context.clone();
+            let work_dir = snapshot.work_dir.clone();
+            
+            let runtime_ctx = crate::runtime::context::RuntimeContext::new(
+                Some(self.session_id.clone()),
+                Some(crate::runtime::id_generator::generate_request_id()),
+                work_dir,
+                snapshot.provider.clone(),
+                snapshot.model.clone(),
+                snapshot.debug_enabled,
+                caelix_ctx,
+            );
+            
+            // 在 RuntimeContext scope 中执行
+            return crate::runtime::context::RuntimeContext::scope(runtime_ctx, async {
+                // 执行 agent 任务
+                self.execute_agent_task_inner().await
+            }).await;
+        } else {
+            // 没有快照的情况下，记录警告并尝试执行
+            eprintln!("Warning: No RuntimeContext snapshot available for delegate task {}", self.task_name);
+            // 仍然尝试执行，但可能会失败
+            self.execute_agent_task_inner().await
+        }
     }
 
     fn task_type(&self) -> &'static str {

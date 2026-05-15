@@ -12,10 +12,6 @@ use serde::Serialize;
 use crate::base::tool::traits::ToolDefinition;
 use super::ProviderConfig;
 use std::sync::Arc;
-#[cfg(feature = "logging")]
-use crate::runtime::context::RuntimeContext;
-#[cfg(feature = "logging")]
-use crate::debug_log_ctx;
 
 #[derive(Debug, Serialize)]
 struct LlmChatRequest {
@@ -287,21 +283,6 @@ impl LlmProvider for OpenAIProvider {
         
         
         let request_body = self.build_request_body(messages, tools, config);
-        // 记录请求开始
-        #[cfg(feature = "logging")]
-        {
-            // 安全地检查 debug 模式，如果 context 不存在则跳过日志
-            let should_log = std::panic::catch_unwind(|| RuntimeContext::is_debug_enabled())
-                .unwrap_or(false);
-            
-            if should_log {
-                debug_log_ctx!(
-                    "DEBUG",
-                    "OpenAIProvider::chat_stream::Request",
-                    serde_json::to_value(&request_body).unwrap()
-                );
-            }
-        }
         let base_url = self.config.base_url.as_ref().ok_or_else(|| {
             AgentError::LlmError(format!("{}: base_url 未配置", self.config.name))
         })?;
@@ -341,22 +322,6 @@ impl LlmProvider for OpenAIProvider {
                     }
                 };
                 buffer.extend_from_slice(&bytes);
-                #[cfg(feature = "logging")]
-                {
-                    // 安全地检查 debug 模式，如果 context 不存在则跳过日志
-                    let should_log = std::panic::catch_unwind(|| RuntimeContext::is_debug_enabled())
-                        .unwrap_or(false);
-                    
-                    if should_log {
-                        debug_log_ctx!(
-                            "DEBUG",
-                            "OpenAIProvider::chat_stream::Response",
-                            json!({
-                                "response": String::from_utf8_lossy(&bytes).to_string()
-                            })
-                        );
-                    }
-                }
                 this.process_sse_buffer(
                     &mut buffer,
                     &tx,

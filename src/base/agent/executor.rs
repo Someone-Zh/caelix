@@ -87,7 +87,8 @@ pub async fn execute_agent_with_messaging(
 fn extract_chunk_content(chunk: &AgentOutputChunk) -> String {
     match chunk {
         AgentOutputChunk::Content { content } => content.clone(),
-        AgentOutputChunk::Reasoning { content } => format!("[思考] {}", content),
+        // ✅ 移除 [思考] 标签,直接返回 reasoning 内容,让 CLI 端统一处理显示
+        AgentOutputChunk::Reasoning { content } => content.clone(),
         AgentOutputChunk::ToolCall { name, arguments, .. } => {
             format!("\n[工具调用] {}({})", name, arguments)
         }

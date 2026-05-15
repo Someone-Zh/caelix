@@ -4,6 +4,7 @@ use crate::runtime::message::task_message::{TaskMessage, TaskMessageType};
 use crate::runtime::task::persistence::TaskPersistence;
 use crate::runtime::task::scheduler::TaskScheduler;
 use crate::runtime::task::types::*;
+use crate::runtime::context::RuntimeContext;
 use anyhow::Result;
 use chrono::Utc; // 修复：导入 Utc
 use dashmap::DashMap;
@@ -14,6 +15,7 @@ use tokio::task::JoinHandle;
 type TaskHandle = (
     TaskMeta,
     Option<oneshot::Sender<anyhow::Result<()>>>,
+    Option<RuntimeContext>,  // 新增：保存任务注册时的 RuntimeContext
     Option<JoinHandle<()>>,
 );
 
@@ -70,7 +72,7 @@ impl TaskManager {
                     
                     // 检查任务是否还在注册表中
                     if let Some(mut handle) = registry_clone.get_mut(&task_id) {
-                        let (meta, _opt_tx, _) = handle.value_mut();
+                        let (meta, _opt_tx, opt_ctx, _) = handle.value_mut();
                         // 一次性更新所有字段
                         meta.status = TaskStatus::Running;
                         meta.updated_at = Utc::now();
@@ -83,13 +85,23 @@ impl TaskManager {
                             let scheduler = scheduler_clone.clone();
                             let persistence = persistence_clone.clone(); // 传给执行函数
                             
-                            // Spawn 执行，携带 RuntimeContext
-                            let runtime_ctx = crate::runtime::context::RuntimeContext::current();
-                            tokio::spawn(async move {
-                                crate::runtime::context::RuntimeContext::scope(runtime_ctx, async {
+                            // 使用任务注册时保存的 RuntimeContext
+                            if let Some(ctx) = opt_ctx.take() {
+                                tokio::spawn(async move {
+                                    crate::runtime::context::RuntimeContext::scope(ctx, async {
+                                        Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence).await;
+                                    }).await;
+                                });
+                            } else {
+                                // 没有 RuntimeContext，说明是恢复的任务或注册时没有正确捕获上下文
+                                // 尝试从 CaelixContext 创建一个默认的 RuntimeContext
+                                eprintln!("Warning: Scheduled task {} has no RuntimeContext, attempting to continue without context", task_id);
+                                
+                                // 直接执行任务，不使用 RuntimeContext，让任务自身处理缺失的上下文
+                                tokio::spawn(async move {
                                     Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence).await;
-                                }).await;
-                            });
+                                });
+                            }
                         }
                     }
                 }
@@ -116,7 +128,10 @@ impl TaskManager {
             // 重新注册 (修复：去掉未使用的 _rx)
             let (tx, _) = oneshot::channel();
             let task_id = meta.task_id.clone();
-            self.registry.insert(task_id, (meta.clone(), Some(tx), None));
+            
+            // 对于恢复的任务，我们暂时无法重建原始的 RuntimeContext
+            // 所以设置为 None，这些任务将在执行时检查上下文是否存在
+            self.registry.insert(task_id, (meta.clone(), Some(tx), None, None));
             
             // 重新调度
             self.scheduler.schedule(meta).await;
@@ -150,6 +165,10 @@ impl TaskManager {
         // 修复：去掉未使用的 rx
         let (tx, _) = oneshot::channel();
         let task_id = meta.task_id.clone();
+        
+        // 捕获当前的 RuntimeContext（任务注册时的上下文）
+        // 如果不存在上下文，说明调用链路有问题，直接 panic
+        let runtime_ctx = crate::runtime::context::RuntimeContext::current();
 
         // 1. 存入注册表
         match kind {
@@ -162,18 +181,17 @@ impl TaskManager {
                 let persistence = self.persistence.clone();
                 
                 // 立即 Spawn，携带 RuntimeContext
-                let runtime_ctx = crate::runtime::context::RuntimeContext::current();
                 let handle = tokio::spawn(async move {
                     crate::runtime::context::RuntimeContext::scope(runtime_ctx, async {
                         Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence).await;
                     }).await;
                 });
                 
-                self.registry.insert(task_id.clone(), (meta, Some(tx), Some(handle)));
+                self.registry.insert(task_id.clone(), (meta, Some(tx), None, Some(handle)));
             }
             TaskKind::Once(_) | TaskKind::Cron(_) => {
                 meta.status = TaskStatus::Scheduled;
-                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), None));
+                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), Some(runtime_ctx), None));
                 self.scheduler.schedule(meta.clone()).await;
                 let _ = self.persistence.save(&meta).await;
             }
@@ -184,7 +202,7 @@ impl TaskManager {
 
     /// 取消任务
     pub async fn cancel(&self, task_id: TaskId) -> bool {
-        if let Some((mut meta, _, opt_handle)) = self.registry.remove(&task_id).map(|(_, v)| v) {
+        if let Some((mut meta, _, _, opt_handle)) = self.registry.remove(&task_id).map(|(_, v)| v) {
             // 尝试 Abort
             if let Some(handle) = opt_handle {
                 handle.abort();
@@ -230,7 +248,7 @@ impl TaskManager {
         self.registry
             .iter()
             .filter_map(|entry| {
-                let (meta, _, _) = entry.value();
+                let (meta, _, _, _) = entry.value();
                 match filter_session {
                     Some(sess_id) if meta.session_id != sess_id => None,
                     _ => Some(meta.clone()),
@@ -242,7 +260,7 @@ impl TaskManager {
     /// 更新任务进度
     pub async fn update_progress(&self, task_id: TaskId, progress: f32) -> bool {
         if let Some(mut entry) = self.registry.get_mut(&task_id) {
-            let (meta, _, _) = entry.value_mut();
+            let (meta, _, _, _) = entry.value_mut();
             // 一次性更新所有字段
             meta.progress = Some(progress.clamp(0.0, 1.0));
             meta.updated_at = Utc::now();
@@ -284,7 +302,7 @@ impl TaskManager {
 
         // 更新注册表
         if let Some(mut entry) = registry.get_mut(&task_id) {
-            let (m, opt_tx, _) = entry.value_mut();
+            let (m, opt_tx, _, _) = entry.value_mut();
             // 一次性更新所有字段
             m.status = final_status.clone();
             m.updated_at = Utc::now();
