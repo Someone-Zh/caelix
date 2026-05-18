@@ -1,0 +1,15 @@
+[package]
+name = "caelix-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+caelix-api = { path = "../caelix-api" }
+caelix-service = { path = "../caelix-service" }
+caelix-message = { path = "../caelix-message" }
+caelix-runtime = { path = "../caelix-runtime" }
+tokio.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+serde_json.workspace = true

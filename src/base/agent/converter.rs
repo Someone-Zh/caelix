@@ -1,6 +1,6 @@
 use crate::base::AgentError;
 use crate::base::provider::ChatResponseChunk;
-use super::types::AgentOutputChunk;
+use super::AgentOutputChunk;
 
 /// 转换 LLM 响应分片为 Agent 输出分片
 pub fn convert_chunk(chunk: ChatResponseChunk) -> Result<AgentOutputChunk, AgentError> {

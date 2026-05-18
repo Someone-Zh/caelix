@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 使用 CaelixContext 初始化
     println!("🔧 初始化 Caelix 上下文...");
-    let context = CaelixContext::new();
+    let mut context = CaelixContext::new();
     context.init().await.expect("Failed to initialize context");
     let caelix_ctx = Arc::new(context);
     

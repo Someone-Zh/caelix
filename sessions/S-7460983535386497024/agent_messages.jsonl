@@ -1,0 +1,1 @@
+{"session_id":"S-7460983535386497024","request_id":"R-7460983577937711104","span_id":"P-7460983577937711105","type":"Msg","timestamp":"2026-05-15T09:25:03.352941Z","content":"委托一个异步任务分析当前rust项目的依赖中哪些比较重但却可以移除的","agent_name":"planner_agent"}

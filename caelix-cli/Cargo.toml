@@ -1,0 +1,14 @@
+[package]
+name = "caelix-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+caelix-api = { path = "../caelix-api" }
+caelix-service = { path = "../caelix-service" }
+caelix-message = { path = "../caelix-message" }
+tokio.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+serde_json.workspace = true

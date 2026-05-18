@@ -1,4 +1,4 @@
-use crate::base::agent::{Agent, AgentOutputChunk, AgentSpec};
+use crate::base::agent::{AgentOutputChunk, AgentSpec};
 use crate::base::provider::{ChatMessage, LlmProvider};
 use crate::base::LlmConfig;
 use crate::runtime::message::agent_message::{AgentMessage, AgentMessageType};

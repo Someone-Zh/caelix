@@ -1,0 +1,27 @@
+[package]
+name = "caelix-bin"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "caelix"
+path = "src/main.rs"
+
+[dependencies]
+caelix-api = { path = "../caelix-api" }
+caelix-service = { path = "../caelix-service" }
+caelix-config = { path = "../caelix-config" }
+caelix-message = { path = "../caelix-message" }
+caelix-runtime = { path = "../caelix-runtime" }
+caelix-cli = { path = "../caelix-cli" }
+caelix-http = { path = "../caelix-http", optional = true }
+caelix-tui = { path = "../caelix-tui", optional = true }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[features]
+default = ["cli"]
+cli = []
+http-server = ["dep:caelix-http"]
+tui = ["dep:caelix-tui"]

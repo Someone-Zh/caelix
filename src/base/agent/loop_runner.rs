@@ -1,6 +1,5 @@
 use crate::base::{AgentError, LlmConfig};
-use crate::base::agent::traits::Agent;
-use crate::base::agent::types::{AgentOutputChunk, AgentSpec};
+use crate::base::agent::{AgentOutputChunk, AgentSpec};
 use crate::base::provider::{ChatMessage, LlmProvider};
 use crate::base::tool::{ToolCall};
 use futures::Stream;

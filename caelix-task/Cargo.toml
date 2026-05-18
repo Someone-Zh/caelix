@@ -1,0 +1,21 @@
+[package]
+name = "caelix-task"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+caelix-api = { path = "../caelix-api" }
+caelix-message = { path = "../caelix-message" }
+# TODO: 移除对 caelix-runtime 的循环依赖，通过回调机制解决
+# caelix-runtime = { path = "../caelix-runtime" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+cron.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+dashmap.workspace = true

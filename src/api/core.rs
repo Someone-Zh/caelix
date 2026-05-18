@@ -7,7 +7,7 @@ use std::pin::Pin;
 use crate::api::CaelixApi;
 use crate::api::types::{ApiError, ChatRequest, SessionSummary, ProviderInfo};
 use crate::config::CaelixContext;
-use crate::base::agent::{AgentOutputChunk, Agent};
+use crate::base::agent::AgentOutputChunk;
 use crate::base::provider::{ChatMessage, LlmConfig, LlmType};
 use crate::runtime::message::agent_message::{AgentMessage, AgentMessageType};
 use crate::runtime::message::notification_message::NotificationMessage;
@@ -188,8 +188,20 @@ impl CaelixApi for CaelixApiImpl {
             };
             let _ = ctx_clone.message_bus.send_agent(user_msg);
             
-            // 4.6 调用AgentSpec的execute方法获取流
-            let stream = agent_spec.execute(messages, provider, &config).await?;
+            // 4.6 调用 loop_runner 执行 agent
+            // 注意：由于 orphan rule，我们不能在外部 crate 为 AgentSpec 实现 Agent trait
+            // 所以直接调用 loop_runner
+            let messages_for_execution = {
+                let mut msgs = vec![ChatMessage::system(agent_spec.system_prompt.as_str())];
+                msgs.extend(messages);
+                msgs
+            };
+            let stream = crate::base::agent::loop_runner::run_agent_loop(
+                (*agent_spec).clone(),
+                messages_for_execution,
+                provider,
+                config,
+            ).await?;
             
             // 4.7 转换流类型: AgentError -> ApiError
             let converted_stream = stream.map(|result| {
