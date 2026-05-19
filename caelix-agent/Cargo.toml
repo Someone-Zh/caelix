@@ -14,6 +14,7 @@ caelix-tools = { path = "../caelix-tools" }
 caelix-runtime = { path = "../caelix-runtime" }
 caelix-message = { path = "../caelix-message" }
 caelix-config = { path = "../caelix-config" }
+caelix-task = { path = "../caelix-task" }
 tokio.workspace = true
 tokio-stream.workspace = true
 serde_json.workspace = true

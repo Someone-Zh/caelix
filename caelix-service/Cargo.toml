@@ -6,8 +6,9 @@ edition = "2024"
 [dependencies]
 caelix-api = { path = "../caelix-api" }
 caelix-config = { path = "../caelix-config" }
-caelix-message = { path = "../caelix-message" }
 caelix-runtime = { path = "../caelix-runtime" }
+caelix-task = { path = "../caelix-task" }
+caelix-message = { path = "../caelix-message" }
 caelix-agent = { path = "../caelix-agent" }
 tokio.workspace = true
 async-trait.workspace = true

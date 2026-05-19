@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use caelix_config::CaelixContext;
+use caelix_service::CaelixContext;
 use caelix_service::{CaelixApi, CaelixApiImpl};
 use tokio::signal;
 

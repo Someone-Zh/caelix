@@ -237,6 +237,7 @@ dependencies = [
  "caelix-llm",
  "caelix-message",
  "caelix-runtime",
+ "caelix-task",
  "caelix-tools",
  "chrono",
  "futures",
@@ -303,11 +304,10 @@ dependencies = [
  "anyhow",
  "caelix-api",
  "caelix-llm",
- "caelix-message",
- "caelix-task",
  "caelix-tools",
  "dirs",
  "once_cell",
+ "rust-embed",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -372,8 +372,8 @@ dependencies = [
  "async-trait",
  "bitflags 2.11.0",
  "caelix-api",
+ "caelix-config",
  "caelix-message",
- "caelix-task",
  "chrono",
  "once_cell",
  "serde",
@@ -395,6 +395,7 @@ dependencies = [
  "caelix-config",
  "caelix-message",
  "caelix-runtime",
+ "caelix-task",
  "chrono",
  "futures",
  "serde",
@@ -2163,6 +2164,40 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rust-embed"
+version = "8.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04113cb9355a377d83f06ef1f0a45b8ab8cd7d8b1288160717d66df5c7988d27"
+dependencies = [
+ "rust-embed-impl",
+ "rust-embed-utils",
+ "walkdir",
+]
+
+[[package]]
+name = "rust-embed-impl"
+version = "8.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0902e4c7c8e997159ab384e6d0fc91c221375f6894346ae107f47dd0f3ccaa"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rust-embed-utils",
+ "syn 2.0.117",
+ "walkdir",
+]
+
+[[package]]
+name = "rust-embed-utils"
+version = "8.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bcdef0be6fe7f6fa333b1073c949729274b05f123a0ad7efcb8efd878e5c3b1"
+dependencies = [
+ "sha2",
+ "walkdir",
 ]
 
 [[package]]

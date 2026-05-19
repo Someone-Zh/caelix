@@ -11,8 +11,6 @@ logging = ["tracing-subscriber"]
 caelix-api = { path = "../caelix-api" }
 caelix-llm = { path = "../caelix-llm" }
 caelix-tools = { path = "../caelix-tools" }
-caelix-message = { path = "../caelix-message" }
-caelix-task = { path = "../caelix-task" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,4 +21,5 @@ tracing.workspace = true
 once_cell.workspace = true
 walkdir.workspace = true
 thiserror.workspace = true
+rust-embed.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
