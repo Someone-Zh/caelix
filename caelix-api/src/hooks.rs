@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use std::fmt;
 use bitflags::bitflags;
-use std::sync::Arc;
 use crate::agent::{AgentSpec, AgentOutputChunk};
 use crate::provider::ChatMessage;
 use crate::tool::ToolResult;

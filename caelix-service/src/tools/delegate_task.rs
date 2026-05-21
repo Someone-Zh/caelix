@@ -151,9 +151,12 @@ struct DelegateTaskRunnable {
     agent_name: String,
     task_name: String,
     task_content: String,
+    #[allow(dead_code)] // 为将来扩展预留
     session_id: String,
+    #[allow(dead_code)] // 为将来扩展预留
     span_id: String,
     caelix_context: Arc<CaelixContext>,
+    #[allow(dead_code)] // 为将来扩展预留
     runtime_context_snapshot: Option<RuntimeContextSnapshot>,
 }
 

@@ -9,8 +9,6 @@ use caelix_config::skills_loader::register_all_skills;
 use caelix_message::{SessionManager, MessageBus, FileStorage};
 use caelix_task::{TaskManager, FilePersistence, RunnableFactory};
 use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
-#[cfg(feature = "logging")]
-use tracing_subscriber;
 
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
@@ -65,18 +63,6 @@ impl CaelixContext {
             task_persistence,
             runnable_factory,
         ));
-        
-        // 初始化日志系统
-        #[cfg(feature = "logging")]
-        {
-            if debug_enabled {
-                let caelix_home = caelix_config::get_caelix_home();
-                let log_dir = caelix_home.join("logs");
-                
-                // 简化日志初始化,具体实现可根据需要调整
-                println!("✅ 日志系统已启用，日志目录: {:?}", caelix_home.join("logs"));
-            }
-        }
         
         Self {
             agent_manager: Arc::new(AgentManager::new()),

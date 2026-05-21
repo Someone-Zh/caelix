@@ -33,6 +33,7 @@ enum TaskNotificationType {
 pub struct TaskManager {
     bus: Arc<MessageBus>,
     persistence: Arc<dyn TaskPersistence>,
+    #[allow(dead_code)] // 为将来扩展预留
     factory: Arc<RunnableFactory>,
     scheduler: Arc<TaskScheduler>,
     

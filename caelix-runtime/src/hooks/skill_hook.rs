@@ -13,6 +13,7 @@ use crate::debug_log;
 /// 自动为Agent添加可用技能列表和get_skill_detail工具
 #[derive(Debug)]
 pub struct SkillHook {
+    #[allow(dead_code)] // 为将来扩展预留，当前由于循环依赖暂不使用
     skill_manager: Arc<SkillManager>,
     #[allow(dead_code)] // 公共API，为将来扩展预留
     scope: HookScope,

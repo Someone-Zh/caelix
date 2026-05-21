@@ -9,9 +9,6 @@ pub use caelix_api::hooks::*;
 use tokio::sync::RwLock;
 use std::sync::Arc;
 use caelix_api::agent::AgentSpec;
-use caelix_api::provider::ChatMessage;
-use caelix_api::tool::ToolResult;
-use caelix_api::agent::AgentOutputChunk;
 
 /// 钩子注册中心
 /// 管理所有Agent增强钩子，并在Agent生命周期的不同阶段应用它们

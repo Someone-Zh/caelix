@@ -2,7 +2,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 // 从 caelix-api 导入核心任务类型
 pub use caelix_api::task::{TaskId, TaskKind, TaskStatus};

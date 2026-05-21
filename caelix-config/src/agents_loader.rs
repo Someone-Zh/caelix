@@ -107,7 +107,7 @@ where
     let tool_manager = context.get_tool_manager();
     
     // 从指定目录加载所有 agent
-    let mut agents = load_agents_from_directory(directory_path, &tool_manager)
+    let agents = load_agents_from_directory(directory_path, &tool_manager)
         .await
         .map_err(AgentRegistryError::LoadError)?;
     
