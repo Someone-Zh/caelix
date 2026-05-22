@@ -445,6 +445,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "caelix-api",
+ "regex",
  "serde_json",
  "tokio",
  "walkdir",

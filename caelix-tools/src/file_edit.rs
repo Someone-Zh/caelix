@@ -129,6 +129,18 @@ impl Tool for DiffEditTool {
     }
 }
 
+fn extract_context_lines(original: &[&str], line_idx: usize, context_size: usize) -> String {
+    let start = if line_idx >= context_size { line_idx - context_size } else { 0 };
+    let end = (line_idx + context_size + 1).min(original.len());
+    
+    let mut result = String::new();
+    for i in start..end {
+        let marker = if i == line_idx { ">>> " } else { "    " };
+        result.push_str(&format!("{}{}: {}\n", marker, i + 1, original[i]));
+    }
+    result
+}
+
 fn parse_and_apply_unified_diff(
     original: &[&str],
     diff_text: &str,
@@ -159,7 +171,16 @@ fn parse_and_apply_unified_diff(
                     return Err("Context line out of bounds".into());
                 }
                 if original[ptr] != body {
-                    return Err(format!("Context mismatch: expected '{}', got '{}'", body, original[ptr]));
+                    let context = extract_context_lines(original, ptr, 3);
+                    return Err(format!(
+                        "Context mismatch at line {}:\nExpected: \"{}\"\nGot:      \"{}\"\n\nContext (lines {}-{}):\n{}",
+                        ptr + 1,
+                        body,
+                        original[ptr],
+                        if ptr >= 3 { ptr - 2 } else { 1 },
+                        (ptr + 4).min(original.len()),
+                        context
+                    ));
                 }
                 result.push(body.to_string());
                 ptr += 1;
@@ -170,7 +191,16 @@ fn parse_and_apply_unified_diff(
                     return Err("Delete line out of bounds".into());
                 }
                 if original[ptr] != body {
-                    return Err(format!("Delete mismatch: expected '{}', got '{}'", body, original[ptr]));
+                    let context = extract_context_lines(original, ptr, 3);
+                    return Err(format!(
+                        "Delete mismatch at line {}:\nExpected: \"{}\"\nGot:      \"{}\"\n\nContext (lines {}-{}):\n{}",
+                        ptr + 1,
+                        body,
+                        original[ptr],
+                        if ptr >= 3 { ptr - 2 } else { 1 },
+                        (ptr + 4).min(original.len()),
+                        context
+                    ));
                 }
                 ptr += 1;
             }
