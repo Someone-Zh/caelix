@@ -7,10 +7,6 @@ use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
-#[cfg(feature = "logging")]
-use serde_json::json;
-#[cfg(feature = "logging")]
-use crate::debug_log;
 
 use super::converter::convert_chunk;
 use super::tool_executor::execute_tool;
@@ -159,24 +155,6 @@ async fn run_agent_loop_inner(
                     name: name.clone(),
                     arguments: clean_args.clone(),
                 })).await;
-                
-                #[cfg(feature = "logging")]
-                {
-                    if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
-                        debug_log!(
-                            "DEBUG",
-                            &runtime_ctx.get_session_id(),
-                            &runtime_ctx.get_request_id(),
-                            &runtime_ctx.get_span_id(),
-                            &format!("loop_runner.rs:{}", line!()),
-                            json!({
-                                "event": "tool_call_sent",
-                                "tool_name": name,
-                                "arguments_length": clean_args.len()
-                            })
-                        );
-                    }
-                }
             }
             // 无工具则退出
             if final_tool_calls.is_empty() {
@@ -186,24 +164,6 @@ async fn run_agent_loop_inner(
                 current_messages.push(new_message);
                 
                 // 调用消息更新钩子
-                #[cfg(feature = "logging")]
-                {
-                    if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
-                        debug_log!(
-                            "DEBUG",
-                            &runtime_ctx.get_session_id(),
-                            &runtime_ctx.get_request_id(),
-                            &runtime_ctx.get_span_id(),
-                            &format!("loop_runner.rs:{}", line!()),
-                            json!({
-                                "event": "message_update_hook_start",
-                                "messages_count": current_messages.len(),
-                                "has_tool_calls": false
-                            })
-                        );
-                    }
-                }
-                
                 if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                     let base_ctx = BaseContext {
                         session_id: runtime_ctx.get_session_id().to_string(),
@@ -221,35 +181,6 @@ async fn run_agent_loop_inner(
                     if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
                         if let Err(e) = hook_executor.execute_message_update(&msg_ctx).await {
                             eprintln!("Warning: Message update hook failed: {}", e);
-                            
-                            #[cfg(feature = "logging")]
-                            {
-                                debug_log!(
-                                    "ERROR",
-                                    &runtime_ctx.get_session_id(),
-                                    &runtime_ctx.get_request_id(),
-                                    &runtime_ctx.get_span_id(),
-                                    &format!("loop_runner.rs:{}", line!()),
-                                    json!({
-                                        "event": "message_update_hook_failed",
-                                        "error": e.to_string()
-                                    })
-                                );
-                            }
-                        } else {
-                            #[cfg(feature = "logging")]
-                            {
-                                debug_log!(
-                                    "DEBUG",
-                                    &runtime_ctx.get_session_id(),
-                                    &runtime_ctx.get_request_id(),
-                                    &runtime_ctx.get_span_id(),
-                                    &format!("loop_runner.rs:{}", line!()),
-                                    json!({
-                                        "event": "message_update_hook_succeeded"
-                                    })
-                                );
-                            }
                         }
                     } else {
                         eprintln!("Warning: HookExecutor not available, skipping message update hook");
@@ -266,24 +197,6 @@ async fn run_agent_loop_inner(
                 current_messages.push(new_message);
                 
                 // 调用消息更新钩子
-                #[cfg(feature = "logging")]
-                {
-                    if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
-                        debug_log!(
-                            "DEBUG",
-                            &runtime_ctx.get_session_id(),
-                            &runtime_ctx.get_request_id(),
-                            &runtime_ctx.get_span_id(),
-                            &format!("loop_runner.rs:{}", line!()),
-                            json!({
-                                "event": "message_update_hook_start",
-                                "messages_count": current_messages.len(),
-                                "has_tool_calls": true
-                            })
-                        );
-                    }
-                }
-                
                 if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
                     let base_ctx = BaseContext {
                         session_id: runtime_ctx.get_session_id().to_string(),
@@ -301,35 +214,6 @@ async fn run_agent_loop_inner(
                     if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
                         if let Err(e) = hook_executor.execute_message_update(&msg_ctx).await {
                             eprintln!("Warning: Message update hook failed: {}", e);
-                            
-                            #[cfg(feature = "logging")]
-                            {
-                                debug_log!(
-                                    "ERROR",
-                                    &runtime_ctx.get_session_id(),
-                                    &runtime_ctx.get_request_id(),
-                                    &runtime_ctx.get_span_id(),
-                                    &format!("loop_runner.rs:{}", line!()),
-                                    json!({
-                                        "event": "message_update_hook_failed",
-                                        "error": e.to_string()
-                                    })
-                                );
-                            }
-                        } else {
-                            #[cfg(feature = "logging")]
-                            {
-                                debug_log!(
-                                    "DEBUG",
-                                    &runtime_ctx.get_session_id(),
-                                    &runtime_ctx.get_request_id(),
-                                    &runtime_ctx.get_span_id(),
-                                    &format!("loop_runner.rs:{}", line!()),
-                                    json!({
-                                        "event": "message_update_hook_succeeded"
-                                    })
-                                );
-                            }
                         }
                     } else {
                         eprintln!("Warning: HookExecutor not available, skipping message update hook");
@@ -417,24 +301,6 @@ async fn run_agent_loop_inner(
                             tool_name: name.clone(),
                             result: result_str.clone(),
                         })).await;
-                        
-                        #[cfg(feature = "logging")]
-                        {
-                            if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
-                                debug_log!(
-                                    "DEBUG",
-                                    &runtime_ctx.get_session_id(),
-                                    &runtime_ctx.get_request_id(),
-                                    &runtime_ctx.get_span_id(),
-                                    &format!("loop_runner.rs:{}", line!()),
-                                    json!({
-                                        "event": "tool_result_sent",
-                                        "tool_name": name,
-                                        "result_length": result_str.len()
-                                    })
-                                );
-                            }
-                        }
                     }
                     Err(e) => {
                         let _ = tx.send(Err(e)).await;
@@ -473,23 +339,6 @@ async fn run_agent_loop_inner(
 
             }
 
-        }
-
-        #[cfg(feature = "logging")]
-        {
-            if let Ok(runtime_ctx) = std::panic::catch_unwind(|| RuntimeContext::current()) {
-                debug_log!(
-                    "DEBUG",
-                    &runtime_ctx.get_session_id(),
-                    &runtime_ctx.get_request_id(),
-                    &runtime_ctx.get_span_id(),
-                    &format!("loop_runner.rs:{}", line!()),
-                    json!({
-                        "event": "agent_loop_finish",
-                        "reason": "stop"
-                    })
-                );
-            }
         }
 
         let _ = tx.send(Ok(AgentOutputChunk::Finish { reason: "stop".into() })).await;

@@ -4,10 +4,6 @@ use std::sync::Arc;
 use crate::hooks::{AgentHook, HookScope, InitContext, HookCapability};
 use caelix_config::managers::SkillManager;
 use async_trait::async_trait;
-#[cfg(feature = "logging")]
-use serde_json::json;
-#[cfg(feature = "logging")]
-use crate::debug_log;
 
 /// 技能钩子
 /// 自动为Agent添加可用技能列表和get_skill_detail工具

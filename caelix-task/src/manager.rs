@@ -4,8 +4,6 @@ use caelix_message::task_message::{TaskMessage, TaskMessageType};
 use crate::persistence::TaskPersistence;
 use crate::scheduler::TaskScheduler;
 use crate::types::*;
-// TODO: 移除对 caelix_runtime 的依赖，解决循环依赖问题
-// use caelix_runtime::context::RuntimeContext;
 use anyhow::Result;
 use chrono::Utc; // 修复：导入 Utc
 use dashmap::DashMap;

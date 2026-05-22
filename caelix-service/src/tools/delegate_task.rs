@@ -3,11 +3,104 @@ use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 
 use caelix_api::tool::{ToolResult, Tool};
+use caelix_api::agent::AgentOutputChunk;
+use caelix_api::message::{AgentMessage, AgentMessageType};
 use caelix_runtime::context::{RuntimeContext, RuntimeContextSnapshot};
-use caelix_runtime::id_generator;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_task::{Runnable, TaskKind};
 use crate::context::CaelixContext;
+
+/// 临时执行器：执行 agent 并将流发送到消息总线
+/// TODO: 后续会通过别的方式实现
+#[allow(clippy::too_many_arguments)]
+async fn execute_agent_with_messaging_local(
+    agent_spec: Arc<caelix_api::agent::AgentSpec>,
+    messages: Vec<ChatMessage>,
+    provider: Arc<dyn caelix_api::provider::LlmProvider>,
+    config: &LlmConfig,
+    session_id: String,
+    request_id: String,
+    span_id: String,
+    agent_name: Option<String>,
+    message_bus: Arc<caelix_message::MessageBus>,
+) -> Result<String, anyhow::Error> {
+    use futures::StreamExt;
+    
+    // 使用 loop_runner 执行 agent
+    let stream = caelix_agent::loop_runner::run_agent_loop(
+        (*agent_spec).clone(),
+        messages,
+        provider,
+        config.clone(),
+    ).await?;
+    
+    let mut result_content = String::new();
+    let mut stream = stream;
+    
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                // 提取内容并积累
+                let content = extract_chunk_content(&chunk);
+                if !content.is_empty() {
+                    result_content.push_str(&content);
+                }
+                
+                // 发送 Chunk 到消息总线
+                let chunk_msg = AgentMessage {
+                    session_id: session_id.clone(),
+                    request_id: request_id.clone(),
+                    span_id: span_id.clone(),
+                    r#type: AgentMessageType::Chunk,
+                    timestamp: chrono::Utc::now(),
+                    content: content.clone(),
+                    agent_name: agent_name.clone(),
+                };
+                let _ = message_bus.send_agent(chunk_msg);
+                
+                // 如果是 Finish，发送 ChunkEnd
+                if matches!(chunk, AgentOutputChunk::Finish { .. }) {
+                    let end_msg = AgentMessage {
+                        session_id: session_id.clone(),
+                        request_id: request_id.clone(),
+                        span_id: span_id.clone(),
+                        r#type: AgentMessageType::ChunkEnd,
+                        timestamp: chrono::Utc::now(),
+                        content: String::new(),
+                        agent_name: agent_name.clone(),
+                    };
+                    let _ = message_bus.send_agent(end_msg);
+                }
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Agent execution error: {:?}", e));
+            }
+        }
+    }
+    
+    Ok(result_content)
+}
+
+/// 从 AgentOutputChunk 提取文本内容
+fn extract_chunk_content(chunk: &AgentOutputChunk) -> String {
+    match chunk {
+        AgentOutputChunk::Content { content } => content.clone(),
+        AgentOutputChunk::Reasoning { content } => content.clone(),
+        AgentOutputChunk::ToolCall { name, arguments, .. } => {
+            format!("\n[工具调用] {}({})", name, arguments)
+        }
+        AgentOutputChunk::ToolResult { tool_name, result } => {
+            format!("\n[工具结果] {}: {}", tool_name, result)
+        }
+        AgentOutputChunk::Start { timestamp } => {
+            format!("\n[开始] {}", timestamp.format("%H:%M:%S"))
+        },
+        AgentOutputChunk::CallProvider { timestamp, provider, model } => {
+            format!("\n[调用模型] {} {}@{}", timestamp.format("%H:%M:%S"), provider, model)
+        },
+        AgentOutputChunk::Finish { .. } => String::new(),
+    }
+}
 
 /// 委派任务工具
 pub struct DelegateTaskTool {
@@ -37,16 +130,16 @@ impl DelegateTaskTool {
     async fn execute_agent_task(&self, agent_name: &str, task_content: &str) -> Result<String, String> {
         let context = &self.caelix_context;
         
-        // 获取当前 session_id
-        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
+        // 获取当前 trace_id（保持链路一致，为将来扩展预留）
+        let _trace_id = match std::panic::catch_unwind(|| RuntimeContext::trace_id()) {
             Ok(id) => id,
-            Err(_) => "unknown".to_string(),
+            Err(_) => caelix_api::utils::generate_trace_id(),
         };
-        let request_id = id_generator::generate_request_id();
-        let span_id = match std::panic::catch_unwind(|| RuntimeContext::span_id()) {
-            Ok(id) => id,
-            Err(_) => id_generator::generate_span_id(),
-        };
+        
+        // 为委派任务创建新的 session_id、request_id 和 span_id
+        let new_session_id = caelix_api::utils::generate_session_id();
+        let request_id = caelix_api::utils::generate_request_id();
+        let span_id = caelix_api::utils::generate_span_id();
         
         // 从上下文获取 agent
         let agent_spec = context.agent_manager.get(agent_name).await
@@ -78,16 +171,17 @@ impl DelegateTaskTool {
         };
         let config = LlmConfig { model_name };
 
-        // 执行 agent
-        caelix_agent::execute_agent_with_messaging(
+        // 执行 agent（使用新的 session_id）
+        execute_agent_with_messaging_local(
             agent_spec,
             messages,
             provider,
             &config,
-            session_id,
+            new_session_id,  // 新的 session，隔离对话历史
             request_id,
             span_id,
             Some(agent_name.to_string()),
+            context.message_bus.clone(),
         ).await.map_err(|e| format!("执行失败: {:?}", e))
     }
 
@@ -111,11 +205,16 @@ impl DelegateTaskTool {
             }
         };
 
+        // 获取当前 session_id 和 trace_id
         let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
             Ok(id) => id,
             Err(_) => "unknown".to_string(),
         };
-        let span_id = id_generator::generate_span_id();
+        let trace_id = match std::panic::catch_unwind(|| RuntimeContext::trace_id()) {
+            Ok(id) => id,
+            Err(_) => caelix_api::utils::generate_trace_id(),
+        };
+        let span_id = caelix_api::utils::generate_span_id();
 
         let snapshot = RuntimeContextSnapshot::try_from_current();
         
@@ -125,6 +224,7 @@ impl DelegateTaskTool {
             task_content: task_content.to_string(),
             session_id: session_id.clone(),
             span_id: span_id.clone(),
+            trace_id: trace_id.clone(),
             caelix_context: self.caelix_context.clone(),
             runtime_context_snapshot: snapshot,
         });
@@ -155,6 +255,8 @@ struct DelegateTaskRunnable {
     session_id: String,
     #[allow(dead_code)] // 为将来扩展预留
     span_id: String,
+    #[allow(dead_code)] // 为将来扩展预留
+    trace_id: String,
     caelix_context: Arc<CaelixContext>,
     #[allow(dead_code)] // 为将来扩展预留
     runtime_context_snapshot: Option<RuntimeContextSnapshot>,

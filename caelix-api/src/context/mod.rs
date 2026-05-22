@@ -62,20 +62,3 @@ pub trait ContextProvider: Send + Sync {
     /// 获取默认 Model 名称
     fn get_default_model(&self) -> &str;
 }
-
-/// RuntimeContext trait - 提供运行时上下文信息
-/// 
-/// 注意：这是一个trait定义，具体实现在 caelix-runtime 包中
-pub trait RuntimeContextTrait: Send + Sync {
-    /// 获取 CaelixContext（需要转换为具体的类型）
-    fn get_context(&self) -> Arc<dyn std::any::Any>;
-    
-    /// 获取当前会话ID
-    fn session_id(&self) -> String;
-    
-    /// 获取当前请求ID
-    fn request_id(&self) -> String;
-    
-    /// 获取当前span ID
-    fn span_id(&self) -> String;
-}

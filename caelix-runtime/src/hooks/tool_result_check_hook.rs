@@ -44,23 +44,6 @@ impl AgentHook for ToolResultSizeCheckHook {
             
             let truncated = &output_clone[..truncate_at];
             ctx.tool_result.output = format!("{}\n\n[内容过多无法全部显示]", truncated);
-            
-            #[cfg(feature = "logging")]
-            {
-                crate::debug_log!(
-                    "WARN",
-                    &ctx.base.session_id,
-                    &ctx.base.request_id,
-                    &ctx.base.span_id,
-                    &format!("tool_result_check_hook.rs:{}", line!()),
-                    serde_json::json!({
-                        "event": "tool_result_truncated",
-                        "tool_name": ctx.tool_name,
-                        "original_size": output_len,
-                        "truncated_size": truncate_at
-                    })
-                );
-            }
         }
         
         Ok(())

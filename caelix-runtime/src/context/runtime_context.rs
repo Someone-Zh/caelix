@@ -20,6 +20,8 @@ pub struct RuntimeContextSnapshot {
     pub work_dir: PathBuf,
     /// Debug 模式是否启用
     pub debug_enabled: bool,
+    /// Trace ID
+    pub trace_id: String,
 }
 
 impl RuntimeContextSnapshot {
@@ -33,6 +35,7 @@ impl RuntimeContextSnapshot {
             model: RuntimeContext::model(),
             work_dir: RuntimeContext::work_dir(),
             debug_enabled: RuntimeContext::is_debug_enabled(),
+            trace_id: RuntimeContext::trace_id(),
         }
     }
     
@@ -59,6 +62,9 @@ pub struct RuntimeContext {
     /// Span ID - 从 tracing span 自动提取，用于链路追踪
     span_id: String,
     
+    /// Trace ID - 标识整个请求链路（多Agent协作时保持一致）
+    trace_id: String,
+    
     /// 工作目录 - Session 创建时设定，之后只读
     work_dir: PathBuf,
     
@@ -81,6 +87,7 @@ impl std::fmt::Debug for RuntimeContext {
             .field("session_id", &self.session_id)
             .field("request_id", &self.request_id)
             .field("span_id", &self.span_id)
+            .field("trace_id", &self.trace_id)
             .field("work_dir", &self.work_dir)
             .field("provider", &self.provider)
             .field("model", &self.model)
@@ -96,6 +103,7 @@ impl Clone for RuntimeContext {
             session_id: self.session_id.clone(),
             request_id: self.request_id.clone(),
             span_id: self.span_id.clone(),
+            trace_id: self.trace_id.clone(),
             work_dir: self.work_dir.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),
@@ -128,11 +136,13 @@ impl RuntimeContext {
         let session_id = session_id.unwrap_or_else(generate_session_id);
         let request_id = request_id.unwrap_or_else(generate_request_id);
         let span_id = Self::extract_span_id_from_tracing();
+        let trace_id = caelix_api::utils::generate_trace_id();
         
         Self {
             session_id,
             request_id,
             span_id,
+            trace_id,
             work_dir,
             provider,
             model,
@@ -166,6 +176,11 @@ impl RuntimeContext {
     /// 获取 Span ID（从 tracing 自动提取）
     pub fn get_span_id(&self) -> &str {
         &self.span_id
+    }
+    
+    /// 获取 Trace ID
+    pub fn get_trace_id(&self) -> &str {
+        &self.trace_id
     }
     
     /// 获取工作目录
@@ -236,6 +251,14 @@ impl RuntimeContext {
     /// 如果在不存在的上下文中调用，会 panic
     pub fn span_id() -> String {
         CURRENT_CONTEXT.with(|ctx| ctx.span_id.clone())
+    }
+    
+    /// 获取当前 Trace ID
+    /// 
+    /// # Panics
+    /// 如果在不存在的上下文中调用，会 panic
+    pub fn trace_id() -> String {
+        CURRENT_CONTEXT.with(|ctx| ctx.trace_id.clone())
     }
     
     /// 获取当前工作目录
@@ -479,10 +502,12 @@ mod tests {
         assert!(!ctx.get_session_id().is_empty());
         assert!(!ctx.get_request_id().is_empty());
         assert!(!ctx.get_span_id().is_empty());
+        assert!(!ctx.get_trace_id().is_empty());
         
         // 验证 ID 格式
         assert!(ctx.get_session_id().starts_with("S-"));
         assert!(ctx.get_request_id().starts_with("R-"));
+        assert!(ctx.get_trace_id().starts_with("E-"));
         
         // 验证 provider 和 model
         assert_eq!(ctx.get_provider(), "openai");

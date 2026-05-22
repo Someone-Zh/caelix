@@ -18,6 +18,7 @@ pub const REQUEST_ID_PREFIX: &str = "R";
 #[allow(dead_code)]
 pub const SPAN_ID_PREFIX: &str = "P";
 pub const TASK_ID_PREFIX: &str = "T";
+pub const TRACE_ID_PREFIX: &str = "E";
 
 /// 生成Session ID (格式: S-{x})
 pub fn generate_session_id() -> String {
@@ -43,6 +44,12 @@ pub fn generate_span_id() -> String {
 pub fn generate_task_id() -> String {
     let id = generate_snowflake_id();
     format!("{}-{}", TASK_ID_PREFIX, id)
+}
+
+/// 生成 Trace ID (格式: E-{x})
+pub fn generate_trace_id() -> String {
+    let id = generate_snowflake_id();
+    format!("{}-{}", TRACE_ID_PREFIX, id)
 }
 
 /// 内部方法：生成snowflake ID
