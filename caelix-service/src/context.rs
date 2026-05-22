@@ -7,6 +7,7 @@ use caelix_config::skills_loader::register_all_skills;
 use caelix_message::{SessionManager, MessageBus, FileStorage};
 use caelix_task::{TaskManager, FilePersistence, RunnableFactory};
 use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
+use caelix_security::SecurityChecker;
 
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
@@ -32,6 +33,8 @@ pub struct CaelixContext {
     pub message_bus: Arc<MessageBus>,
     /// 任务管理器实例
     pub task_manager: Option<Arc<TaskManager>>,
+    /// 安全检查器实例
+    pub security_checker: Arc<SecurityChecker>,
     /// 默认 Provider 名称（初始化时设置）
     pub default_provider: String,
     /// 默认 Model 名称（初始化时设置）
@@ -70,6 +73,7 @@ impl CaelixContext {
             hook_registry: Arc::new(caelix_runtime::HookRegistry::new()),
             message_bus: Arc::new(bus),
             task_manager: Some(task_manager),
+            security_checker: Arc::new(SecurityChecker::new(caelix_security::SecurityConfig::default())),
             // 默认配置将在 init() 中设置
             default_provider: String::new(),
             default_model: String::new(),
@@ -194,6 +198,15 @@ impl CaelixContext {
     }
 
     pub async fn init(&mut self) -> Result<(), Box<dyn std::error::Error>> { 
+        // 加载安全配置
+        let security_config = caelix_security::loader::load_security_config(
+            &self.env_config.caelix_home
+        )?;
+        
+        // 重新创建 SecurityChecker
+        self.security_checker = Arc::new(SecurityChecker::new(security_config));
+        println!("✅ Security checker initialized");
+        
         // 初始化工具
         self.init_tools().await?;
 

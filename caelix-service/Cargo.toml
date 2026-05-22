@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 caelix-api = { path = "../caelix-api" }
 caelix-config = { path = "../caelix-config" }
+caelix-security = { path = "../caelix-security" }
 caelix-runtime = { path = "../caelix-runtime" }
 caelix-task = { path = "../caelix-task" }
 caelix-message = { path = "../caelix-message" }
