@@ -3,7 +3,6 @@ use std::env;
 use tokio::sync::RwLock;
 use caelix_config::managers::{AgentManager, ToolManager, ProviderManager, SkillManager, CommandManager};
 use caelix_config::provider_loader::load_provider_configs;
-use caelix_config::tools_loader::{create_all_builtin_tools, create_delegate_task_tool};
 use caelix_config::agents_loader::register_all_agents;
 use caelix_config::skills_loader::register_all_skills;
 use caelix_message::{SessionManager, MessageBus, FileStorage};
@@ -91,11 +90,19 @@ impl CaelixContext {
         let configs = load_provider_configs(&caelix_home)?;
         
         let mut provider_manager = self.llm_provider_manager.write().await;
-        for (key,mut config) in configs {
-            if config.name.is_empty() {
-                config.name = key
-            }
-            provider_manager.add_provider(config)?;
+        for (key, config) in configs {
+            let name = if config.name.is_empty() { key } else { config.name.clone() };
+            
+            // 根据 LlmType 创建对应的 Provider 实例
+            let provider: Arc<dyn caelix_api::provider::LlmProvider> = match config.llm_type {
+                caelix_api::provider::LlmType::OpenAI => {
+                    Arc::new(caelix_llm::OpenAIProvider::new(
+                        config.into()
+                    ))
+                }
+            };
+            
+            provider_manager.add_provider(name, provider)?;
         }
         
         Ok(())
@@ -104,8 +111,8 @@ impl CaelixContext {
     /// 初始化工具管理器
     /// 加载所有内置工具并注册到 tool_manager 中
     pub async fn init_tools(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // 加载所有内置工具实例
-        let tools = create_all_builtin_tools();
+        // 加载所有内置工具实例（从 caelix-service::tools）
+        let tools = crate::tools::create_all_builtin_tools();
 
         // 获取工具管理器写锁
         let tool_manager = self.tool_manager.clone();
@@ -114,12 +121,7 @@ impl CaelixContext {
             tool_manager.register(tool).await;
         }
 
-        // 注册委派任务工具（无需参数，从 RuntimeContext 动态获取）
-        if let Some(delegate_tool) = create_delegate_task_tool() {
-            tool_manager.register(delegate_tool).await;
-        }
-        
-        // 直接创建 DelegateTaskTool（因为它在 caelix-service 中）
+        // 注册委派任务工具（在 caelix-service 中创建）
         let delegate_tool = crate::tools::DelegateTaskTool::new(self.clone().into());
         tool_manager.register(Arc::new(delegate_tool)).await;
 

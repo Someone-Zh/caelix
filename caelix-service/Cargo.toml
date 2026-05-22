@@ -10,6 +10,8 @@ caelix-runtime = { path = "../caelix-runtime" }
 caelix-task = { path = "../caelix-task" }
 caelix-message = { path = "../caelix-message" }
 caelix-agent = { path = "../caelix-agent" }
+caelix-tools = { path = "../caelix-tools" }
+caelix-llm = { path = "../caelix-llm" }
 tokio.workspace = true
 async-trait.workspace = true
 futures.workspace = true

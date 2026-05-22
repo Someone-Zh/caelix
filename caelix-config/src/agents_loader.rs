@@ -44,17 +44,6 @@ async fn create_agent_from_file(
         tools.push(tool);
     }
     
-    // 特殊处理：如果工具列表中包含 "delegate_task"，需要额外创建
-    if config.tools.iter().any(|t| t == "delegate_task") {
-        // 检查是否已经添加过 delegate_task
-        let has_delegate = tools.iter().any(|t| t.name() == "delegate_task");
-        if !has_delegate {
-            if let Some(delegate_task_tool) = crate::tools_loader::create_delegate_task_tool() {
-                tools.push(delegate_task_tool);
-            }
-        }
-    }
-    
     // 使用 with_group 构造函数，保持向后兼容
     Ok(AgentSpec::with_group(config.name, system_prompt, tools, config.group))
 }

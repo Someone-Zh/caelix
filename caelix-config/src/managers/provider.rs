@@ -1,5 +1,4 @@
 #![allow(clippy::empty_line_after_doc_comments)]
-use caelix_api::provider::*;
 use std::collections::HashMap;
 use caelix_api::error::AgentError;
 use std::sync::Arc;
@@ -31,19 +30,12 @@ impl ProviderManager {
     /// 添加新的LLM提供者
     /// 
     /// # 参数
-    /// - `config`: 提供者的配置信息
+    /// - `name`: 提供者名称
+    /// - `provider`: 提供者实例
     /// 
     /// # 返回值
     /// - `Result<(), AgentError>`: 操作结果
-    pub fn add_provider(&mut self, config: ProviderConfig) -> Result<(), AgentError> {
-        let name = config.name.clone();
-        let provider: Arc<dyn caelix_api::provider::LlmProvider> = match config.llm_type {
-            caelix_api::provider::LlmType::OpenAI => {
-                Arc::new(caelix_llm::OpenAIProvider::new(
-                    config.into()
-                ))
-            }
-        };
+    pub fn add_provider(&mut self, name: String, provider: Arc<dyn caelix_api::provider::LlmProvider>) -> Result<(), AgentError> {
         self.providers.insert(name, provider);
         Ok(())
     }
