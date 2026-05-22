@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::utils;
+use crate::error::AgentError;
 
 /// 任务ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -24,11 +25,12 @@ impl fmt::Display for TaskId {
 }
 
 /// 任务分类
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskKind {
     Async,
     Once(DateTime<Utc>),
     Cron(String),
+    Todo,  // 待办任务，完全由外部触发状态变更
 }
 
 /// 任务状态
@@ -45,7 +47,12 @@ pub enum TaskStatus {
 /// 可执行任务 Trait
 #[async_trait]
 pub trait Runnable: Send + Sync + 'static {
-    async fn run(&self) -> anyhow::Result<()>;
+    /// 执行任务并返回结果
+    /// 
+    /// # Returns
+    /// - Ok(String): 任务执行成功，返回结果字符串
+    /// - Err(AgentError): 任务执行失败，返回错误信息
+    async fn run(&self) -> Result<String, AgentError>;
     fn task_type(&self) -> &'static str;
     fn payload(&self) -> String;
 }

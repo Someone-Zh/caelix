@@ -435,7 +435,7 @@ Level 0: caelix-api (无内部依赖，所有包的基础)
 | **Agent 系统** | [caelix-agent/spec.md](file://caelix-agent/spec.md) | 多 Agent 协作架构，支持 planner、executor、collector 等角色。Agent 通过配置文件定义，动态加载。支持 Hook 机制扩展行为。包含推理-行动循环、工具调用、流式输出等核心能力。 |
 | **工具系统** | [caelix-tools/spec.md](file://caelix-tools/spec.md) | 可扩展的工具框架，内置文件编辑、搜索、读取、目录浏览等工具。通过实现 Tool trait 添加新工具。支持工具参数校验、执行结果处理、错误恢复。Agent 可通过工具与环境交互。 |
 | **消息总线** | [caelix-message/spec.md](file://caelix-message/spec.md) | 发布订阅模式的消息系统，支持多类型消息（Agent、Notification、Task）。SessionManager 管理会话生命周期，FileStorage 实现消息持久化。支持流式消息广播和实时订阅。 |
-| **任务调度** | [caelix-task/spec.md](file://caelix-task/spec.md) | 异步任务队列系统，支持任务创建、调度、执行、持久化。TaskManager 管理任务状态，TaskScheduler 支持定时任务（cron）。支持任务委派（delegate_task），实现 Agent 间协作。 |
+| **任务调度** | [caelix-task/spec.md](file://caelix-task/spec.md) | 异步任务队列系统，支持任务创建、调度、执行、持久化。TaskManager 管理任务状态，TaskScheduler 支持定时任务（cron）。支持任务委派（delegate_task），实现 Agent 间协作。核心特性：任务返回值 Result<String, AgentError>、RuntimeContext 完整传递、任务结果保存到 session 级别目录、Todo 待办任务类型（外部触发状态变更）。 |
 | **Hook 系统** | [caelix-runtime/spec.md](file://caelix-runtime/spec.md) | 运行时扩展机制，支持在 Agent 执行前后注入自定义逻辑。内置技能加载、消息记录、工具结果检查等 Hook。通过 HookRegistry 统一管理，支持优先级和条件匹配。 |
 | **配置管理** | [caelix-config/spec.md](file://caelix-config/spec.md) | 动态配置加载和资源管理系统。从文件系统加载 Agent、Provider、Tool、Skill、Command 配置。通过 Manager 模式统一管理各类资源，支持热重载。 |
 | **CLI 界面** | [caelix-cli/spec.md](file://caelix-cli/spec.md) | 命令行交互界面，默认启动模式。支持会话管理、Agent 切换、模型选择、任务查询等命令。流式输出实时显示，支持历史记录和命令补全。 |

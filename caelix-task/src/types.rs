@@ -1,19 +1,9 @@
 // src/runtime/task/types.rs
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // 从 caelix-api 导入核心任务类型
-pub use caelix_api::task::{TaskId, TaskKind, TaskStatus};
-
-// ==================== 可执行任务 Trait ====================
-
-#[async_trait]
-pub trait Runnable: Send + Sync + 'static {
-    async fn run(&self) -> anyhow::Result<()>;
-    fn task_type(&self) -> &'static str;
-    fn payload(&self) -> String;
-}
+pub use caelix_api::task::{TaskId, TaskKind, TaskStatus, Runnable};
 
 // ==================== 任务元数据 (用于持久化) ====================
 
@@ -27,6 +17,7 @@ pub struct TaskMeta {
     pub kind: TaskKind,
     pub status: TaskStatus,
     pub progress: Option<f32>,  // 任务进度 0.0-1.0
+    pub result: Option<String>,  // 任务执行结果
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub task_type_name: String,
@@ -53,6 +44,7 @@ impl TaskMeta {
             kind,
             status: TaskStatus::Pending,
             progress: None,
+            result: None,
             created_at: now,
             updated_at: now,
             task_type_name,

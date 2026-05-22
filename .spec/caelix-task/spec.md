@@ -1,563 +1,460 @@
-# 任务调度系统规范
+# 任务调度系统功能规范
 
-## 功能概述
+## 正在处理的需求目录
 
-任务调度系统是 Caelix 的异步任务管理基础设施，提供任务创建、调度、执行、持久化和定时执行能力。支持任务委派（delegate_task），实现 Agent 间的协作和子任务管理。
+## 涉及的模型文件 
+|描述|位置|
+|---|---|
+|任务类型定义（TaskId, TaskKind, TaskStatus, Runnable trait）|caelix-api/src/task/mod.rs|
+|任务元数据（TaskMeta）、工厂（RunnableFactory）|caelix-task/src/types.rs|
+|任务管理器（TaskManager）|caelix-task/src/manager.rs|
+|任务持久化（TaskPersistence, FilePersistence）|caelix-task/src/persistence.rs|
+|任务调度器（TaskScheduler）|caelix-task/src/scheduler.rs|
+|运行时上下文（RuntimeContext）|caelix-runtime/src/context/runtime_context.rs|
+|任务消息类型（TaskMessage, TodoTriggerMessage）|caelix-message/src/task_message.rs|
 
-## 核心能力
+## 涉及的依赖功能
+* [Agent 系统](file://.spec/caelix-agent/spec.md) - 通过 delegate_task 工具提交任务
+* [消息总线](file://.spec/caelix-message/spec.md) - 任务状态变更通知、外部触发待办任务
+* [Hook 系统](file://.spec/caelix-runtime/spec.md) - 任务执行前后的钩子扩展
+* [会话管理](file://.spec/caelix-message/spec.md#会话管理) - 任务归属于特定 session
 
-### 1. 任务模型
+## 涉及的依赖服务
+|描述|位置|
+|---|---|
+|MessageBus - 消息总线|caelix-message/src/bus.rs|
+|SessionManager - 会话管理器|caelix-message/src/manager.rs|
+|FileStorage - 文件存储|caelix-message/src/storage.rs|
+|RuntimeContext - 运行时上下文|caelix-runtime/src/context/runtime_context.rs|
 
-**TaskMeta**: 任务元数据
-```rust
-pub struct TaskMeta {
-    pub id: String,              // 任务唯一 ID
-    pub session_id: String,      // 所属会话
-    pub parent_task_id: Option<String>, // 父任务 ID
-    pub agent_name: String,      // 执行 Agent
-    pub description: String,     // 任务描述
-    pub status: TaskStatus,      // 任务状态
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub result: Option<String>,  // 执行结果
-    pub error: Option<String>,   // 错误信息
-}
+## 当前功能详细信息
 
-pub enum TaskStatus {
-    Pending,     // 等待执行
-    Running,     // 执行中
-    Completed,   // 已完成
-    Failed,      // 失败
-    Cancelled,   // 已取消
-}
+### 1. 任务类型系统（caelix-api/src/task/mod.rs）
+
+**业务逻辑和功能介绍**:
+- **TaskId**: 使用 Snowflake 算法生成的唯一任务 ID，格式为 `T-{timestamp}-{sequence}`
+- **TaskKind**: 任务分类枚举
+  - `Async`: 异步任务，提交后立即执行
+  - `Once(DateTime<Utc>)`: 一次性定时任务，在指定时间执行
+  - `Cron(String)`: 周期性任务，按 cron 表达式定期执行
+  - `Todo`: 待办任务，完全由外部触发状态变更，不自动执行
+- **TaskStatus**: 任务状态枚举
+  - `Pending`: 等待中
+  - `Scheduled`: 已调度
+  - `Running`: 执行中
+  - `Completed`: 已完成
+  - `Failed(String)`: 失败（包含错误信息）
+  - `Cancelled`: 已取消
+- **Runnable trait**: 可执行任务接口
+  ```rust
+  #[async_trait]
+  pub trait Runnable: Send + Sync + 'static {
+      /// 执行任务并返回结果
+      /// 
+      /// # Returns
+      /// - Ok(String): 任务执行成功，返回结果字符串
+      /// - Err(AgentError): 任务执行失败，返回错误信息
+      async fn run(&self) -> Result<String, AgentError>;
+      
+      fn task_type(&self) -> &'static str;
+      fn payload(&self) -> String;
+  }
+  ```
+
+**异常场景**:
+- 任务执行失败时，状态更新为 `Failed(error_message)`，result 字段包含错误信息
+- 任务被取消时，立即 abort tokio task
+
+**校验逻辑**:
+- TaskId 必须唯一
+- Cron 表达式必须符合 cron crate 的语法
+- Todo 任务状态流转必须符合规则：Pending → Running → Completed/Failed/Cancelled
+
+**功能实际文件位置**: `caelix-api/src/task/mod.rs`
+
+**测试用例位置**: 暂无单元测试
+
+---
+
+### 2. 任务元数据与工厂（caelix-task/src/types.rs）
+
+**业务逻辑和功能介绍**:
+- **TaskMeta**: 任务元数据结构，用于持久化
+  - 包含 task_id, session_id, span_id, tool_call_id, task_name
+  - 包含 kind, status, progress（进度 0.0-1.0）
+  - 包含 created_at, updated_at 时间戳
+  - 包含 task_type_name, task_payload 用于恢复任务
+  - **新增**: result 字段存储任务执行结果（成功时为输出字符串，失败时为错误信息）
+- **RunnableFactory**: 任务工厂，用于从持久化数据恢复任务
+  - 注册构造函数：`register(name, constructor)`
+  - 创建任务实例：`create(name, payload) -> Option<Box<dyn Runnable>>`
+
+**异常场景**:
+- 工厂无法找到对应的任务类型时返回 None
+
+**功能实际文件位置**: `caelix-task/src/types.rs`
+
+---
+
+### 3. 任务管理器（caelix-task/src/manager.rs）
+
+**业务逻辑和功能介绍**:
+- **核心功能**:
+  - `submit()`: 提交新任务，根据 TaskKind 决定立即执行、调度或仅记录（Todo）
+  - `cancel()`: 取消任务，abort tokio task 并更新状态
+  - `get_status()`: 查询任务状态
+  - `wait()`: 等待任务完成（自旋等待）
+  - `list_tasks()`: 列出任务（支持按 session 过滤）
+  - `update_progress()`: 更新任务进度并发送通知
+  - **新增**: `update_todo_status()`: 外部触发 Todo 任务状态变更
+  - **新增**: `start_todo_listener()`: 启动 Todo 任务监听器
+  - `restore()`: 从持久化存储恢复任务（启动时调用）
+
+- **内部机制**:
+  - 使用 DashMap 存储任务句柄（TaskHandle）
+  - TaskHandle 包含：TaskMeta, oneshot::Sender<Result<String, AgentError>>, RuntimeContext, JoinHandle
+  - 后台调度器循环检查待执行任务
+  - 任务执行完成后发送状态更新消息到 MessageBus
+  - **新增**: 任务执行时在 RuntimeContext 作用域内运行，确保上下文传播
+  - **新增**: Todo 任务监听器接收消息总线触发，自动更新状态
+
+**关键改进**:
+- RuntimeContext 完整传递：任务执行时可以访问 session_id、provider、model、span_id、trace_id
+- 任务结果保存：Result<String, AgentError> 保存到 TaskMeta.result 字段
+- 持久化路径优化：任务文件保存到 `sessions/{session_id}/tasks/{task_id}.json`
+- Todo 任务支持：完全由外部触发，不自动执行
+
+**功能实际文件位置**: `caelix-task/src/manager.rs`
+
+---
+
+### 4. 任务持久化（caelix-task/src/persistence.rs）
+
+**业务逻辑和功能介绍**:
+- **TaskPersistence trait**: 持久化接口
+  - `save(meta)`: 保存任务元数据（包含 result）
+  - `delete(task_id)`: 删除任务文件
+  - `load_all()`: 加载所有任务（用于恢复）
+
+- **FilePersistence 实现**:
+  - **主存储位置**: `sessions/{session_id}/tasks/{task_id}.json`（session 级别）
+  - **备用存储位置**: `$CAELIX_HOME/tasks/{task_id}.json`（全局，向后兼容）
+  - 格式：JSON（serde_json 序列化）
+  - 所有任务都持久化，包括 Async、Todo 任务
+  - 状态变更时立即更新文件
+
+**异常场景**:
+- 文件读写失败时返回 anyhow::Error
+- session 目录不存在时自动创建
+
+**功能实际文件位置**: `caelix-task/src/persistence.rs`
+
+---
+
+### 5. 任务调度器（caelix-task/src/scheduler.rs）
+
+**业务逻辑和功能介绍**:
+- **TaskScheduler**: 任务调度器
+  - 维护优先队列（BinaryHeap），按执行时间排序
+  - `schedule(meta)`: 将任务加入调度队列（Todo 任务会被忽略）
+  - `next_ready()`: 获取下一个就绪的任务（阻塞等待）
+  - `cancel(task_id)`: 从调度队列移除任务
+  - `calculate_next_run(kind)`: 计算下次执行时间（针对 Cron 任务）
+
+**关键改进**:
+- Todo 任务不会加入调度队列，完全由外部触发
+
+**功能实际文件位置**: `caelix-task/src/scheduler.rs`
+
+---
+
+### 6. 任务消息系统（caelix-message/src/task_message.rs）
+
+**业务逻辑和功能介绍**:
+- **TaskMessage**: 任务状态变更消息
+  - 包含 task_id, session_id, type, timestamp, content
+  - **新增**: result 字段包含任务执行结果
+  - 消息类型：Created, Started, Completed, Failed, Progress, Cancelled, TodoTrigger
+
+- **TodoTriggerMessage**: Todo 任务触发消息
+  - 包含 task_id, session_id, target_status, result, timestamp
+  - 通过消息总线发送，触发 Todo 任务状态变更
+
+- **MessageBus 集成**:
+  - `send_task(msg)`: 发送任务消息
+  - `send_todo_trigger(msg)`: 发送 Todo 触发消息
+  - `subscribe_to_tasks()`: 订阅任务消息
+  - `subscribe_to_todo_triggers()`: 订阅 Todo 触发消息
+
+**功能实际文件位置**: `caelix-message/src/task_message.rs`
+
+---
+
+## 已有的子模块
+|描述|位置|
+|---|---|
+|delegate_task 工具|[caelix-service/src/tools/delegate_task.rs](file://caelix-service/src/tools/delegate_task.rs)|
+|list_tasks 工具|[caelix-service/src/tools/list_tasks.rs](file://caelix-service/src/tools/list_tasks.rs)|
+
+---
+
+## 业务流程图
+
+### 1. Async 任务执行流程
+
+```
+用户/Agent → submit(Async, runnable)
+                ↓
+        捕获 RuntimeContext
+                ↓
+        创建 TaskMeta (status=Running)
+                ↓
+        存入 registry + 持久化
+                ↓
+        Spawn tokio task
+                ↓
+    ┌───────────────────────────┐
+    ↓                           ↓
+RuntimeContext::scope      执行 runnable.run()
+                ↓                   ↓
+          返回 Result<String, AgentError>
+                ↓
+        更新 TaskMeta.status + result
+                ↓
+        持久化到 sessions/{session_id}/tasks/{task_id}.json
+                ↓
+        发送 TaskMessage (Completed/Failed)
+                ↓
+        通知等待者 (oneshot channel)
 ```
 
-**Runnable Trait**: 可执行任务
-```rust
-#[async_trait]
-pub trait Runnable: Send + Sync {
-    async fn run(&self, context: &RuntimeContext) -> Result<String, AgentError>;
-}
-```
-
-### 2. 任务生命周期
+### 2. Todo 任务状态变更流程
 
 ```
-创建 (Pending) → 调度 → 执行 (Running) → 完成 (Completed/Failed)
-     ↑                                              |
-     └──────────── 重试/取消 ←─────────────────────┘
+外部系统 → 发送 TodoTriggerMessage
+                ↓
+        MessageBus 广播
+                ↓
+        TodoListener 接收消息
+                ↓
+        解析 task_id, target_status, result
+                ↓
+        调用 update_todo_status()
+                ↓
+        验证状态流转合法性
+                ↓
+        更新 TaskMeta.status + result
+                ↓
+        持久化到 sessions/{session_id}/tasks/{task_id}.json
+                ↓
+        发送 TaskMessage (Started/Completed/Failed)
 ```
 
-**状态转换**:
-1. **Pending**: 任务创建后初始状态
-2. **Running**: 调度器选择任务开始执行
-3. **Completed**: 任务成功执行完毕
-4. **Failed**: 任务执行失败
-5. **Cancelled**: 任务被手动取消
+### 3. 任务恢复流程（启动时）
 
-### 3. 任务调度
-
-**TaskScheduler 职责**:
-1. 管理任务队列
-2. 按优先级调度任务
-3. 支持定时任务（cron）
-4. 控制并发执行数量
-5. 处理任务超时
-
-**调度策略**:
-- **FIFO**: 先进先出（默认）
-- **Priority**: 按优先级排序
-- **Cron**: 定时触发
-- **Dependency**: 依赖关系调度
-
-**示例**:
-```rust
-// 创建定时任务
-let task = TaskMeta {
-    description: "每日备份".to_string(),
-    schedule: Some("0 0 * * *".to_string()), // 每天午夜
-    ..Default::default()
-};
-
-task_scheduler.schedule(task).await?;
+```
+系统启动 → TaskManager::restore()
+                ↓
+        加载所有任务文件
+                ↓
+    ┌───────────────────────────┐
+    ↓                           ↓
+Async/Once/Cron             Todo
+    ↓                           ↓
+重置为 Scheduled            保持 Pending
+    ↓                           ↓
+创建默认 RuntimeContext     创建默认 RuntimeContext
+    ↓                           ↓
+重新加入调度队列            仅注册，不调度
+    ↓                           ↓
+等待调度器执行              等待外部触发
 ```
 
-### 4. 任务持久化
+---
 
-**FilePersistence 实现**:
-```rust
-pub struct FilePersistence {
-    base_path: PathBuf,
-}
+## 数据流向图
 
-impl FilePersistence {
-    pub async fn save_task(&self, task: &TaskMeta) -> Result<(), IoError> {
-        let file_path = self.base_path.join(format!("{}.json", task.id));
-        let content = serde_json::to_string_pretty(task)?;
-        tokio::fs::write(&file_path, content).await?;
-        Ok(())
-    }
-    
-    pub async fn load_task(&self, task_id: &str) -> Result<Option<TaskMeta>, IoError> {
-        let file_path = self.base_path.join(format!("{}.json", task_id));
-        if !file_path.exists() {
-            return Ok(None);
-        }
-        let content = tokio::fs::read_to_string(&file_path).await?;
-        let task = serde_json::from_str(&content)?;
-        Ok(Some(task))
-    }
-}
+### 任务数据存储结构
+
+```
+$CAELIX_HOME/
+├── sessions/
+│   ├── {session_id_1}/
+│   │   ├── messages.jsonl          # 会话消息历史
+│   │   └── tasks/                  # 任务结果目录
+│   │       ├── {task_id_1}.json    # 任务 1 的完整元数据和结果
+│   │       ├── {task_id_2}.json    # 任务 2 的完整元数据和结果
+│   │       └── ...
+│   └── {session_id_2}/
+│       └── tasks/
+│           └── ...
+└── tasks/                          # 全局任务目录（向后兼容）
+    ├── {task_id_old}.json
+    └── ...
 ```
 
-**存储结构**:
-```
-tasks/
-├── task_001.json
-├── task_002.json
-└── task_003.json
-```
+### TaskMeta JSON 结构示例
 
-### 5. 任务委派（Delegate Task）
-
-**DelegateTaskTool**: Agent 间任务委派工具
-
-**参数**:
 ```json
 {
-  "agent": "collector_agent",
-  "description": "收集项目依赖信息",
-  "sync": true,
-  "timeout": 300
+  "task_id": "T-1234567890-001",
+  "session_id": "S-9876543210",
+  "span_id": "Span-abc123",
+  "tool_call_id": "call_xyz789",
+  "task_name": "代码审查任务",
+  "kind": "Async",
+  "status": "Completed",
+  "progress": 1.0,
+  "created_at": "2026-05-22T10:00:00Z",
+  "updated_at": "2026-05-22T10:05:30Z",
+  "task_type_name": "code_review",
+  "task_payload": "{\"file_path\": \"src/main.rs\"}",
+  "result": "代码审查完成，发现 3 个警告，0 个错误。建议优化错误处理逻辑。"
 }
 ```
 
-**执行流程**:
+---
+
+## 状态流转规则
+
+### Async/Once/Cron 任务
 ```
-Planner Agent 调用 delegate_task
-          ↓
-   TaskManager 创建子任务
-          ↓
-   TaskScheduler 调度执行
-          ↓
-   启动 Collector Agent
-          ↓
-   执行子任务
-          ↓
-   更新任务状态和结果
-          ↓
-   返回结果给 Planner Agent
+Pending → Scheduled → Running → Completed
+                            ↘     ↘
+                              Failed
+                            ↘     ↘
+                              Cancelled
 ```
 
-**同步 vs 异步**:
-- **sync=true**: 阻塞等待子任务完成，直接返回结果
-- **sync=false**: 立即返回 task_id，后续通过查询获取结果
+### Todo 任务
+```
+Pending → Running → Completed
+         ↘     ↘
+           Failed
+         ↘     ↘
+           Cancelled
 
-## 技术实现
+注意：
+- Todo 任务只能由外部触发状态变更
+- 不能自动从 Pending 转为 Running
+- 必须通过 update_todo_status() 或 TodoTriggerMessage 触发
+```
 
-### 核心组件
+---
 
-| 组件 | 位置 | 职责 |
-|------|------|------|
-| **TaskManager** | `caelix-task/src/manager.rs` | 任务管理器 |
-| **TaskScheduler** | `caelix-task/src/scheduler.rs` | 任务调度器 |
-| **FilePersistence** | `caelix-task/src/persistence.rs` | 任务持久化 |
-| **DelegateTaskTool** | `caelix-task/src/tools/delegate_task.rs` | 任务委派工具 |
+## API 使用示例
 
-### TaskManager 实现
+### 1. 提交 Async 任务
 
 ```rust
-pub struct TaskManager {
-    persistence: Arc<FilePersistence>,
-    scheduler: Arc<TaskScheduler>,
-    tasks: Arc<DashMap<String, TaskMeta>>,
-}
+let task_manager = context.get_task_manager();
 
-impl TaskManager {
-    pub async fn create_task(&self, task: TaskMeta) -> Result<String, ApiError> {
-        let task_id = task.id.clone();
-        
-        // 保存到持久化存储
-        self.persistence.save_task(&task).await?;
-        
-        // 加入内存缓存
-        self.tasks.insert(task_id.clone(), task);
-        
-        // 提交到调度器
-        self.scheduler.submit(task_id.clone()).await?;
-        
-        Ok(task_id)
-    }
-    
-    pub async fn get_task(&self, task_id: &str) -> Result<Option<TaskMeta>, ApiError> {
-        // 先查内存
-        if let Some(task) = self.tasks.get(task_id) {
-            return Ok(Some(task.value().clone()));
-        }
-        
-        // 再查持久化
-        self.persistence.load_task(task_id).await
-    }
-    
-    pub async fn update_task_status(
-        &self,
-        task_id: &str,
-        status: TaskStatus,
-        result: Option<String>,
-    ) -> Result<(), ApiError> {
-        let mut task = self.tasks.get_mut(task_id).ok_or(ApiError::TaskNotFound)?;
-        task.status = status;
-        task.result = result;
-        task.completed_at = Some(Utc::now());
-        
-        // 持久化更新
-        self.persistence.save_task(&task).await?;
-        
-        Ok(())
+let runnable = Box::new(MyCustomTask::new("param1".to_string()));
+
+let task_id = task_manager.submit(
+    session_id.clone(),
+    span_id.clone(),
+    Some(tool_call_id),
+    Some("我的任务".to_string()),
+    TaskKind::Async,
+    runnable,
+).await;
+
+// 等待任务完成
+if let Some(result) = task_manager.wait(task_id).await {
+    match result {
+        Ok(_) => println!("任务成功"),
+        Err(e) => println!("任务失败: {}", e),
     }
 }
 ```
 
-### TaskScheduler 实现
+### 2. 提交 Todo 任务
 
 ```rust
-pub struct TaskScheduler {
-    queue: Arc<Mutex<VecDeque<String>>>,
-    running_tasks: Arc<DashMap<String, JoinHandle<()>>>,
-    max_concurrent: usize,
-}
+let task_manager = context.get_task_manager();
 
-impl TaskScheduler {
-    pub async fn submit(&self, task_id: String) -> Result<(), ApiError> {
-        self.queue.lock().await.push_back(task_id);
-        self.try_schedule().await;
-        Ok(())
-    }
-    
-    async fn try_schedule(&self) {
-        while self.running_tasks.len() < self.max_concurrent {
-            if let Some(task_id) = self.queue.lock().await.pop_front() {
-                let handle = tokio::spawn(self.execute_task(task_id.clone()));
-                self.running_tasks.insert(task_id, handle);
-            } else {
-                break;
-            }
-        }
-    }
-    
-    async fn execute_task(&self, task_id: String) {
-        // 执行任务逻辑
-        // ...
-        
-        // 任务完成后清理
-        self.running_tasks.remove(&task_id);
-        self.try_schedule().await;
-    }
-}
+let runnable = Box::new(MyCustomTask::new("param1".to_string()));
+
+let task_id = task_manager.submit(
+    session_id.clone(),
+    span_id.clone(),
+    None,
+    Some("待办任务".to_string()),
+    TaskKind::Todo,
+    runnable,
+).await;
+
+// 此时任务状态为 Pending，不会执行
+
+// 稍后通过 API 触发
+task_manager.update_todo_status(
+    task_id.clone(),
+    TaskStatus::Running,
+    None,
+).await;
+
+// 模拟任务执行...
+task_manager.update_todo_status(
+    task_id.clone(),
+    TaskStatus::Completed,
+    Some("任务完成".to_string()),
+).await;
 ```
 
-### DelegateTaskTool 实现
+### 3. 通过消息总线触发 Todo 任务
 
 ```rust
-#[derive(Debug)]
-pub struct DelegateTaskTool {
-    task_manager: Arc<TaskManager>,
-}
+let bus = context.get_message_bus();
 
-#[async_trait]
-impl Tool for DelegateTaskTool {
-    fn name(&self) -> &str {
-        "delegate_task"
-    }
-    
-    fn description(&self) -> &str {
-        "委派任务给其他 Agent 执行"
-    }
-    
-    fn parameters_schema(&self) -> JsonValue {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "agent": {
-                    "type": "string",
-                    "description": "目标 Agent 名称"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "任务描述"
-                },
-                "sync": {
-                    "type": "boolean",
-                    "description": "是否同步等待结果"
-                }
-            },
-            "required": ["agent", "description"]
-        })
-    }
-    
-    async fn execute(&self, input: JsonValue) -> ToolResult {
-        let agent = input["agent"].as_str().unwrap();
-        let description = input["description"].as_str().unwrap();
-        let sync = input["sync"].as_bool().unwrap_or(false);
-        
-        // 创建子任务
-        let task = TaskMeta {
-            agent_name: agent.to_string(),
-            description: description.to_string(),
-            status: TaskStatus::Pending,
-            ..Default::default()
-        };
-        
-        let task_id = self.task_manager.create_task(task).await
-            .map_err(|e| ToolResult {
-                output: String::new(),
-                error: Some(e.to_string()),
-            })?;
-        
-        if sync {
-            // 等待任务完成
-            let result = self.wait_for_task_completion(&task_id).await;
-            ToolResult {
-                output: result.unwrap_or_default(),
-                error: None,
-            }
-        } else {
-            // 异步返回 task_id
-            ToolResult {
-                output: format!("Task created with ID: {}", task_id),
-                error: None,
-            }
-        }
-    }
-    
-    fn clone_box(&self) -> Box<dyn Tool> {
-        Box::new(self.clone())
-    }
-}
+let trigger_msg = TodoTriggerMessage {
+    task_id: task_id.to_string(),
+    session_id: session_id.clone(),
+    target_status: TaskStatus::Completed,
+    result: Some("通过消息触发的完成".to_string()),
+    timestamp: Utc::now(),
+};
+
+bus.send_todo_trigger(trigger_msg).unwrap();
 ```
 
-## 任务查询
-
-### 查询接口
+### 4. 查询任务结果
 
 ```rust
-// 获取任务列表
-let tasks = task_manager.list_tasks(Some(&session_id)).await?;
-
-// 获取单个任务
-let task = task_manager.get_task(&task_id).await?;
-
-// 按状态过滤
-let pending_tasks = task_manager.list_tasks_by_status(TaskStatus::Pending).await?;
-
-// 获取子任务
-let subtasks = task_manager.get_subtasks(&parent_task_id).await?;
-```
-
-### API 端点
-
-**HTTP API**:
-```
-GET /api/tasks?session_id={session_id}
-GET /api/tasks/{task_id}
-POST /api/tasks/{task_id}/cancel
-```
-
-**CLI 命令**:
-```bash
-caelix task list --session sess_123
-caelix task show task_456
-caelix task cancel task_456
-```
-
-## 定时任务
-
-### Cron 表达式支持
-
-**格式**: `分 时 日 月 周`
-
-**示例**:
-- `0 * * * *`: 每小时执行
-- `0 0 * * *`: 每天午夜执行
-- `*/5 * * * *`: 每 5 分钟执行
-- `0 9 * * 1`: 每周一上午 9 点执行
-
-**实现**:
-```rust
-use cron::Schedule;
-
-let schedule = Schedule::from_str("0 0 * * *").unwrap();
-let next_run = schedule.upcoming(Utc).next().unwrap();
-
-// 定期检查并触发任务
-tokio::spawn(async move {
-    loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        scheduler.check_and_trigger_scheduled_tasks().await;
-    }
-});
-```
-
-## 错误处理
-
-### 常见错误
-
-| 错误类型 | 原因 | 处理方式 |
-|---------|------|---------|
-| `TaskNotFound` | 任务不存在 | 返回错误提示 |
-| `TaskExecutionFailed` | 任务执行失败 | 记录错误，标记为 Failed |
-| `TaskTimeout` | 任务超时 | 取消任务，标记为 Failed |
-| `MaxRetriesExceeded` | 超过最大重试次数 | 标记为 Failed |
-| `InvalidCronExpression` | Cron 表达式无效 | 拒绝创建任务 |
-
-### 重试机制
-
-```rust
-const MAX_RETRIES: usize = 3;
-
-for attempt in 1..=MAX_RETRIES {
-    match execute_task(&task).await {
-        Ok(result) => {
-            update_task_status(&task_id, TaskStatus::Completed, Some(result)).await?;
-            break;
-        },
-        Err(e) if attempt < MAX_RETRIES => {
-            warn!("Task {} failed (attempt {}): {:?}", task_id, attempt, e);
-            tokio::time::sleep(Duration::from_secs(attempt as u64 * 5)).await;
-        },
-        Err(e) => {
-            error!("Task {} failed after {} attempts: {:?}", task_id, MAX_RETRIES, e);
-            update_task_status(&task_id, TaskStatus::Failed, Some(e.to_string())).await?;
-            break;
-        }
-    }
+if let Some(meta) = task_manager.get_status(&task_id).await {
+    println!("任务状态: {:?}", meta.status);
+    println!("任务结果: {:?}", meta.result);
 }
 ```
 
-## 性能优化
+---
 
-### 1. 并发控制
+## 注意事项
 
-**限制并发任务数**:
-```rust
-const MAX_CONCURRENT_TASKS: usize = 10;
+### Breaking Changes
+1. **Runnable trait 签名变更**:
+   - 旧: `async fn run(&self) -> anyhow::Result<()>`
+   - 新: `async fn run(&self) -> Result<String, AgentError>`
+   - 迁移: 所有实现需要更新返回值，成功时返回结果字符串，失败时返回 AgentError
 
-if running_tasks.len() >= MAX_CONCURRENT_TASKS {
-    // 等待有任务完成
-    wait_for_available_slot().await;
-}
-```
+2. **TaskMeta 新增字段**:
+   - 新增 `result: Option<String>`
+   - 使用 `#[serde(default)]` 保证向后兼容
+   - 旧数据加载时 result 为 None
 
-### 2. 资源隔离
+3. **持久化路径变更**:
+   - 新任务保存到 `sessions/{session_id}/tasks/`
+   - 旧的全局路径 `$CAELIX_HOME/tasks/` 仍然可用（向后兼容）
 
-**每个任务独立的 RuntimeContext**:
-```rust
-let task_context = RuntimeContext::new(session_id.clone())
-    .with_request_id(generate_request_id())
-    .with_span_id(generate_span_id());
-```
+### 性能考虑
+- RuntimeContext 克隆开销较小（主要是 String 和 PathBuf）
+- 任务结果字符串不宜过大，建议限制在 10KB 以内
+- Todo 监听器使用独立 tokio task，不影响主流程
 
-### 3. 懒加载
-
-**延迟加载任务详情**:
-```rust
-// 列表查询只返回摘要
-let summaries = tasks.iter().map(|t| TaskSummary {
-    id: t.id.clone(),
-    status: t.status.clone(),
-    created_at: t.created_at,
-}).collect();
-
-// 详情页才加载完整信息
-let full_task = task_manager.get_task(&task_id).await?;
-```
-
-## 扩展指南
-
-### 添加自定义任务类型
-
-1. **实现 Runnable trait**
-```rust
-#[derive(Debug, Clone)]
-pub struct MyCustomTask {
-    pub param1: String,
-    pub param2: i32,
-}
-
-#[async_trait]
-impl Runnable for MyCustomTask {
-    async fn run(&self, context: &RuntimeContext) -> Result<String, AgentError> {
-        // 实现任务逻辑
-        Ok(format!("Result: {} {}", self.param1, self.param2))
-    }
-}
-```
-
-2. **注册任务处理器**
-```rust
-task_scheduler.register_handler("my_custom_task", Box::new(MyCustomTaskHandler));
-```
-
-### 自定义持久化后端
-
-**实现 Persistence trait**:
-```rust
-#[async_trait]
-pub trait Persistence: Send + Sync {
-    async fn save_task(&self, task: &TaskMeta) -> Result<(), PersistenceError>;
-    async fn load_task(&self, task_id: &str) -> Result<Option<TaskMeta>, PersistenceError>;
-    async fn list_tasks(&self) -> Result<Vec<TaskMeta>, PersistenceError>;
-}
-
-// 实现数据库持久化
-pub struct DatabasePersistence {
-    pool: PgPool,
-}
-
-#[async_trait]
-impl Persistence for DatabasePersistence {
-    // ...
-}
-```
-
-## 测试策略
-
-### 单元测试
-
-```rust
-#[tokio::test]
-async fn test_task_creation() {
-    let manager = create_test_task_manager();
-    let task = TaskMeta {
-        description: "Test task".to_string(),
-        ..Default::default()
-    };
-    
-    let task_id = manager.create_task(task).await.unwrap();
-    assert!(!task_id.is_empty());
-}
-
-#[tokio::test]
-async fn test_delegate_task_sync() {
-    let tool = DelegateTaskTool::new(test_task_manager());
-    let input = serde_json::json!({
-        "agent": "collector_agent",
-        "description": "Test delegation",
-        "sync": true
-    });
-    
-    let result = tool.execute(input).await;
-    assert!(result.error.is_none());
-}
-```
-
-### 集成测试
-
-- 完整任务生命周期测试
-- 并发任务执行测试
-- 定时任务触发测试
-- 任务持久化和恢复测试
+### 安全考虑
+- 任务结果可能包含敏感信息，注意日志脱敏
+- Todo 触发消息需要验证来源，防止未授权状态变更
+- 任务文件权限应设置为仅当前用户可读
 
 ---
 

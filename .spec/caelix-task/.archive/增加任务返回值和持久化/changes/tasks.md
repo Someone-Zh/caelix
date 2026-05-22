@@ -1,0 +1,33 @@
+## 任务实施清单
+- [·] read caelix-api/src/task/mod.rs file
+- [·] modify Runnable trait return type to Result<String, AgentError>
+- [·] update DelegateTaskRunnable implementation
+- [·] remove duplicate Runnable trait from caelix-task/src/types.rs
+- [·] compile verify caelix-api
+- [·] compile verify caelix-task
+- [·] compile verify caelix-service
+- [·] add RuntimeContext import to caelix-task/src/manager.rs
+- [·] modify TaskHandle type to use RuntimeContext instead of placeholder
+- [·] capture RuntimeContext in submit() method
+- [·] update execute_task_inner() signature to accept RuntimeContext parameter
+- [·] wrap runnable.run() with RuntimeContext::scope()
+- [·] fix scheduler loop to extract and pass RuntimeContext
+- [·] modify restore() to create default RuntimeContext for recovered tasks
+- [·] add caelix-runtime dependency to caelix-task/Cargo.toml
+- [·] compile verify Phase 3 changes
+- [·] full project compilation check
+- [·] modify TaskMeta to add result field (Phase 4)
+- [·] modify FilePersistence to support session-level path (Phase 4)
+- [·] update execute_task_inner() to save result to TaskMeta (Phase 4)
+- [·] modify TaskMessage to add result field (Phase 4)
+- [·] compile verify Phase 4 changes
+- [·] add Todo variant to TaskKind enum (Phase 5)
+- [·] implement PartialEq for TaskKind (Phase 5)
+- [·] modify TaskManager::submit() to handle Todo tasks (Phase 5)
+- [·] add update_todo_status() API (Phase 5)
+- [·] modify scheduler to ignore Todo tasks (Phase 5)
+- [·] add TodoTriggerMessage and TodoTriggerAction types (Phase 5)
+- [·] re-export new message types in caelix-message (Phase 5)
+- [·] fix pattern matching in manager.rs and scheduler.rs (Phase 5)
+- [·] compile verify Phase 5 changes
+- [·] final compilation test and verification

@@ -272,11 +272,12 @@ impl std::fmt::Debug for DelegateTaskRunnable {
 
 #[async_trait::async_trait]
 impl Runnable for DelegateTaskRunnable {
-    async fn run(&self) -> anyhow::Result<()> {
+    async fn run(&self) -> Result<String, caelix_api::error::AgentError> {
         let tool = DelegateTaskTool::new(self.caelix_context.clone());
         tool.execute_agent_task(&self.agent_name, &self.task_content).await
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!(e))
+            .map_err(|e| caelix_api::error::AgentError::ToolError(
+                format!("delegate_task: {}", e)
+            ))
     }
 
     fn task_type(&self) -> &'static str {

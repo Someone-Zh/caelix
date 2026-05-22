@@ -411,6 +411,7 @@ dependencies = [
  "async-trait",
  "caelix-api",
  "caelix-message",
+ "caelix-runtime",
  "chrono",
  "cron",
  "dashmap",

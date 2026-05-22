@@ -116,7 +116,7 @@ impl TaskScheduler {
                     None
                 }
             }
-            TaskKind::Async => None,
+            TaskKind::Async | TaskKind::Todo => None,  // Todo 任务不由调度器触发
         }
     }
 }
