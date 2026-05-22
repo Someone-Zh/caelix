@@ -14,13 +14,48 @@ pub mod commands_loader;
 
 pub use managers::*;
 
-/// 从环境变量或默认位置获取CAELIX_HOME路径
-pub fn get_caelix_home() -> PathBuf {
-    env::var("CAELIX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let mut home_dir = dirs::home_dir().expect("无法获取用户主目录");
-            home_dir.push(".caelix");
-            home_dir
-        })
+/// 环境变量配置结构体
+/// 统一管理所有基于环境变量的配置项
+#[derive(Debug, Clone)]
+pub struct EnvConfig {
+    /// CAELIX_HOME 目录路径
+    pub caelix_home: PathBuf,
+    /// Debug 模式是否启用
+    pub debug_enabled: bool,
+}
+
+impl EnvConfig {
+    /// 从环境变量创建配置实例
+    pub fn new() -> Self {
+        Self {
+            caelix_home: Self::get_caelix_home(),
+            debug_enabled: Self::is_debug_enabled(),
+        }
+    }
+
+    /// 获取 CAELIX_HOME 路径
+    /// 优先读取 CAELIX_HOME 环境变量，否则使用 ~/.caelix
+    fn get_caelix_home() -> PathBuf {
+        env::var("CAELIX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let mut home_dir = dirs::home_dir().expect("无法获取用户主目录");
+                home_dir.push(".caelix");
+                home_dir
+            })
+    }
+
+    /// 检查 Debug 模式是否启用
+    /// 读取 CAELIX_DEBUG 环境变量，值为 "true" 或 "1" 时启用
+    fn is_debug_enabled() -> bool {
+        env::var("CAELIX_DEBUG")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false)
+    }
+}
+
+impl Default for EnvConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }

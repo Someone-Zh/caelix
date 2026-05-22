@@ -1,7 +1,6 @@
 use std::sync::Arc;
-use std::env;
 use tokio::sync::RwLock;
-use caelix_config::managers::{AgentManager, ToolManager, ProviderManager, SkillManager, CommandManager};
+use caelix_config::{EnvConfig, managers::{AgentManager, ToolManager, ProviderManager, SkillManager, CommandManager}};
 use caelix_config::provider_loader::load_provider_configs;
 use caelix_config::agents_loader::register_all_agents;
 use caelix_config::skills_loader::register_all_skills;
@@ -13,6 +12,8 @@ use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
 /// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
 #[derive(Debug, Clone)]
 pub struct CaelixContext {
+    /// 环境变量配置
+    pub env_config: EnvConfig,
     /// Agent 管理器实例
     pub agent_manager: Arc<AgentManager>,
     /// Tool 管理器实例
@@ -31,9 +32,6 @@ pub struct CaelixContext {
     pub message_bus: Arc<MessageBus>,
     /// 任务管理器实例
     pub task_manager: Option<Arc<TaskManager>>,
-    /// Debug 模式是否启用
-    #[allow(dead_code)] // 为将来使用预留
-    pub debug_enabled: bool,
     /// 默认 Provider 名称（初始化时设置）
     pub default_provider: String,
     /// 默认 Model 名称（初始化时设置）
@@ -43,10 +41,8 @@ pub struct CaelixContext {
 impl CaelixContext {
     /// 创建新的应用上下文实例
     pub fn new() -> Self {
-        // 读取 debug 配置
-        let debug_enabled = env::var("CAELIX_DEBUG")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        // 初始化环境变量配置
+        let env_config = EnvConfig::new();
         
         // 初始化消息总线和存储
         let bus = MessageBus::new(1024);
@@ -64,6 +60,7 @@ impl CaelixContext {
         ));
         
         Self {
+            env_config,
             agent_manager: Arc::new(AgentManager::new()),
             tool_manager: Arc::new(ToolManager::new()),
             llm_provider_manager: Arc::new(RwLock::new(ProviderManager::new())),
@@ -73,7 +70,6 @@ impl CaelixContext {
             hook_registry: Arc::new(caelix_runtime::HookRegistry::new()),
             message_bus: Arc::new(bus),
             task_manager: Some(task_manager),
-            debug_enabled,
             // 默认配置将在 init() 中设置
             default_provider: String::new(),
             default_model: String::new(),
@@ -86,8 +82,8 @@ impl CaelixContext {
     /// 初始化提供商配置
     /// 读取配置文件并将提供商注册到 llm_provider_manager 中
     pub async fn init_provider(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let caelix_home = caelix_config::get_caelix_home();
-        let configs = load_provider_configs(&caelix_home)?;
+        let caelix_home = &self.env_config.caelix_home;
+        let configs = load_provider_configs(caelix_home)?;
         
         let mut provider_manager = self.llm_provider_manager.write().await;
         for (key, config) in configs {
@@ -131,8 +127,7 @@ impl CaelixContext {
     /// 初始化智能体管理器
     /// 从 CAELIX_HOME/agents 目录加载所有 .agent 文件
     pub async fn init_agents(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let caelix_home = caelix_config::get_caelix_home();
-        let agents_dir = caelix_home.join("agents");
+        let agents_dir = self.env_config.caelix_home.join("agents");
         
         // 如果 agents 目录不存在，创建它
         if !agents_dir.exists() {
@@ -149,8 +144,7 @@ impl CaelixContext {
     /// 初始化技能管理器
     /// 从 CAELIX_HOME/skills 目录加载所有 .skill 文件
     pub async fn init_skills(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let caelix_home = caelix_config::get_caelix_home();
-        let skills_dir = caelix_home.join("skills");
+        let skills_dir = self.env_config.caelix_home.join("skills");
         
         // 如果 skills 目录不存在，创建它
         if !skills_dir.exists() {
@@ -179,8 +173,7 @@ impl CaelixContext {
     /// 初始化命令管理器
     /// 从 CAELIX_HOME/commands 目录加载所有 .md 文件
     pub async fn init_commands(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let caelix_home = caelix_config::get_caelix_home();
-        let commands_dir = caelix_home.join("commands");
+        let commands_dir = self.env_config.caelix_home.join("commands");
         
         // 如果 commands 目录不存在，创建它
         if !commands_dir.exists() {
