@@ -13,6 +13,20 @@ use super::tool_executor::execute_tool;
 use caelix_runtime::context::RuntimeContext;
 use caelix_runtime::hooks::{BaseContext, PreToolExecContext, PostToolExecContext, MessageUpdateContext};
 
+/// 检查消息列表的最后一条消息是否包含未执行的 tool calls
+fn has_pending_tool_calls(messages: &[ChatMessage]) -> bool {
+    messages.last().map_or(false, |msg| {
+        msg.tool_calls.is_some() && !msg.tool_calls.as_ref().unwrap().is_empty()
+    })
+}
+
+/// 从最后一条消息中提取待执行的 tool calls
+fn extract_pending_tool_calls(messages: &[ChatMessage]) -> Option<Vec<ToolCall>> {
+    messages.last().and_then(|msg| {
+        msg.tool_calls.clone().filter(|calls| !calls.is_empty())
+    })
+}
+
 pub async fn run_agent_loop(
     agent: AgentSpec,
     messages: Vec<ChatMessage>,
@@ -56,290 +70,310 @@ async fn run_agent_loop_inner(
         timestamp: chrono::Utc::now() 
     })).await;
     
-    loop {
-            let tool_defs = agent.get_tool_definitions();
-            
-            // 发送 CallProvider 事件
-            let provider_name = llm_provider.config().name.clone();
-            let _ = tx.send(Ok(AgentOutputChunk::CallProvider {
-                timestamp: chrono::Utc::now(),
-                provider: provider_name,
-                model: config.model_name.clone(),
-            })).await;
-            
-            let mut stream = match llm_provider.chat_stream(&current_messages, &tool_defs, &config).await {
-                Ok(s) => s,
+    // 检查是否需要从中断点恢复（最后一条消息有 tool calls）
+    let should_resume_from_tools = has_pending_tool_calls(&current_messages);
+    
+    if should_resume_from_tools {
+        // 从中断点恢复：直接执行工具
+        if let Some(pending_tool_calls) = extract_pending_tool_calls(&current_messages) {
+            // 执行工具
+            match execute_tools_and_collect_results(&agent, &pending_tool_calls, &tx).await {
+                Ok(tool_results) => {
+                    // 追加工具返回结果到消息列表
+                    for (tc_id, _, result) in &tool_results {
+                        current_messages.push(ChatMessage::tool(tc_id.clone(), result.clone()));
+                    }
+                    
+                    // 调用消息更新钩子
+                    call_message_update_hook(&agent, &current_messages).await;
+                }
                 Err(e) => {
                     let _ = tx.send(Err(e)).await;
                     return;
                 }
-            };
-
-            let mut full_content = String::new();
-            let mut tool_calls_buffer: Vec<(usize, String, String, String)> = Vec::new();
-
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => {
-                        // 安全处理思考内容
-                        if let Some(r) = &chunk.reasoning_content
-                            && !r.is_empty() {
-                                let _ = tx.send(Ok(AgentOutputChunk::Reasoning {
-                                    content: r.clone(),
-                                })).await;
-                            }
-
-                        // 安全处理文本内容
-                        if let Some(c) = &chunk.content {
-                            full_content.push_str(c);
-                            let _ = tx.send(Ok(AgentOutputChunk::Content {
-                                content: c.clone(),
-                            })).await;
-                        }
-
-                        // 工具调用分片拼接
-                        if let Some(tcs) = &chunk.tool_calls {
-                            for tc in tcs {
-                                let index = tc.index as usize;
-                                let existing = tool_calls_buffer
-                                    .iter_mut()
-                                    .find(|(i, _, _, _)| *i == index);
-
-                                if let Some((_, _, _, args)) = existing {
-                                    args.push_str(tc.arguments.as_str().unwrap_or(""));
-                                } else {
-                                    let id = if tc.id.trim().is_empty() {
-                                        format!("call_{index}")
-                                    } else {
-                                        tc.id.clone()
-                                    };
-
-                                    tool_calls_buffer.push((
-                                        index,
-                                        id,
-                                        tc.name.clone(),
-                                        tc.arguments.as_str().unwrap_or("").to_string(),
-                                    ));
-                                }
-                            }
-                        }
-
-                        // 结束标志
-                        if chunk.finish_reason.is_some() {
-                            let _ = tx.send(convert_chunk(chunk)).await;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
-                        return;
-                    }
-                }
             }
-
-            // 发送工具调用并构建 ToolCall 列表
-            let mut final_tool_calls = Vec::new();
-            for (_idx, id, name, args) in tool_calls_buffer.drain(..) {
-                let clean_args = args.trim().to_string();
-                
-                // 拼接成 ToolCall 结构体（适配你的 ChatMessage::assistant_tool_calls）
-                let tool_call = ToolCall {
-                    id: id.clone(),
-                    index: _idx as u32,
-                    name: name.clone(),
-                    arguments: serde_json::Value::String(clean_args.clone()),
-                };
-                final_tool_calls.push(tool_call);
-
-                let _ = tx.send(Ok(AgentOutputChunk::ToolCall {
-                    tool_call_id: id.clone(),
-                    name: name.clone(),
-                    arguments: clean_args.clone(),
-                })).await;
+        }
+    }
+    
+    // 主循环
+    loop {
+        // 1. LLM 调用和结果收集
+        let (full_content, final_tool_calls) = match call_llm_and_collect(
+            &agent,
+            &current_messages,
+            &llm_provider,
+            &config,
+            &tx,
+        ).await {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = tx.send(Err(e)).await;
+                return;
             }
-            // 无工具则退出
-            if final_tool_calls.is_empty() {
-                 let new_message = ChatMessage::assistant(
-                    full_content,
-                );
-                current_messages.push(new_message);
-                
-                // 调用消息更新钩子
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
-                    let base_ctx = BaseContext {
-                        session_id: runtime_ctx.get_session_id().to_string(),
-                        request_id: runtime_ctx.get_request_id().to_string(),
-                        span_id: runtime_ctx.get_span_id().to_string(),
-                        agent_name: agent.name.clone(),
-                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
-                    };
-                    
-                    let msg_ctx = MessageUpdateContext {
-                        base: base_ctx,
-                        messages: Arc::new(current_messages.clone()),
-                    };
-                    
-                    if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
-                        if let Err(e) = hook_executor.execute_message_update(&msg_ctx).await {
-                            eprintln!("Warning: Message update hook failed: {}", e);
-                        }
-                    } else {
-                        eprintln!("Warning: HookExecutor not available, skipping message update hook");
-                    }
-
-                }
-                
-                break;
-            } else {
-                let new_message = ChatMessage::assistant_tool_calls(
-                    full_content,
-                    final_tool_calls.clone(),
-                );
-                current_messages.push(new_message);
-                
-                // 调用消息更新钩子
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
-                    let base_ctx = BaseContext {
-                        session_id: runtime_ctx.get_session_id().to_string(),
-                        request_id: runtime_ctx.get_request_id().to_string(),
-                        span_id: runtime_ctx.get_span_id().to_string(),
-                        agent_name: agent.name.clone(),
-                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
-                    };
-                    
-                    let msg_ctx = MessageUpdateContext {
-                        base: base_ctx,
-                        messages: Arc::new(current_messages.clone()),
-                    };
-                    
-                    if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
-                        if let Err(e) = hook_executor.execute_message_update(&msg_ctx).await {
-                            eprintln!("Warning: Message update hook failed: {}", e);
-                        }
-                    } else {
-                        eprintln!("Warning: HookExecutor not available, skipping message update hook");
-                    }
-
-                }
-            }
+        };
+        
+        // 2. 构建并添加 assistant 消息
+        if final_tool_calls.is_empty() {
+            // 无工具调用，添加普通 assistant 消息
+            let new_message = ChatMessage::assistant(full_content);
+            current_messages.push(new_message);
             
+            // 调用消息更新钩子
+            call_message_update_hook(&agent, &current_messages).await;
             
-            // 执行工具
-            let mut tool_results = Vec::new();
-            for tc in &final_tool_calls {
-                // 在执行工具前调用钩子
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
-                    let base_ctx = BaseContext {
-                        session_id: runtime_ctx.get_session_id().to_string(),
-                        request_id: runtime_ctx.get_request_id().to_string(),
-                        span_id: runtime_ctx.get_span_id().to_string(),
-                        agent_name: agent.name.clone(),
-                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
-                    };
-                    
-                    let mut tool_ctx = PreToolExecContext {
-                        base: base_ctx,
-                        tool_name: tc.name.clone(),
-                        tool_args: tc.arguments.clone(),
-                    };
-                    
-                    if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
-                        if let Err(e) = hook_executor.execute_pre_tool_exec(&mut tool_ctx).await {
-                            eprintln!("Warning: Pre-tool-exec hook failed: {}", e);
-                            // 继续执行工具，不因钩子失败而中断
-                        }
-                    } else {
-                        eprintln!("Warning: HookExecutor not available, skipping pre-tool-exec hook");
-                    }
+            // 退出循环
+            break;
+        } else {
+            // 有工具调用，添加带 tool_calls 的 assistant 消息
+            let new_message = ChatMessage::assistant_tool_calls(
+                full_content,
+                final_tool_calls.clone(),
+            );
+            current_messages.push(new_message);
+            
+            // 调用消息更新钩子
+            call_message_update_hook(&agent, &current_messages).await;
+        }
+        
+        // 3. 执行工具
+        match execute_tools_and_collect_results(&agent, &final_tool_calls, &tx).await {
+            Ok(tool_results) => {
+                // 追加工具返回结果
+                for (tc_id, _, result) in tool_results {
+                    current_messages.push(ChatMessage::tool(tc_id, result));
                 }
                 
-                match execute_tool(
-                    &agent.tools,
-                    tc,
-                ).await {
-                    Ok((name, tool_result)) => {
-                        // 在执行工具后调用钩子，允许修改结果
-                        let mut final_result = tool_result.clone();
-                        
-                        if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
-                            let base_ctx = BaseContext {
-                                session_id: runtime_ctx.get_session_id().to_string(),
-                                request_id: runtime_ctx.get_request_id().to_string(),
-                                span_id: runtime_ctx.get_span_id().to_string(),
-                                agent_name: agent.name.clone(),
-                                agent_group: agent.group.as_ref().map(|g| g.to_string()),
-                            };
-                            
-                            let mut post_tool_ctx = PostToolExecContext {
-                                base: base_ctx,
-                                tool_name: name.clone(),
-                                tool_args: tc.arguments.clone(),
-                                tool_result: final_result.clone(),
-                            };
-                            
-                            if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
-                                if let Err(e) = hook_executor.execute_post_tool_exec(&mut post_tool_ctx).await {
-                                    eprintln!("Warning: Post-tool-exec hook failed: {}", e);
-                                    // 继续执行，不因钩子失败而中断
-                                }
-                            } else {
-                                eprintln!("Warning: HookExecutor not available, skipping post-tool-exec hook");
-                            }
-                            
-                            // 使用可能被钩子修改后的结果
-                            final_result = post_tool_ctx.tool_result;
-                        }
-                        
-                        // 将ToolResult转换为字符串用于存储和发送
-                        let result_str = match &final_result.error {
-                            Some(err) => format!("工具执行错误：{}", err),
-                            None => final_result.output.clone(),
-                        };
-                        
-                        tool_results.push((tc.id.clone(), name.clone(), result_str.clone()));
-                        // 返回工具结果
-                        let _ = tx.send(Ok(AgentOutputChunk::ToolResult {
-                            tool_name: name.clone(),
-                            result: result_str.clone(),
+                // 调用消息更新钩子（工具结果添加后）
+                call_message_update_hook(&agent, &current_messages).await;
+            }
+            Err(e) => {
+                let _ = tx.send(Err(e)).await;
+                return;
+            }
+        }
+    }
+    
+    // 发送 Finish 事件
+    let _ = tx.send(Ok(AgentOutputChunk::Finish { reason: "stop".into() })).await;
+}
+
+/// 调用 LLM 并收集结果
+async fn call_llm_and_collect(
+    agent: &Arc<AgentSpec>,
+    current_messages: &[ChatMessage],
+    llm_provider: &Arc<dyn LlmProvider>,
+    config: &LlmConfig,
+    tx: &tokio::sync::mpsc::Sender<Result<AgentOutputChunk, AgentError>>,
+) -> Result<(String, Vec<ToolCall>), AgentError> {
+    // 1. 获取工具定义
+    let tool_defs = agent.get_tool_definitions();
+    
+    // 2. 发送 CallProvider 事件
+    let provider_name = llm_provider.config().name.clone();
+    let _ = tx.send(Ok(AgentOutputChunk::CallProvider {
+        timestamp: chrono::Utc::now(),
+        provider: provider_name,
+        model: config.model_name.clone(),
+    })).await;
+    
+    // 3. 调用 LLM
+    let mut stream = llm_provider.chat_stream(current_messages, &tool_defs, config).await?;
+    
+    // 4. 收集响应
+    let mut full_content = String::new();
+    let mut tool_calls_buffer: Vec<(usize, String, String, String)> = Vec::new();
+    
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(chunk) => {
+                // 处理 reasoning content
+                if let Some(r) = &chunk.reasoning_content
+                    && !r.is_empty() {
+                        let _ = tx.send(Ok(AgentOutputChunk::Reasoning {
+                            content: r.clone(),
                         })).await;
                     }
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
-                        return;
+                
+                // 处理文本内容
+                if let Some(c) = &chunk.content {
+                    full_content.push_str(c);
+                    let _ = tx.send(Ok(AgentOutputChunk::Content {
+                        content: c.clone(),
+                    })).await;
+                }
+                
+                // 处理工具调用分片
+                if let Some(tcs) = &chunk.tool_calls {
+                    for tc in tcs {
+                        let index = tc.index as usize;
+                        let existing = tool_calls_buffer
+                            .iter_mut()
+                            .find(|(i, _, _, _)| *i == index);
+                        
+                        if let Some((_, _, _, args)) = existing {
+                            args.push_str(tc.arguments.as_str().unwrap_or(""));
+                        } else {
+                            let id = if tc.id.trim().is_empty() {
+                                format!("call_{index}")
+                            } else {
+                                tc.id.clone()
+                            };
+                            
+                            tool_calls_buffer.push((
+                                index,
+                                id,
+                                tc.name.clone(),
+                                tc.arguments.as_str().unwrap_or("").to_string(),
+                            ));
+                        }
                     }
                 }
-            }
-
-            // 追加工具返回结果
-            for (tc_id, _, result) in tool_results {
-                current_messages.push(ChatMessage::tool(tc_id, result));
-            }
-            
-            // 调用消息更新钩子（工具结果添加后）
-            if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
-                let base_ctx = BaseContext {
-                    session_id: runtime_ctx.get_session_id().to_string(),
-                    request_id: runtime_ctx.get_request_id().to_string(),
-                    span_id: runtime_ctx.get_span_id().to_string(),
-                    agent_name: agent.name.clone(),
-                    agent_group: agent.group.as_ref().map(|g| g.to_string()),
-                };
                 
-                let msg_ctx = MessageUpdateContext {
-                    base: base_ctx,
-                    messages: Arc::new(current_messages.clone()),
-                };
-                
-                if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
-                    if let Err(e) = hook_executor.execute_message_update(&msg_ctx).await {
-                        eprintln!("Warning: Message update hook failed: {}", e);
-                    }
-                } else {
-                    eprintln!("Warning: HookExecutor not available, skipping message update hook");
+                // 处理结束标志
+                if chunk.finish_reason.is_some() {
+                    let _ = tx.send(convert_chunk(chunk)).await;
                 }
-
             }
-
+            Err(e) => return Err(e),
         }
+    }
+    
+    // 5. 构建最终 ToolCall 列表并发送 ToolCall 事件
+    let mut final_tool_calls = Vec::new();
+    for (_idx, id, name, args) in tool_calls_buffer.drain(..) {
+        let clean_args = args.trim().to_string();
+        
+        let tool_call = ToolCall {
+            id: id.clone(),
+            index: _idx as u32,
+            name: name.clone(),
+            arguments: serde_json::Value::String(clean_args.clone()),
+        };
+        final_tool_calls.push(tool_call);
+        
+        let _ = tx.send(Ok(AgentOutputChunk::ToolCall {
+            tool_call_id: id.clone(),
+            name: name.clone(),
+            arguments: clean_args.clone(),
+        })).await;
+    }
+    
+    Ok((full_content, final_tool_calls))
+}
 
-        let _ = tx.send(Ok(AgentOutputChunk::Finish { reason: "stop".into() })).await;
+/// 执行工具并收集结果
+async fn execute_tools_and_collect_results(
+    agent: &Arc<AgentSpec>,
+    tool_calls: &[ToolCall],
+    tx: &tokio::sync::mpsc::Sender<Result<AgentOutputChunk, AgentError>>,
+) -> Result<Vec<(String, String, String)>, AgentError> {
+    let mut tool_results = Vec::new();
+    
+    for tc in tool_calls {
+        // 执行工具前钩子
+        if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
+            let base_ctx = BaseContext {
+                session_id: runtime_ctx.get_session_id().to_string(),
+                request_id: runtime_ctx.get_request_id().to_string(),
+                span_id: runtime_ctx.get_span_id().to_string(),
+                agent_name: agent.name.clone(),
+                agent_group: agent.group.as_ref().map(|g| g.to_string()),
+            };
+            
+            let mut tool_ctx = PreToolExecContext {
+                base: base_ctx,
+                tool_name: tc.name.clone(),
+                tool_args: tc.arguments.clone(),
+            };
+            
+            if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
+                if let Err(e) = hook_executor.execute_pre_tool_exec(&mut tool_ctx).await {
+                    eprintln!("Warning: Pre-tool-exec hook failed: {}", e);
+                }
+            } else {
+                eprintln!("Warning: HookExecutor not available, skipping pre-tool-exec hook");
+            }
+        }
+        
+        // 执行工具
+        match execute_tool(&agent.tools, tc).await {
+            Ok((name, tool_result)) => {
+                // 执行工具后钩子
+                let mut final_result = tool_result.clone();
+                
+                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
+                    let base_ctx = BaseContext {
+                        session_id: runtime_ctx.get_session_id().to_string(),
+                        request_id: runtime_ctx.get_request_id().to_string(),
+                        span_id: runtime_ctx.get_span_id().to_string(),
+                        agent_name: agent.name.clone(),
+                        agent_group: agent.group.as_ref().map(|g| g.to_string()),
+                    };
+                    
+                    let mut post_tool_ctx = PostToolExecContext {
+                        base: base_ctx,
+                        tool_name: name.clone(),
+                        tool_args: tc.arguments.clone(),
+                        tool_result: final_result.clone(),
+                    };
+                    
+                    if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
+                        if let Err(e) = hook_executor.execute_post_tool_exec(&mut post_tool_ctx).await {
+                            eprintln!("Warning: Post-tool-exec hook failed: {}", e);
+                        }
+                    } else {
+                        eprintln!("Warning: HookExecutor not available, skipping post-tool-exec hook");
+                    }
+                    
+                    final_result = post_tool_ctx.tool_result;
+                }
+                
+                // 转换为字符串
+                let result_str = match &final_result.error {
+                    Some(err) => format!("工具执行错误：{}", err),
+                    None => final_result.output.clone(),
+                };
+                
+                tool_results.push((tc.id.clone(), name.clone(), result_str.clone()));
+                
+                // 发送工具结果事件
+                let _ = tx.send(Ok(AgentOutputChunk::ToolResult {
+                    tool_name: name.clone(),
+                    result: result_str.clone(),
+                })).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    
+    Ok(tool_results)
+}
+
+/// 调用消息更新钩子
+async fn call_message_update_hook(
+    agent: &Arc<AgentSpec>,
+    current_messages: &[ChatMessage],
+) {
+    if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
+        let base_ctx = BaseContext {
+            session_id: runtime_ctx.get_session_id().to_string(),
+            request_id: runtime_ctx.get_request_id().to_string(),
+            span_id: runtime_ctx.get_span_id().to_string(),
+            agent_name: agent.name.clone(),
+            agent_group: agent.group.as_ref().map(|g| g.to_string()),
+        };
+        
+        let msg_ctx = MessageUpdateContext {
+            base: base_ctx,
+            messages: Arc::new(current_messages.to_vec()),
+        };
+        
+        if let Some(hook_executor) = runtime_ctx.get_hook_executor() {
+            if let Err(e) = hook_executor.execute_message_update(&msg_ctx).await {
+                eprintln!("Warning: Message update hook failed: {}", e);
+            }
+        } else {
+            eprintln!("Warning: HookExecutor not available, skipping message update hook");
+        }
+    }
 }
