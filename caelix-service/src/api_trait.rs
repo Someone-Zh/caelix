@@ -30,6 +30,12 @@ pub trait CaelixApi: Send + Sync {
     /// 创建新会话
     async fn create_session(&self) -> String;
     
+    /// 使用指定的session_id创建会话（如果不存在）
+    async fn create_session_with_id(&self, session_id: String);
+    
+    /// 检查会话是否存在
+    async fn session_exists(&self, session_id: &str) -> bool;
+    
     /// 获取所有 agent 名称列表
     async fn list_agents(&self) -> Vec<String>;
     

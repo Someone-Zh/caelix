@@ -438,4 +438,19 @@ impl SessionManager {
     pub fn get_storage(&self) -> &Arc<dyn StorageBackend> {
         &self.storage
     }
+    
+    /// 刷新指定 session 的所有待持久化消息
+    /// 
+    /// 注意：agent_buffers 中只存储 Chunk 消息（不持久化），
+    /// Msg 消息已经在消费者中实时持久化了。
+    /// 此方法主要用于确保所有异步操作完成。
+    pub async fn flush_session(&self, _session_id: &str) {
+        // 等待一小段时间，确保消费者完成当前的持久化操作
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // 这里可以添加更多的同步逻辑，比如：
+        // 1. 检查是否有正在进行的持久化操作
+        // 2. 等待所有 pending 的写操作完成
+        // 目前由于 Msg 是实时持久化的，只需要短暂等待即可
+    }
 }

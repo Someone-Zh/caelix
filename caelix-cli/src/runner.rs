@@ -76,6 +76,10 @@ struct CliArgs {
     /// 指定模型（未提供则使用默认）
     #[arg(short = 'm', long = "model")]
     model: Option<String>,
+
+    /// 快速对话模式：直接指定消息内容，对话结束后退出
+    #[arg(short = 'c', long = "content")]
+    content: Option<String>,
 }
 
 /// 运行 CLI 后端
@@ -118,7 +122,13 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         new_session
     };
 
-    // 如果指定了session，获取并展示历史对话
+    // 如果指定了session，先确保会话存在（不存在则创建），然后获取并展示历史对话
+    // 先检查会话是否存在，不存在则创建
+    if !api.session_exists(&session_id).await {
+        println!("ℹ️  会话 {} 不存在，正在创建...", session_id);
+        api.create_session_with_id(session_id.clone()).await;
+    }
+    
     match api.get_session_messages(&session_id).await {
         Ok(messages) => {
             if !messages.is_empty() {
@@ -131,12 +141,13 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                         msg.content.clone()
                     };
                     
-                    println!("  [{}] {}: {}", i + 1, msg.timestamp.format("%H:%M:%S"), 
-                             if display_content.len() > 100 { 
-                                 &display_content[..100] 
-                             } else { 
-                                 &display_content 
-                             });
+                    let truncated = if display_content.chars().count() > 100 { 
+                        display_content.chars().take(100).collect::<String>()
+                    } else { 
+                        display_content.clone()
+                    };
+                    
+                    println!("  [{}] {}: {}", i + 1, msg.timestamp.format("%H:%M:%S"), truncated);
                 }
                 println!();
             }
@@ -191,6 +202,130 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     }
 
     println!("\n💡 提示: 输入空行提交消息,输入 /quit 退出\n");
+
+    // 如果指定了 -c 参数，进入快速对话模式
+    if let Some(content) = args.content {
+        println!("🚀 快速对话模式");
+        println!("==================");
+        println!("💬 用户: {}\n", content);
+        println!("🤖 AI 正在回复...\n");
+
+        let request = ChatRequest {
+            session_id: session_id.clone(),
+            message: content,
+            provider: Some(provider.clone()),
+            model: Some(model.clone()),
+            agent: selected_agent.clone(),
+        };
+
+        // 使用新的异步接口
+        match api.chat_stream_async(request).await {
+            Ok(result) => {
+                println!("📡 任务已提交，request_id: {}, span_id: {}", result.request_id, result.span_id);
+                
+                // 订阅消息流
+                match api.subscribe_chat_stream(&result.session_id).await {
+                    Ok(stream) => {
+                        let mut stream = stream;
+                        let target_span_id = result.span_id.clone();
+                        
+                        // ✅ 使用缓冲区管理多个 span 的流式输出
+                        use std::collections::HashMap;
+                        let mut span_buffers: HashMap<String, String> = HashMap::new(); // span_id -> 累积内容
+                        let mut active_spans: Vec<String> = Vec::new(); // 保持顺序的活跃 span 列表
+                        let mut completed_spans: Vec<String> = Vec::new(); // 已完成的 span 列表
+                        let mut target_span_completed = false; // 标记目标 span 是否已完成
+                        
+                        while let Some(msg) = stream.next().await {
+                            match msg.r#type {
+                                AgentMessageType::Chunk => {
+                                    // 只处理当前会话的消息
+                                    if msg.session_id == result.session_id {
+                                        let span_id = msg.span_id.clone();
+                                        
+                                        // 如果是新的 span，加入活跃列表
+                                        if !span_buffers.contains_key(&span_id) {
+                                            span_buffers.insert(span_id.clone(), String::new());
+                                            active_spans.push(span_id.clone());
+                                        }
+                                        
+                                        // 累积 chunk 内容（不包含 [思考] 等标签）
+                                        if let Some(buffer) = span_buffers.get_mut(&span_id) {
+                                            buffer.push_str(&msg.content);
+                                        }
+                                    }
+                                }
+                                AgentMessageType::ChunkEnd => {
+                                    // 标记该 span 完成
+                                    if msg.session_id == result.session_id {
+                                        let span_id = msg.span_id.clone();
+                                        
+                                        // 检查是否是目标 span
+                                        if span_id == target_span_id {
+                                            target_span_completed = true;
+                                        }
+                                        
+                                        // 从活跃列表移到完成列表
+                                        if let Some(pos) = active_spans.iter().position(|s| s == &span_id) {
+                                            active_spans.remove(pos);
+                                            completed_spans.push(span_id.clone());
+                                            
+                                            // ✅ 按顺序输出已完成的 span
+                                            flush_completed_spans(
+                                                &mut completed_spans,
+                                                &mut span_buffers,
+                                                &target_span_id,
+                                            );
+                                        }
+                                        
+                                        // ✅ 如果目标 span 已完成且没有活跃的异步任务 span，退出循环
+                                        if target_span_completed && active_spans.is_empty() {
+                                            println!("\n✅ 快速对话完成，退出中...");
+                                            
+                                            // 等待消息持久化完成
+                                            api.session_manager().flush_session(&result.session_id).await;
+                                            
+                                            break;
+                                        }
+                                    }
+                                }
+                                AgentMessageType::Msg => {
+                                    // 显示完整消息（包括异步任务的结果）
+                                    if msg.span_id != target_span_id {
+                                        let timestamp = msg.timestamp.format("%H:%M:%S");
+                                        // 尝试解析为 ChatMessage 以获取更友好的显示
+                                        if let Ok(chat_msg) = serde_json::from_str::<caelix_api::provider::ChatMessage>(&msg.content) {
+                                            println!("\n[{}] 💬 [{}] {}", 
+                                                timestamp,
+                                                msg.agent_name.as_deref().unwrap_or("AI"),
+                                                chat_msg.content);
+                                        } else {
+                                            println!("\n[{}] 💬 [{}] {}", 
+                                                timestamp,
+                                                msg.agent_name.as_deref().unwrap_or("AI"),
+                                                msg.content);
+                                        }
+                                        let _ = std::io::stdout().flush();
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 最后刷新所有剩余的缓冲（如果循环提前退出，这里不会执行）
+                        flush_all_buffers(&mut active_spans, &mut completed_spans, &mut span_buffers, &target_span_id);
+                    }
+                    Err(e) => {
+                        eprintln!("❌ 订阅失败: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ 提交任务失败: {:?}", e);
+            }
+        }
+
+        return Ok(());
+    }
 
     // 启动后台任务监听任务和通知消息
     let session_id_clone = session_id.clone();

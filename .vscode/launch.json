@@ -1,11 +1,9 @@
 {
-    // 使用 IntelliSense 了解相关属性。 
-    // 悬停以查看现有属性的描述。
-    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    // Caelix 多包 Workspace 调试配置
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug executable 'caelix'",
+            "name": "🚀 CLI - 默认模式",
             "type": "lldb",
             "request": "launch",
             "cargo": {
@@ -13,12 +11,200 @@
                     "run",
                     "--bin=caelix"
                 ],
+                "filter": {
+                    "name": "caelix-bin",
+                    "kind": "bin"
+                }
             },
             "env": {
-                    "RUST_BACKTRACE": "1"
-                },
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "debug"
+            },
             "args": [],
-            "internalConsoleOptions": "openOnSessionStart",
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "💬 CLI - 快速对话模式",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=caelix",
+                    "--",
+                    "cli",
+                    "-c",
+                    "你好，请介绍一下自己"
+                ],
+                "filter": {
+                    "name": "caelix-bin",
+                    "kind": "bin"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "info"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "💬 CLI - 指定会话 + Agent",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=caelix",
+                    "--",
+                    "cli",
+                    "-s",
+                    "S-7462532379215663104",
+                    "-a",
+                    "planner_agent",
+                    "-c",
+                    "分析项目结构"
+                ],
+                "filter": {
+                    "name": "caelix-bin",
+                    "kind": "bin"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "debug"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "🌐 HTTP Server",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=caelix",
+                    "--features=http-server",
+                    "--",
+                    "http"
+                ],
+                "filter": {
+                    "name": "caelix-bin",
+                    "kind": "bin"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "info",
+                "PORT": "3000"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "🖥️ TUI Interface",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=caelix",
+                    "--features=tui",
+                    "--",
+                    "tui"
+                ],
+                "filter": {
+                    "name": "caelix-bin",
+                    "kind": "bin"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "info"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "🧪 Test - caelix-message",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=caelix-message",
+                    "--lib",
+                    "--",
+                    "--nocapture"
+                ],
+                "filter": {
+                    "name": "caelix-message",
+                    "kind": "lib"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "debug"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "🧪 Test - caelix-agent",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=caelix-agent",
+                    "--lib",
+                    "--",
+                    "--nocapture"
+                ],
+                "filter": {
+                    "name": "caelix-agent",
+                    "kind": "lib"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "debug"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        },
+        {
+            "name": "🔍 Debug Current Package",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package=${input:packageName}"
+                ]
+            },
+            "program": "${workspaceFolder}/target/debug/${input:binaryName}",
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "debug"
+            },
+            "args": [],
+            "internalConsoleOptions": "openOnSessionStart"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "packageName",
+            "type": "promptString",
+            "description": "输入要调试的包名 (如: caelix-cli)",
+            "default": "caelix-cli"
+        },
+        {
+            "id": "binaryName",
+            "type": "promptString",
+            "description": "输入二进制文件名",
+            "default": "caelix"
         }
     ]
 }

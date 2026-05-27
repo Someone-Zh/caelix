@@ -220,6 +220,45 @@ cargo run -p caelix-bin --features http-server -- http
 cargo run -p caelix-bin --features tui -- tui
 ```
 
+### CLI 参数说明
+
+CLI 支持以下参数：
+
+```bash
+# 基本用法
+caelix cli [OPTIONS]
+
+# 选项:
+#   -s, --session <SESSION_ID>  指定会话ID（未提供则自动创建）
+#   -a, --agent <AGENT>         指定使用的 agent（未提供则使用第一个可用）
+#   -p, --provider <PROVIDER>   指定提供商（未提供则使用默认）
+#   -m, --model <MODEL>         指定模型（未提供则使用默认）
+#   -c, --content <CONTENT>     快速对话模式：直接指定消息内容，对话结束后退出
+```
+
+#### 快速对话模式 (-c)
+
+使用 `-c` 参数可以快速进行一次对话，对话结束后自动退出：
+
+```bash
+# 简单问候
+cargo run -p caelix-bin -- cli -c "你好"
+
+# 结合指定会话（加载历史对话）
+cargo run -p caelix-bin -- cli -s S-7462532379215663104 -c "请总结一下我们之前的对话"
+
+# 结合指定 Agent
+cargo run -p caelix-bin -- cli -a planner_agent -c "帮我分析当前项目的依赖结构"
+
+# 组合多个参数
+cargo run -p caelix-bin -- cli -s my-session -a code_executor_agent -p bailian -m qwen-plus -c "解释一下这段代码"
+```
+
+**注意**：
+- 使用 `-c` 参数时，程序会在完成一次对话后自动退出
+- 可以与其他参数（`-s`, `-a`, `-p`, `-m`）组合使用
+- 如果指定了 `-s`，会加载对应会话的历史对话作为上下文
+
 ## 核心特性
 
 ### 1. 模块化架构

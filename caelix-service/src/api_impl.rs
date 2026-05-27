@@ -120,6 +120,11 @@ impl CaelixApiImpl {
     pub fn message_bus(&self) -> &Arc<caelix_message::MessageBus> {
         &self.context.message_bus
     }
+    
+    /// 获取 SessionManager 引用
+    pub fn session_manager(&self) -> &caelix_message::SessionManager {
+        &self.context.session_manager
+    }
   
 }
 
@@ -167,6 +172,20 @@ impl CaelixApi for CaelixApiImpl {
             eprintln!("⚠️  创建会话配置失败: {:?}", e);
         }
         session_id
+    }
+
+    async fn create_session_with_id(&self, session_id: String) {
+        // 使用指定的 session_id 创建会话配置
+        if let Err(e) = self.context.session_manager
+            .create_session_config(session_id.clone())
+            .await
+        {
+            eprintln!("⚠️  创建会话配置失败: {:?}", e);
+        }
+    }
+
+    async fn session_exists(&self, session_id: &str) -> bool {
+        self.context.session_manager.session_exists(session_id).await
     }
 
     async fn list_agents(&self) -> Vec<String> {
