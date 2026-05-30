@@ -352,7 +352,7 @@ impl TaskManager {
         Self::send_task_notification_static(&meta, TaskNotificationType::Started, &bus).await;
         
         // 在 RuntimeContext 的作用域内执行任务
-        let result = RuntimeContext::scope(runtime_ctx, async {
+        let result = runtime_ctx.with_ctx(async move {
             runnable.run().await
         }).await;
 

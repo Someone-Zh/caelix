@@ -1,3 +1,4 @@
+use crate::context::RuntimeContext;
 use crate::hooks::{AgentHook, HookCapability, MessageUpdateContext};
 use caelix_api::message::{AgentMessage, AgentMessageType};
 use async_trait::async_trait;
@@ -48,9 +49,7 @@ impl AgentHook for MessageBusHook {
             };
 
             // 通过 RuntimeContext 获取 ContextProvider 和 MessageSender
-            if let Ok(runtime_ctx) = std::panic::catch_unwind(|| {
-                crate::context::RuntimeContext::current()
-            }) {
+            if let Some(runtime_ctx) = RuntimeContext::try_current() {
                 if let Some(context_provider) = runtime_ctx.get_context_provider() {
                     let message_sender = context_provider.get_message_sender();
                     

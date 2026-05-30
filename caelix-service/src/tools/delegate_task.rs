@@ -5,7 +5,7 @@ use std::sync::Arc;
 use caelix_api::tool::{ToolResult, Tool};
 use caelix_api::agent::AgentOutputChunk;
 use caelix_api::message::{AgentMessage, AgentMessageType};
-use caelix_runtime::context::{RuntimeContext, RuntimeContextSnapshot};
+use caelix_runtime::context::RuntimeContext;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_task::{Runnable, TaskKind};
 use crate::context::CaelixContext;
@@ -131,10 +131,9 @@ impl DelegateTaskTool {
         let context = &self.caelix_context;
         
         // 获取当前 trace_id（保持链路一致，为将来扩展预留）
-        let _trace_id = match std::panic::catch_unwind(|| RuntimeContext::trace_id()) {
-            Ok(id) => id,
-            Err(_) => caelix_api::utils::generate_trace_id(),
-        };
+        let _trace_id = RuntimeContext::try_current()
+            .map(|ctx| ctx.get_trace_id().to_string())
+            .unwrap_or_else(caelix_api::utils::generate_trace_id);
         
         // 为委派任务创建新的 session_id、request_id 和 span_id
         let new_session_id = caelix_api::utils::generate_session_id();
@@ -148,10 +147,9 @@ impl DelegateTaskTool {
             })?;
 
         // 获取 provider
-        let provider_name = match std::panic::catch_unwind(|| RuntimeContext::provider()) {
-            Ok(name) => name,
-            Err(_) => context.default_provider.clone(),
-        };
+        let provider_name = RuntimeContext::try_current()
+            .map(|ctx| ctx.get_provider().to_string())
+            .unwrap_or_else(|| context.default_provider.clone());
         
         let provider_manager = context.llm_provider_manager.read().await;
         let provider = provider_manager.get_provider(&provider_name)
@@ -165,10 +163,9 @@ impl DelegateTaskTool {
         let messages = vec![ChatMessage::user(task_content.to_string())];
 
         // 配置
-        let model_name = match std::panic::catch_unwind(|| RuntimeContext::model()) {
-            Ok(name) => name,
-            Err(_) => context.default_model.clone(),
-        };
+        let model_name = RuntimeContext::try_current()
+            .map(|ctx| ctx.get_model().to_string())
+            .unwrap_or_else(|| context.default_model.clone());
         let config = LlmConfig { model_name };
 
         // 执行 agent（使用新的 session_id）
@@ -206,17 +203,15 @@ impl DelegateTaskTool {
         };
 
         // 获取当前 session_id 和 trace_id
-        let session_id = match std::panic::catch_unwind(|| RuntimeContext::session_id()) {
-            Ok(id) => id,
-            Err(_) => "unknown".to_string(),
-        };
-        let trace_id = match std::panic::catch_unwind(|| RuntimeContext::trace_id()) {
-            Ok(id) => id,
-            Err(_) => caelix_api::utils::generate_trace_id(),
-        };
+        let session_id = RuntimeContext::try_current()
+            .map(|ctx| ctx.get_session_id().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let trace_id = RuntimeContext::try_current()
+            .map(|ctx| ctx.get_trace_id().to_string())
+            .unwrap_or_else(caelix_api::utils::generate_trace_id);
         let span_id = caelix_api::utils::generate_span_id();
 
-        let snapshot = RuntimeContextSnapshot::try_from_current();
+        let runtime_context = RuntimeContext::try_current().map(|ctx| ctx.clone());
         
         let runnable = Box::new(DelegateTaskRunnable {
             agent_name: agent_name.to_string(),
@@ -226,7 +221,7 @@ impl DelegateTaskTool {
             span_id: span_id.clone(),
             trace_id: trace_id.clone(),
             caelix_context: self.caelix_context.clone(),
-            runtime_context_snapshot: snapshot,
+            runtime_context: runtime_context,
         });
 
         let task_id = task_manager.submit(
@@ -259,7 +254,7 @@ struct DelegateTaskRunnable {
     trace_id: String,
     caelix_context: Arc<CaelixContext>,
     #[allow(dead_code)] // 为将来扩展预留
-    runtime_context_snapshot: Option<RuntimeContextSnapshot>,
+    runtime_context: Option<RuntimeContext>,
 }
 
 impl std::fmt::Debug for DelegateTaskRunnable {

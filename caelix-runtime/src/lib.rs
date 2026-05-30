@@ -7,6 +7,6 @@ pub mod hooks;
 pub mod id_generator;
 
 // 重新导出常用类型
-pub use context::{RuntimeContext, SessionGuard, RuntimeContextSnapshot};
+pub use context::RuntimeContext;
 pub use hooks::HookRegistry;
 pub use id_generator::*;

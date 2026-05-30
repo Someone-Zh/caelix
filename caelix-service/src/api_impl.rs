@@ -206,12 +206,14 @@ impl CaelixApi for CaelixApiImpl {
         }
         
         // 2. 确定provider和model（用于创建RuntimeContext）
-        let default_provider = self.get_default_provider();
-        let default_model = self.get_default_model();
+        let default_provider = self.get_default_provider().to_string();
+        let default_model = self.get_default_model().to_string();
         let provider_name = request.provider.as_deref()
-            .unwrap_or(&default_provider);
+            .unwrap_or(&default_provider)
+            .to_string();
         let model_name = request.model.as_deref()
-            .unwrap_or(&default_model);
+            .unwrap_or(&default_model)
+            .to_string();
         
         // 3. 生成 trace_id（为将来扩展预留）
         let _trace_id = caelix_api::utils::generate_trace_id();
@@ -231,7 +233,7 @@ impl CaelixApi for CaelixApiImpl {
         // 5. 在 RuntimeContext scope 中执行所有操作
         let ctx_clone = self.context.clone();
         let request_clone = request.clone();
-        caelix_runtime::context::RuntimeContext::scope(runtime_ctx, async move {
+        runtime_ctx.with_ctx(async move {
             // 5.1 确定使用的agent名称（默认使用第一个或从请求中获取）
             let agent_name = request_clone.agent.as_deref().unwrap_or("default");
             
@@ -242,8 +244,8 @@ impl CaelixApi for CaelixApiImpl {
             // 5.3 通过llm_provider_manager获取对应的Provider实例
             let provider = {
                 let provider_manager = ctx_clone.llm_provider_manager.read().await;
-                provider_manager.get_provider(provider_name)
-                    .ok_or_else(|| ApiError::provider_not_found(provider_name))?
+                provider_manager.get_provider(&provider_name)
+                    .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
                     .clone()
             };
             
@@ -492,7 +494,7 @@ impl CaelixApi for CaelixApiImpl {
             );
             
             // 5.2 在 RuntimeContext scope 中执行
-            let result = caelix_runtime::context::RuntimeContext::scope(runtime_ctx, async move {
+            let result = runtime_ctx.with_ctx(async move {
                 // 获取 agent
                 let agent_name = request_clone.agent.as_deref().unwrap_or("default");
                 let agent_spec = ctx_clone.agent_manager.get(agent_name).await
@@ -501,9 +503,10 @@ impl CaelixApi for CaelixApiImpl {
                 // 获取 provider
                 let provider = {
                     let provider_manager = ctx_clone.llm_provider_manager.read().await;
-                    provider_manager.get_provider(&provider_name)
-                        .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
-                        .clone()
+                    provider_manager
+                    .get_provider(&provider_name)
+                    .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
+                    .clone()
                 };
                 
                 // 构建 LlmConfig

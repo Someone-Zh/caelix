@@ -373,6 +373,7 @@ dependencies = [
  "caelix-config",
  "caelix-message",
  "chrono",
+ "futures",
  "once_cell",
  "serde",
  "serde_json",

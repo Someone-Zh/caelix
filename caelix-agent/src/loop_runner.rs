@@ -44,7 +44,7 @@ pub async fn run_agent_loop(
     tokio::spawn(async move {
         // 如果有 RuntimeContext，在 scope 中执行；否则返回错误
         if let Some(ctx) = runtime_ctx {
-            caelix_runtime::context::RuntimeContext::scope(ctx, async move {
+            ctx.with_ctx(async move {
                 run_agent_loop_inner(agent, messages, llm_provider, config, tx).await;
             }).await;
         } else {
@@ -271,7 +271,7 @@ async fn execute_tools_and_collect_results(
     
     for tc in tool_calls {
         // 执行工具前钩子
-        if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
+        if let Some(runtime_ctx) = RuntimeContext::try_current() {
             let base_ctx = BaseContext {
                 session_id: runtime_ctx.get_session_id().to_string(),
                 request_id: runtime_ctx.get_request_id().to_string(),
@@ -301,7 +301,7 @@ async fn execute_tools_and_collect_results(
                 // 执行工具后钩子
                 let mut final_result = tool_result.clone();
                 
-                if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
+                if let Some(runtime_ctx) = RuntimeContext::try_current() {
                     let base_ctx = BaseContext {
                         session_id: runtime_ctx.get_session_id().to_string(),
                         request_id: runtime_ctx.get_request_id().to_string(),
@@ -354,7 +354,7 @@ async fn call_message_update_hook(
     agent: &Arc<AgentSpec>,
     current_messages: &[ChatMessage],
 ) {
-    if let Ok(runtime_ctx) = std::panic::catch_unwind(RuntimeContext::current) {
+    if let Some(runtime_ctx) = RuntimeContext::try_current() {
         let base_ctx = BaseContext {
             session_id: runtime_ctx.get_session_id().to_string(),
             request_id: runtime_ctx.get_request_id().to_string(),

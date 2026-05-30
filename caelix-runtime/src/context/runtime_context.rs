@@ -6,48 +6,6 @@ use std::sync::Arc;
 use caelix_api::utils::{generate_session_id, generate_request_id, generate_span_id};
 use caelix_api::context::ContextProvider;
 
-/// RuntimeContext 快照 - 用于在异步任务中保存上下文状态
-/// 
-/// 当需要跨异步边界传递上下文信息时，可以使用此结构保存关键信息，
-/// 避免依赖 task-local storage。
-#[derive(Debug, Clone)]
-pub struct RuntimeContextSnapshot {
-    /// Provider 名称
-    pub provider: String,
-    /// Model 名称
-    pub model: String,
-    /// 工作目录
-    pub work_dir: PathBuf,
-    /// Debug 模式是否启用
-    pub debug_enabled: bool,
-    /// Trace ID
-    pub trace_id: String,
-}
-
-impl RuntimeContextSnapshot {
-    /// 从当前 RuntimeContext 创建快照
-    /// 
-    /// # Panics
-    /// 如果不在有效的 RuntimeContext 中调用，会 panic
-    pub fn from_current() -> Self {
-        Self {
-            provider: RuntimeContext::provider(),
-            model: RuntimeContext::model(),
-            work_dir: RuntimeContext::work_dir(),
-            debug_enabled: RuntimeContext::is_debug_enabled(),
-            trace_id: RuntimeContext::trace_id(),
-        }
-    }
-    
-    /// 尝试从当前 RuntimeContext 创建快照
-    /// 
-    /// # Returns
-    /// 如果不在有效的 RuntimeContext 中，返回 None
-    pub fn try_from_current() -> Option<Self> {
-        std::panic::catch_unwind(Self::from_current).ok()
-    }
-}
-
 /// 运行时上下文 - Session 级别
 /// 
 /// 每个 Session 有独立的上下文实例，通过 tokio::task_local! 存储
@@ -149,6 +107,36 @@ impl RuntimeContext {
             debug_enabled,
             context_provider,
         }
+    }
+
+    /// 尝试获取当前上下文（安全版本）
+    /// 
+    /// # Returns
+    /// 如果在有效的 RuntimeContext 中，返回 Some(ctx)
+    /// 否则返回 None
+    pub fn try_current() -> Option<RuntimeContext> {
+        std::panic::catch_unwind(Self::current).ok()
+    }
+    
+    /// 获取当前 Session ID，如果不存在则使用提供的默认值
+    pub fn current_or_default(&self) -> String {
+        Self::try_current()
+            .map(|ctx| ctx.session_id.clone())
+            .unwrap_or_else(|| self.session_id.clone())
+    }
+    
+    /// 获取当前 Provider，如果不存在则使用提供的默认值
+    pub fn current_or_default_provider(&self) -> String {
+        Self::try_current()
+            .map(|ctx| ctx.provider.clone())
+            .unwrap_or_else(|| self.provider.clone())
+    }
+    
+    /// 获取当前 Model，如果不存在则使用提供的默认值
+    pub fn current_or_default_model(&self) -> String {
+        Self::try_current()
+            .map(|ctx| ctx.model.clone())
+            .unwrap_or_else(|| self.model.clone())
     }
     
     /// 从当前 tracing span 提取 span_id
@@ -512,5 +500,105 @@ mod tests {
         // 验证 provider 和 model
         assert_eq!(ctx.get_provider(), "openai");
         assert_eq!(ctx.get_model(), "gpt-4");
+    }
+    
+    #[tokio::test]
+    async fn test_try_current_without_context() {
+        let result = RuntimeContext::try_current();
+        assert!(result.is_none(), "Expected None when no context is set");
+    }
+    
+    #[tokio::test]
+    async fn test_try_current_with_context() {
+        let work_dir = std::env::current_dir().unwrap();
+        
+        let ctx = RuntimeContext::new(
+            Some("try_current_test".to_string()),
+            None,
+            work_dir,
+            "test_provider".to_string(),
+            "test_model".to_string(),
+            false,
+            None,
+        );
+        
+        let result = RuntimeContext::scope(ctx, async {
+            RuntimeContext::try_current()
+        }).await;
+        
+        assert!(result.is_some(), "Expected Some when context is set");
+        assert_eq!(result.unwrap().get_session_id(), "try_current_test");
+    }
+    
+    #[tokio::test]
+    async fn test_current_or_default_with_context() {
+        let work_dir = std::env::current_dir().unwrap();
+        
+        let ctx = RuntimeContext::new(
+            Some("context_session".to_string()),
+            None,
+            work_dir.clone(),
+            "context_provider".to_string(),
+            "context_model".to_string(),
+            false,
+            None,
+        );
+        
+        let default_session = "default_session".to_string();
+        let result = RuntimeContext::scope(ctx, async move {
+            RuntimeContext::try_current()
+                .map(|c| c.session_id.clone())
+                .unwrap_or_else(|| default_session.clone())
+        }).await;
+        
+        assert_eq!(result, "context_session");
+    }
+    
+    #[tokio::test]
+    async fn test_current_or_default_provider() {
+        let work_dir = std::env::current_dir().unwrap();
+        
+        let ctx = RuntimeContext::new(
+            Some("test".to_string()),
+            None,
+            work_dir,
+            "my_provider".to_string(),
+            "my_model".to_string(),
+            false,
+            None,
+        );
+        
+        let default_provider = "default_provider".to_string();
+        let result = RuntimeContext::scope(ctx, async move {
+            RuntimeContext::try_current()
+                .map(|c| c.provider.clone())
+                .unwrap_or_else(|| default_provider.clone())
+        }).await;
+        
+        assert_eq!(result, "my_provider");
+    }
+    
+    #[tokio::test]
+    async fn test_runtime_context_snapshot_try_from_current() {
+        let work_dir = std::env::current_dir().unwrap();
+        
+        let ctx = RuntimeContext::new(
+            Some("snapshot_test".to_string()),
+            None,
+            work_dir,
+            "snapshot_provider".to_string(),
+            "snapshot_model".to_string(),
+            false,
+            None,
+        );
+        
+        let result = RuntimeContext::scope(ctx, async {
+            RuntimeContext::try_current()
+        }).await;
+        
+        assert!(result.is_some());
+        let ctx = result.unwrap();
+        assert_eq!(ctx.provider.clone(), "snapshot_provider");
+        assert_eq!(ctx.model.clone(), "snapshot_model");
     }
 }
