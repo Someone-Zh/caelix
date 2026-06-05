@@ -1,4 +1,4 @@
-use crate::context::RuntimeContext;
+use caelix_api::context::RuntimeContext;
 use crate::hooks::{AgentHook, HookCapability, MessageUpdateContext};
 use caelix_api::message::{AgentMessage, AgentMessageType};
 use async_trait::async_trait;
@@ -42,6 +42,9 @@ impl AgentHook for MessageBusHook {
                 session_id: ctx.base.session_id.clone(),
                 request_id: ctx.base.request_id.clone(),
                 span_id: ctx.base.span_id.clone(),
+                trace_id: RuntimeContext::try_current()
+                    .map(|ctx| ctx.get_trace_id().to_string())
+                    .unwrap_or_default(),
                 r#type: AgentMessageType::Msg,
                 timestamp: Utc::now(),
                 content: content_json,
@@ -50,16 +53,12 @@ impl AgentHook for MessageBusHook {
 
             // 通过 RuntimeContext 获取 ContextProvider 和 MessageSender
             if let Some(runtime_ctx) = RuntimeContext::try_current() {
-                if let Some(context_provider) = runtime_ctx.get_context_provider() {
-                    let message_sender = context_provider.get_message_sender();
-                    
-                    // 发送消息到消息总线
-                    // SessionManager 的存储消费者会自动持久化 Msg 类型的消息
-                    if let Err(e) = message_sender.send_agent(agent_msg.clone()) {
-                        eprintln!("Warning: Failed to send message to bus: {}", e);
-                    }
-                } else {
-                    eprintln!("Warning: No context provider available for message bus hook");
+                let context_provider = runtime_ctx.get_context_provider();
+                let message_sender = context_provider.get_message_sender();
+                // 发送消息到消息总线
+                // SessionManager 的存储消费者会自动持久化 Msg 类型的消息
+                if let Err(e) = message_sender.send_agent(agent_msg.clone()) {
+                    eprintln!("Warning: Failed to send message to bus: {}", e);
                 }
             } else {
                 eprintln!("Warning: No runtime context available for message bus hook");

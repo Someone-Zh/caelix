@@ -2,7 +2,7 @@
 use caelix_api::error::AgentError;
 use caelix_message::bus::MessageBus;
 use caelix_message::task_message::{TaskMessage, TaskMessageType};
-use caelix_runtime::context::RuntimeContext;
+use caelix_api::context::RuntimeContext;
 use crate::persistence::TaskPersistence;
 use crate::scheduler::TaskScheduler;
 use crate::types::*;
@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 type TaskHandle = (
     TaskMeta,
     Option<oneshot::Sender<Result<String, AgentError>>>,
-    Option<RuntimeContext>,  // 新增：保存任务注册时的 RuntimeContext
+    Arc<RuntimeContext>,  // 新增：保存任务注册时的 RuntimeContext
     Option<JoinHandle<()>>,
 );
 
@@ -86,23 +86,9 @@ impl TaskManager {
                             let registry = registry_clone.clone();
                             let scheduler = scheduler_clone.clone();
                             let persistence = persistence_clone.clone(); // 传给执行函数
-                            
-                            // 获取 RuntimeContext（如果不存在，创建一个默认的）
-                            let runtime_ctx = opt_ctx.take().unwrap_or_else(|| {
-                                // 对于恢复的任务，创建最小化的 RuntimeContext
-                                RuntimeContext::new(
-                                    Some(meta.session_id.clone()),
-                                    None,
-                                    std::env::current_dir().unwrap_or_default(),
-                                    "unknown".to_string(),
-                                    "unknown".to_string(),
-                                    false,
-                                    None,
-                                )
-                            });
-                            
+                                                       
                             tokio::spawn(async move {
-                                Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence, runtime_ctx).await;
+                                Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence).await;
                             });
                         }
                     }
@@ -130,19 +116,9 @@ impl TaskManager {
             // 重新注册 (修复：去掉未使用的 _rx)
             let (tx, _) = oneshot::channel();
             let task_id = meta.task_id.clone();
+            let ctx = RuntimeContext::current();
             
-            // 对于恢复的任务，创建最小化的 RuntimeContext
-            let runtime_ctx = RuntimeContext::new(
-                Some(meta.session_id.clone()),
-                None,
-                std::env::current_dir().unwrap_or_default(),
-                "unknown".to_string(),  // 默认 provider
-                "unknown".to_string(),  // 默认 model
-                false,
-                None,
-            );
-            
-            self.registry.insert(task_id, (meta.clone(), Some(tx), Some(runtime_ctx), None));
+            self.registry.insert(task_id, (meta.clone(), Some(tx), ctx.clone(), None));
             
             // 重新调度
             self.scheduler.schedule(meta).await;
@@ -153,8 +129,6 @@ impl TaskManager {
     /// 提交新任务
     pub async fn submit(
         &self,
-        session_id: String,
-        span_id: String,
         tool_call_id: Option<String>,
         task_name: Option<String>,
         kind: TaskKind,
@@ -162,10 +136,10 @@ impl TaskManager {
     ) -> TaskId {
         let task_type_name = runnable.task_type().to_string();
         let task_payload = runnable.payload();
-        
+        let ctx = RuntimeContext::current();
         let mut meta = TaskMeta::new(
-            session_id.clone(),
-            span_id.clone(),
+            ctx.get_session_id().to_string(),
+            ctx.get_span_id().to_string(),
             tool_call_id,
             task_name,
             kind.clone(),
@@ -176,10 +150,6 @@ impl TaskManager {
         // 修复：去掉未使用的 rx
         let (tx, _) = oneshot::channel();
         let task_id = meta.task_id.clone();
-        
-        // 捕获当前的 RuntimeContext（任务注册时的上下文）
-        let runtime_ctx = RuntimeContext::current();
-
         // 1. 存入注册表
         match kind {
             TaskKind::Async => {
@@ -189,25 +159,24 @@ impl TaskManager {
                 let meta_clone = meta.clone();
                 let scheduler = self.scheduler.clone();
                 let persistence = self.persistence.clone();
-                let runtime_ctx_clone = runtime_ctx.clone();
                 
                 // 立即 Spawn
                 let handle = tokio::spawn(async move {
-                    Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence, runtime_ctx_clone).await;
+                    Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence).await;
                 });
                 
-                self.registry.insert(task_id.clone(), (meta, Some(tx), Some(runtime_ctx), Some(handle)));
+                self.registry.insert(task_id.clone(), (meta, Some(tx), ctx.clone(), Some(handle)));
             }
             TaskKind::Once(_) | TaskKind::Cron(_) => {
                 meta.status = TaskStatus::Scheduled;
-                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), Some(runtime_ctx), None));
+                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
                 self.scheduler.schedule(meta.clone()).await;
                 let _ = self.persistence.save(&meta).await;
             }
             TaskKind::Todo => {
                 // Todo 任务不执行，只保存元数据
                 meta.status = TaskStatus::Pending;
-                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), Some(runtime_ctx), None));
+                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
                 let _ = self.persistence.save(&meta).await;
             }
         }
@@ -343,8 +312,7 @@ impl TaskManager {
         bus: Arc<MessageBus>,
         registry: Arc<DashMap<TaskId, TaskHandle>>,
         scheduler: Arc<TaskScheduler>,
-        persistence: Arc<dyn TaskPersistence>, // 修复：传入 persistence
-        runtime_ctx: RuntimeContext,  // 新增：RuntimeContext
+        persistence: Arc<dyn TaskPersistence>
     ) {
         let task_id = meta.task_id.clone();
         
@@ -352,10 +320,7 @@ impl TaskManager {
         Self::send_task_notification_static(&meta, TaskNotificationType::Started, &bus).await;
         
         // 在 RuntimeContext 的作用域内执行任务
-        let result = runtime_ctx.with_ctx(async move {
-            runnable.run().await
-        }).await;
-
+        let result = runnable.run().await;
         // 更新状态
         let final_status = match &result {
             Ok(_) => TaskStatus::Completed,

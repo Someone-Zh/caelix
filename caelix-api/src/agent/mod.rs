@@ -2,10 +2,14 @@
 //!
 //! 包含 AgentSpec 和 AgentOutputChunk 的定义
 
+use async_trait::async_trait;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
+use crate::{AgentError, LlmConfig, LlmProvider};
 use crate::tool::Tool;
 use crate::provider::ChatMessage;
 
@@ -97,4 +101,11 @@ impl AgentSpec {
         messages.extend(user_input);
         messages
     }
+}
+
+
+#[async_trait]
+pub trait Agent {
+    async fn run(&self, messages: Vec<ChatMessage>,llm_provider: Arc<dyn LlmProvider>,
+    config: LlmConfig) -> Result<Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send>>, AgentError>;
 }

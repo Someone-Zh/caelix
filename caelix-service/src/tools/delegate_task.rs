@@ -5,7 +5,7 @@ use std::sync::Arc;
 use caelix_api::tool::{ToolResult, Tool};
 use caelix_api::agent::AgentOutputChunk;
 use caelix_api::message::{AgentMessage, AgentMessageType};
-use caelix_runtime::context::RuntimeContext;
+use caelix_api::context::RuntimeContext;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_task::{Runnable, TaskKind};
 use crate::context::CaelixContext;
@@ -21,6 +21,7 @@ async fn execute_agent_with_messaging_local(
     session_id: String,
     request_id: String,
     span_id: String,
+    trace_id: String,
     agent_name: Option<String>,
     message_bus: Arc<caelix_message::MessageBus>,
 ) -> Result<String, anyhow::Error> {
@@ -51,6 +52,7 @@ async fn execute_agent_with_messaging_local(
                     session_id: session_id.clone(),
                     request_id: request_id.clone(),
                     span_id: span_id.clone(),
+                    trace_id: trace_id.clone(),
                     r#type: AgentMessageType::Chunk,
                     timestamp: chrono::Utc::now(),
                     content: content.clone(),
@@ -64,6 +66,7 @@ async fn execute_agent_with_messaging_local(
                         session_id: session_id.clone(),
                         request_id: request_id.clone(),
                         span_id: span_id.clone(),
+                        trace_id: trace_id.clone(),
                         r#type: AgentMessageType::ChunkEnd,
                         timestamp: chrono::Utc::now(),
                         content: String::new(),
@@ -166,6 +169,9 @@ impl DelegateTaskTool {
         let model_name = RuntimeContext::try_current()
             .map(|ctx| ctx.get_model().to_string())
             .unwrap_or_else(|| context.default_model.clone());
+        let trace_id = RuntimeContext::try_current()
+            .map(|ctx| ctx.get_trace_id().to_string())
+            .unwrap_or_default();
         let config = LlmConfig { model_name };
 
         // 执行 agent（使用新的 session_id）
@@ -177,6 +183,7 @@ impl DelegateTaskTool {
             new_session_id,  // 新的 session，隔离对话历史
             request_id,
             span_id,
+            trace_id,
             Some(agent_name.to_string()),
             context.message_bus.clone(),
         ).await.map_err(|e| format!("执行失败: {:?}", e))

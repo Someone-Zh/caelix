@@ -17,6 +17,8 @@ pub struct AgentMessage {
     pub session_id: String,
     pub request_id: String,
     pub span_id: String,
+    #[serde(default)]
+    pub trace_id: String,
     pub r#type: AgentMessageType,
     pub timestamp: DateTime<Utc>,
     pub content: String,
