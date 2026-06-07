@@ -37,7 +37,6 @@ pub struct ToolDefinition {
     pub parameters_schema: JsonValue,
 }
 
-/// 内部使用的 ToolCall（保持不变，用于你的逻辑）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
@@ -47,7 +46,6 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-/// 🔥 新增：用于发送给 API 的标准格式 ToolCall
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiToolCall {
     pub id: String,
@@ -63,7 +61,6 @@ pub struct ApiToolCallFunction {
     pub arguments: serde_json::Value,
 }
 
-// 🔥 新增：内部 ToolCall 转 API 格式
 impl ToolCall {
     pub fn to_api_format(&self) -> ApiToolCall {
         ApiToolCall {

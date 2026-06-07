@@ -2,18 +2,15 @@
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{Value, json};
-use tokio_stream::{Stream, StreamExt};
-use tokio::sync::mpsc;
-use std::pin::Pin;
-use serde_json::Value as JsonValue;
 use serde::Serialize;
+use serde_json::{Value, json};
+use std::pin::Pin;
 use std::sync::Arc;
+use tokio_stream::{Stream, StreamExt};
 
 use caelix_api::provider::{ChatMessage, LlmProvider, ChatResponseChunk, LlmConfig, ProviderConfig};
 use caelix_api::tool::{ToolCall, ToolDefinition, ApiToolCall};
 use caelix_api::error::AgentError;
-use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Debug, Serialize)]
 struct LlmChatRequest {
@@ -21,7 +18,7 @@ struct LlmChatRequest {
     messages: Vec<Value>,
     temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<JsonValue>>,
+    tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,7 +48,7 @@ struct LlmChatMessage {
     reasoning_content: Option<String>,
 }
 
-pub fn to_tool_json(tool: &ToolDefinition) -> JsonValue {
+pub fn to_tool_json(tool: &ToolDefinition) -> Value {
     json!({
         "type": "function",
         "function": {
@@ -62,7 +59,7 @@ pub fn to_tool_json(tool: &ToolDefinition) -> JsonValue {
     })
 }
 
-pub fn to_tools_array(definitions: &[ToolDefinition]) -> Vec<JsonValue> {
+pub fn to_tools_array(definitions: &[ToolDefinition]) -> Vec<Value> {
     definitions.iter().map(to_tool_json).collect()
 }
 
@@ -116,7 +113,7 @@ impl OpenAIProvider {
         }
     }
 
-    fn merge_tool_call_chunk(&self, buffer: &mut Vec<ToolCallBuffer>, chunk: &JsonValue) {
+    fn merge_tool_call_chunk(&self, buffer: &mut Vec<ToolCallBuffer>, chunk: &Value) {
         let index = chunk["index"].as_u64().unwrap_or(0) as u32;
         let tool_id = chunk["id"].as_str().unwrap_or_default().to_string();
         let func = &chunk["function"];
@@ -148,21 +145,20 @@ impl OpenAIProvider {
                 id: b.id.clone(),
                 index: b.index,
                 name: b.name.clone(),
-                arguments: JsonValue::String(b.arguments.clone()),
+                arguments: Value::String(b.arguments.clone()),
             })
             .collect()
     }
 
     fn parse_sse_chunk(
         &self,
-        json: &JsonValue,
+        json: &Value,
         tool_buffer: &mut Vec<ToolCallBuffer>,
         response_id: &mut String,
     ) -> Result<Option<ChatResponseChunk>, AgentError> {
-        if response_id.is_empty()
-            && let Some(id) = json["id"].as_str() {
-                *response_id = id.to_string();
-            }
+        if response_id.is_empty() && let Some(id) = json["id"].as_str() {
+            *response_id = id.to_string();
+        }
 
         let choice = match json["choices"].as_array().and_then(|c| c.first()) {
             Some(c) => c,
@@ -196,59 +192,6 @@ impl OpenAIProvider {
 
         Ok(Some(chunk))
     }
-
-    async fn process_sse_buffer(
-        &self,
-        buffer: &mut Vec<u8>,
-        tx: &mpsc::Sender<Result<ChatResponseChunk, AgentError>>,
-        response_id: &mut String,
-        tool_buffer: &mut Vec<ToolCallBuffer>,
-    ) {
-        let mut start = 0;
-        while start < buffer.len() {
-            let line_end = match buffer[start..].iter().position(|&b| b == b'\n') {
-                Some(p) => start + p + 1,
-                None => break,
-            };
-
-            let line = &buffer[start..line_end];
-            start = line_end;
-
-            let is_empty = line.iter().all(|&b| b.is_ascii_whitespace());
-            if is_empty {
-                continue;
-            }
-
-            if !line.starts_with(b"data: ") {
-                continue;
-            }
-
-            let data = &line[6..line.len() - 1];
-            if data == b"[DONE]" {
-                break;
-            }
-
-            let json = match serde_json::from_slice::<JsonValue>(data) {
-                Ok(j) => j,
-                Err(e) => {
-                    eprintln!("JSON 解析失败：{e}");
-                    continue;
-                }
-            };
-
-            match self.parse_sse_chunk(&json, tool_buffer, response_id) {
-                Ok(Some(chunk)) => {
-                    let _ = tx.send(Ok(chunk)).await;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
-                }
-            }
-        }
-
-        *buffer = buffer[start..].to_vec();
-    }
 }
 
 #[async_trait]
@@ -257,62 +200,114 @@ impl LlmProvider for OpenAIProvider {
         self.config.clone()
     }
 
+    // ✅✅✅ 你要的最终返回值（无外层 Result）
     async fn chat_stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         config: &LlmConfig,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>, AgentError> {
-        
-        let request_body = self.build_request_body(messages, tools, config);
-        let base_url = self.config.base_url.as_ref().ok_or_else(|| {
-            AgentError::LlmError(format!("{}: base_url 未配置", self.config.name))
-        })?;
-        let api_key = self.config.api_key.clone();
-        let url = format!("{}/chat/completions", base_url);
-        
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| AgentError::LlmError(format!("请求发送失败: {}", e)))?;
+    ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>> {
+        let self_clone = self.clone();
+        let messages = messages.to_vec();
+        let tools = tools.to_vec();
+        let config = config.clone();
 
-        if !response.status().is_success() {
-            let err = response.text().await.unwrap_or_default();
-            return Err(AgentError::LlmError(format!("API响应失败: {}", err)));
-        }
+        let stream = async_stream::stream! {
+            // 1. 构建请求（错误直接 yield）
+            let request_body = self_clone.build_request_body(&messages, &tools, &config);
+            let base_url = match self_clone.config.base_url.as_ref() {
+                Some(url) => url,
+                None => {
+                    yield Err(AgentError::LlmError(format!("{}: base_url 未配置", self_clone.config.name)));
+                    return;
+                }
+            };
 
-        let (tx, rx) = mpsc::channel(100);
-        let mut byte_stream = response.bytes_stream();
-        let this = self.clone();
+            let api_key = self_clone.config.api_key.clone();
+            let url = format!("{}/chat/completions", base_url);
 
-        tokio::spawn(async move {
+            // 2. 发送请求
+            let response = match self_clone.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    yield Err(AgentError::LlmError(format!("请求发送失败: {}", e)));
+                    return;
+                }
+            };
+
+            // 3. HTTP 状态错误
+            if !response.status().is_success() {
+                let text = response.text().await.unwrap_or_default();
+                yield Err(AgentError::LlmError(format!("API 响应失败: {}", text)));
+                return;
+            }
+
+            // 4. 正常流式解析
+            let mut byte_stream = response.bytes_stream();
             let mut buffer = Vec::new();
             let mut response_id = String::new();
             let mut tool_buffer = Vec::new();
 
-            while let Some(chunk) = byte_stream.next().await {
-                let bytes = match chunk {
+            while let Some(chunk_result) = byte_stream.next().await {
+                let bytes = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
-                        let _ = tx.send(Err(AgentError::LlmError(format!("流读取失败：{e}")))).await;
+                        yield Err(AgentError::LlmError(format!("流读取失败: {}", e)));
                         return;
                     }
                 };
-                buffer.extend_from_slice(&bytes);
-                this.process_sse_buffer(
-                    &mut buffer,
-                    &tx,
-                    &mut response_id,
-                    &mut tool_buffer,
-                ).await;
-            }
-        });
 
-        Ok(Box::pin(ReceiverStream::new(rx)))
+                buffer.extend_from_slice(&bytes);
+
+                let mut start = 0;
+                while start < buffer.len() {
+                    let line_end = match buffer[start..].iter().position(|&b| b == b'\n') {
+                        Some(p) => start + p + 1,
+                        None => break,
+                    };
+
+                    let line = &buffer[start..line_end];
+                    start = line_end;
+
+                    if line.iter().all(|&b| b.is_ascii_whitespace()) {
+                        continue;
+                    }
+
+                    if !line.starts_with(b"data: ") {
+                        continue;
+                    }
+
+                    let data = &line[6..line.len() - 1];
+                    if data == b"[DONE]" {
+                        break;
+                    }
+
+                    let json = match serde_json::from_slice::<Value>(data) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            eprintln!("JSON 解析失败: {}", e);
+                            continue;
+                        }
+                    };
+
+                    match self_clone.parse_sse_chunk(&json, &mut tool_buffer, &mut response_id) {
+                        Ok(Some(chunk)) => yield Ok(chunk),
+                        Ok(None) => {},
+                        Err(e) => yield Err(e),
+                    };
+                }
+
+                buffer.drain(..start);
+            }
+        };
+
+        Box::pin(stream)
     }
 }

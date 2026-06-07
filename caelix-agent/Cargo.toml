@@ -23,4 +23,5 @@ tracing.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
+async-stream.workspace = true
 tracing-subscriber = { workspace = true, optional = true }

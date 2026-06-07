@@ -1,8 +1,26 @@
+use caelix_api::AgentSpec;
 use caelix_api::error::AgentError;
 use caelix_api::tool::{Tool, ToolCall};
 use caelix_api::tool::ToolResult;
 use serde_json::Value;
 use std::sync::Arc;
+
+
+pub async fn execute_tools_static(
+    def: &Arc<AgentSpec>,
+    tool_calls: &[ToolCall],
+) -> Result<Vec<(String, String, String)>, AgentError> {
+    let mut results = Vec::new();
+    for tc in tool_calls {
+        let (name, res) = execute_tool(&def.tools, tc).await?;
+        let output = match &res.error {
+            Some(e) => return Err(AgentError::ToolError(e.to_string())),
+            None => res.output.clone(),
+        };
+        results.push((tc.id.clone(), name, output));
+    }
+    Ok(results)
+}
 
 pub async fn execute_tool(
     tools: &[Arc<dyn Tool>],

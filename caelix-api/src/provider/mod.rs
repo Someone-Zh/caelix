@@ -140,7 +140,7 @@ pub trait LlmProvider: Send + Sync + std::fmt::Debug {
         messages: &[ChatMessage],
         _tools: &[ToolDefinition],
         config: &LlmConfig,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>, AgentError>;
+    ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>;
 }
 
 /// LLM类型枚举
