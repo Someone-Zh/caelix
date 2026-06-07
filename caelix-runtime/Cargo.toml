@@ -11,6 +11,8 @@ logging = ["tracing-subscriber"]
 caelix-api = { path = "../caelix-api" }
 caelix-message = { path = "../caelix-message" }
 caelix-config = { path = "../caelix-config" }
+caelix-task = { path = "../caelix-task" }
+caelix-security = { path = "../caelix-security" }
 tokio.workspace = true
 serde_json.workspace = true
 serde.workspace = true

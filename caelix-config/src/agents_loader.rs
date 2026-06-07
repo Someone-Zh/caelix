@@ -100,14 +100,6 @@ where
         .await
         .map_err(AgentRegistryError::LoadError)?;
     
-    // TODO: 对每个agent应用init-hooks进行增强（移至运行时层）
-    // for agent in agents.iter_mut() {
-    //     println!("Applying init hooks to agent: {}", agent.name);
-    //     if let Err(e) = hook_registry.apply_init_hooks(agent, None).await {
-    //         eprintln!("Warning: Failed to apply init hooks to agent '{}': {}", agent.name, e);
-    //     }
-    // }
-    
     // 注册所有增强后的agent
     for agent in agents {
         agent_manager.register(agent).await?;

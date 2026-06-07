@@ -79,12 +79,6 @@ pub trait ContextProvider: Send + Sync {
     
     /// 获取消息发送器
     fn get_message_sender(&self) -> Arc<dyn MessageSender>;
-    
-    /// 获取默认 Provider 名称
-    fn get_default_provider(&self) -> &str;
-    
-    /// 获取默认 Model 名称
-    fn get_default_model(&self) -> &str;
 
 }
 
