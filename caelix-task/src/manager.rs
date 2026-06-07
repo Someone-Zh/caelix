@@ -74,7 +74,7 @@ impl TaskManager {
                     
                     // 检查任务是否还在注册表中
                     if let Some(mut handle) = registry_clone.get_mut(&task_id) {
-                        let (meta, _opt_tx, opt_ctx, _) = handle.value_mut();
+                        let (meta, _opt_tx, _, _) = handle.value_mut();
                         // 一次性更新所有字段
                         meta.status = TaskStatus::Running;
                         meta.updated_at = Utc::now();

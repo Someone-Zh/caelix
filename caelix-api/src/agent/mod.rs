@@ -107,5 +107,5 @@ impl AgentSpec {
 #[async_trait]
 pub trait Agent {
     async fn run(&self, messages: Vec<ChatMessage>,llm_provider: Arc<dyn LlmProvider>,
-    config: LlmConfig) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
+    config: &LlmConfig) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
 }

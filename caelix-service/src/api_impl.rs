@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use async_trait::async_trait;
-use caelix_api::RuntimeContext;
 use futures::stream::BoxStream;
 use futures::Stream;
 use futures::StreamExt;
@@ -30,12 +29,12 @@ async fn execute_agent_with_messaging(
     message_bus: Arc<caelix_message::MessageBus>,
 ) -> Result<String, anyhow::Error> {
     // 使用 loop_runner 执行 agent
-    let stream = caelix_agent::loop_runner::run_agent_loop(
-        (*agent_spec).clone(),
+    let stream = caelix_agent::run_agent(
+        agent_spec,
         messages,
         provider,
-        config.clone(),
-    ).await?;
+        config,
+    ).await;
     
     let mut result_content = String::new();
     let mut stream = stream;
@@ -199,127 +198,9 @@ impl CaelixApi for CaelixApiImpl {
 
     async fn chat_stream(
         &self,
-        request: ChatRequest,
+        _request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<AgentOutputChunk, ApiError>>, ApiError> {
-        // 1. 如果会话不存在则创建
-        if !self.context.session_manager.session_exists(&request.session_id).await {
-            self.context.session_manager
-                .create_session_config(request.session_id.clone())
-                .await
-                .map_err(|e| ApiError::InternalError(e.to_string()))?;
-        }
-        
-        // 2. 确定provider和model（用于创建RuntimeContext）
-        let default_provider = self.get_default_provider().to_string();
-        let default_model = self.get_default_model().to_string();
-        let provider_name = request.provider.as_deref()
-            .unwrap_or(&default_provider)
-            .to_string();
-        let model_name = request.model.as_deref()
-            .unwrap_or(&default_model)
-            .to_string();
-        
-        // 3. 生成 trace_id（为将来扩展预留）
-        let _trace_id = caelix_api::utils::generate_trace_id();
-        
-        // 4. 创建 RuntimeContext
-        let work_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let runtime_ctx = RuntimeContext::new(
-            Some(request.session_id.clone()),
-            Some(caelix_api::utils::generate_request_id()),
-            work_dir,
-            provider_name.to_string(),
-            model_name.to_string(),
-            false,
-            self.context.clone() as Arc<dyn caelix_api::context::ContextProvider>,
-        );
-        
-        // 5. 在 RuntimeContext scope 中执行所有操作
-        let ctx_clone = self.context.clone();
-        let request_clone = request.clone();
-        // 5.1 确定使用的agent名称（默认使用第一个或从请求中获取）
-        let agent_name = request_clone.agent.as_deref().unwrap_or("default");
-        
-        // 5.2 通过agent_manager获取AgentSpec
-        let agent_spec = ctx_clone.agent_manager.get(agent_name).await
-            .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
-        
-        // 5.3 通过llm_provider_manager获取对应的Provider实例
-        let provider = {
-            let provider_manager = ctx_clone.llm_provider_manager.read().await;
-            provider_manager.get_provider(&provider_name)
-                .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
-                .clone()
-        };
-        
-        // 5.4 构建LlmConfig
-        let config = LlmConfig {
-            model_name: model_name.to_string(),
-        };
-        
-        // 5.5 构建消息列表（从会话历史 + 当前消息）
-        // AgentMessage.content 现在存储的是 ChatMessage 的 JSON 字符串
-        let history_messages = ctx_clone.session_manager
-            .get_session_messages(&request_clone.session_id)
-            .await
-            .map_err(|e| ApiError::InternalError(e.to_string()))?;
-        
-        let mut messages: Vec<ChatMessage> = Vec::new();
-        for msg in history_messages.iter() {
-            if msg.r#type == AgentMessageType::Msg {
-                // 尝试从 JSON 字符串反序列化为 ChatMessage
-                match serde_json::from_str::<ChatMessage>(&msg.content) {
-                    Ok(chat_msg) => {
-                        // 成功反序列化，使用完整的 ChatMessage
-                        messages.push(chat_msg);
-                    }
-                    Err(_) => {
-                        // 降级处理：如果不是 JSON 格式，则当作纯文本处理
-                        // 这种情况可能是旧数据或手动发送的简单消息
-                        messages.push(ChatMessage {
-                            role: "user".to_string(),
-                            content: msg.content.clone(),
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-                    }
-                }
-            }
-        }
-        
-        // 添加当前用户消息
-        messages.push(ChatMessage::user(request_clone.message.clone()));
-        
-        // 发送用户消息到消息总线
-        let user_msg = AgentMessage {
-            session_id: request_clone.session_id.clone(),
-            request_id: caelix_api::utils::generate_request_id(),
-            span_id: caelix_api::utils::generate_span_id(),
-            trace_id: RuntimeContext::current().get_trace_id().to_string(),
-            r#type: AgentMessageType::Msg,
-            timestamp: chrono::Utc::now(),
-            content: request_clone.message.clone(),
-            agent_name: request_clone.agent.clone(),
-        };
-        let _ = ctx_clone.message_bus.send_agent(user_msg);
-        
-        // 5.6 调用AgentSpec的execute方法获取流
-        // 注意：由于 orphan rule，我们不能在外部 crate 为 AgentSpec 实现 Agent trait
-        // 所以直接调用 loop_runner
-        let messages_for_execution = agent_spec.build_messages(messages);
-        let stream = caelix_agent::loop_runner::run_agent_loop(
-            (*agent_spec).clone(),
-            messages_for_execution,
-            provider,
-            config,
-        ).await?;
-        
-        // 5.7 转换流类型: AgentError -> ApiError
-        let converted_stream = stream.map(|result| {
-            result.map_err(ApiError::from)
-        });
-        
-        Ok(Box::pin(converted_stream) as BoxStream<'static, Result<AgentOutputChunk, ApiError>>)
+        todo!()
     }
 
     async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError> {
@@ -483,46 +364,33 @@ impl CaelixApi for CaelixApiImpl {
         let span_id_clone = span_id.clone();
         let trace_id_clone = trace_id.clone();
         
+        // 5.2 在 RuntimeContext scope 中执行
+        // 获取 agent
+        let agent_name = request_clone.agent.as_deref().unwrap_or("default");
+        let agent_spec = ctx_clone.agent_manager.get(agent_name).await
+            .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+        
+        // 获取 provider
+        let provider = {
+            let provider_manager = ctx_clone.llm_provider_manager.read().await;
+            provider_manager
+            .get_provider(&provider_name)
+            .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
+            .clone()
+        };
+        
+        // 构建 LlmConfig
+        let config = LlmConfig {
+            model_name: model_name.to_string(),
+        };
+        
+        // 构建消息列表
+        let history_messages = ctx_clone.session_manager
+            .get_session_messages(&request_clone.session_id)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string()))?;
         // 5. 在后台启动任务
         tokio::spawn(async move {
-            // 5.1 创建 RuntimeContext
-            let work_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let runtime_ctx = RuntimeContext::new(
-                Some(request_clone.session_id.clone()),
-                Some(request_id_clone.clone()),
-                work_dir,
-                provider_name.to_string(),
-                model_name.to_string(),
-                false,
-                ctx_clone.clone() as Arc<dyn caelix_api::context::ContextProvider>,
-            );
-            
-            // 5.2 在 RuntimeContext scope 中执行
-            // 获取 agent
-            let agent_name = request_clone.agent.as_deref().unwrap_or("default");
-            let agent_spec = ctx_clone.agent_manager.get(agent_name).await
-                .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
-            
-            // 获取 provider
-            let provider = {
-                let provider_manager = ctx_clone.llm_provider_manager.read().await;
-                provider_manager
-                .get_provider(&provider_name)
-                .ok_or_else(|| ApiError::provider_not_found(&provider_name))?
-                .clone()
-            };
-            
-            // 构建 LlmConfig
-            let config = LlmConfig {
-                model_name: model_name.to_string(),
-            };
-            
-            // 构建消息列表
-            let history_messages = ctx_clone.session_manager
-                .get_session_messages(&request_clone.session_id)
-                .await
-                .map_err(|e| ApiError::InternalError(e.to_string()))?;
-            
             let mut messages: Vec<ChatMessage> = Vec::new();
             for msg in history_messages.iter() {
                 if msg.r#type == AgentMessageType::Msg {

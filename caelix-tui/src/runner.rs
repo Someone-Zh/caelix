@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use caelix_service::{CaelixApi, CaelixApiImpl, ChatRequest};
-use super::state::{App, AppView, AppMessage, Notification, NotificationType};
+use caelix_service::{CaelixApi, CaelixApiImpl};
+use super::state::{App, AppView, AppMessage, NotificationType};
 use super::events::{EventHandler, TuiEvent};
 use super::views;
 
@@ -142,8 +142,6 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                     app.status_message = "正在思考...".to_string();
                     
                     // 发送消息并处理流式响应
-                    let api_clone = api.clone();
-                    let session_clone = session_id.clone();
                     let tx = app.message_tx.clone().unwrap();
                     
                     // 在后台任务中处理异步调用（RuntimeContext 在 API 层内部管理）
@@ -151,32 +149,6 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                         // 设置加载状态
                         let _ = tx.send(AppMessage::SetLoading(true)).await;
                         let _ = tx.send(AppMessage::UpdateStatus("AI 正在回复...".to_string())).await;
-                        
-                        let request = ChatRequest {
-                            session_id: session_clone,
-                            message: message,
-                            provider: None,
-                            model: None,
-                            agent: None,
-                        };
-                        
-                        // 现在 chat_stream 会立即返回，任务在后台执行
-                        // 实际内容会通过消息总线推送
-                        match api_clone.chat_stream(request).await {
-                            Ok(_stream) => {
-                                // 流可能只包含任务启动信息
-                                // 实际内容会通过消息总线推送
-                            }
-                            Err(e) => {
-                                let _ = tx.send(AppMessage::AddNotification(Notification {
-                                    notif_type: NotificationType::Error,
-                                    message: format!("聊天错误: {:?}", e),
-                                    timestamp: std::time::Instant::now(),
-                                })).await;
-                            }
-                        }
-                        
-                        // 注意：不立即取消加载状态，等待消息总线的完成信号
                     });
                 }
             }

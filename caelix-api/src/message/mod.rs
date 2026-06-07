@@ -10,7 +10,14 @@ pub enum AgentMessageType {
     Msg,
     ChunkEnd,
 }
-
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMessageBase {
+    pub r#type: AgentMessageType,
+    pub timestamp: DateTime<Utc>,
+    pub content: String,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+}
 /// Agent 消息结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMessage {

@@ -7,3 +7,4 @@ pub mod converter;
 mod util;
 mod agent_runner;
 mod loop_agent;
+pub use agent_runner::run_agent;

@@ -10,8 +10,15 @@ use futures::{Stream, StreamExt};
 use crate::tool_executor::execute_tools_static;
 use super::util::{extract_pending_tool_calls, has_pending_tool_calls};
 
-struct LoopAgent {
+pub struct LoopAgent {
     def: Arc<AgentSpec>,
+}
+
+impl LoopAgent {
+    // 标准构造函数 ✅
+    pub fn new(def: Arc<AgentSpec>) -> Self {
+        Self { def }
+    }
 }
 
 #[async_trait]
@@ -20,7 +27,7 @@ impl Agent for LoopAgent {
         &self,
         mut messages: Vec<ChatMessage>,
         llm_provider: Arc<dyn LlmProvider>,
-        config: LlmConfig,
+        config: &LlmConfig,
     ) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>
     {
         let def = self.def.clone();
