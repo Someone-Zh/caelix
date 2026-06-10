@@ -132,6 +132,10 @@ impl Agent for LoopAgent {
 
         Box::pin(stream)
     }
+
+    fn get_spec(&self) -> Arc<AgentSpec> {
+        self.def.clone()
+    }
 }
 
 fn call_llm_static(

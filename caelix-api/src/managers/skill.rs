@@ -1,5 +1,8 @@
+//! SkillManager - 技能管理器
+
 use std::collections::HashMap;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::RwLock;
 
 /// 技能模型
@@ -19,13 +22,18 @@ pub struct Skill {
 
 impl Skill {
     /// 创建新的技能
-    pub fn new(name: String, namespace: String, description: String, content: String) -> Self {
+    pub fn new(
+        name: String,
+        namespace: String,
+        description: String,
+        content: String,
+    ) -> Self {
         let full_name = if namespace.is_empty() {
             name.clone()
         } else {
             format!("{}::{}", namespace, name)
         };
-        
+
         Self {
             name,
             namespace,
@@ -36,7 +44,16 @@ impl Skill {
     }
 }
 
-/// 技能管理器,负责维护所有技能的索引
+/// 技能注册中心错误
+#[derive(Debug, Error)]
+pub enum SkillRegistryError {
+    #[error("Skill with name '{0}' already exists")]
+    SkillAlreadyExists(String),
+    #[error("Failed to load skill: {0}")]
+    LoadError(String),
+}
+
+/// 技能管理器，负责维护所有技能的索引
 #[derive(Debug, Clone)]
 pub struct SkillManager {
     skills: Arc<RwLock<HashMap<String, Arc<Skill>>>>,
@@ -54,7 +71,7 @@ impl SkillManager {
     pub async fn register(&self, skill: Skill) -> Result<(), SkillRegistryError> {
         let mut skills = self.skills.write().await;
         if skills.contains_key(&skill.full_name) {
-            return Err(SkillRegistryError::SkillAlreadyExists(skill.full_name));
+            return Err(SkillRegistryError::SkillAlreadyExists(skill.full_name.clone()));
         }
         skills.insert(skill.full_name.clone(), Arc::new(skill));
         Ok(())
@@ -83,7 +100,8 @@ impl SkillManager {
                 if namespace.is_empty() {
                     !name.contains("::")
                 } else {
-                    name.starts_with(&format!("{}::", namespace)) || name.as_str() == namespace
+                    name.starts_with(&format!("{}::", namespace))
+                        || name.as_str() == namespace
                 }
             })
             .cloned()
@@ -103,11 +121,8 @@ impl SkillManager {
     }
 }
 
-/// 技能注册中心错误
-#[derive(Debug, thiserror::Error)]
-pub enum SkillRegistryError {
-    #[error("Skill with name '{0}' already exists")]
-    SkillAlreadyExists(String),
-    #[error("Failed to load skill: {0}")]
-    LoadError(String),
+impl Default for SkillManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }

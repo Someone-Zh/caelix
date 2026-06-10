@@ -105,7 +105,8 @@ impl AgentSpec {
 
 
 #[async_trait]
-pub trait Agent {
+pub trait Agent: Send + Sync {
     async fn run(&self, messages: Vec<ChatMessage>,llm_provider: Arc<dyn LlmProvider>,
     config: &LlmConfig) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
+    fn get_spec(&self) -> Arc<AgentSpec>;
 }

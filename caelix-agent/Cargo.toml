@@ -11,7 +11,6 @@ logging = ["tracing-subscriber"]
 caelix-api = { path = "../caelix-api" }
 caelix-llm = { path = "../caelix-llm" }
 caelix-tools = { path = "../caelix-tools" }
-caelix-runtime = { path = "../caelix-runtime" }
 caelix-message = { path = "../caelix-message" }
 caelix-config = { path = "../caelix-config" }
 caelix-task = { path = "../caelix-task" }

@@ -11,5 +11,4 @@ pub mod tools;
 pub use api_trait::CaelixApi;
 pub use api_impl::CaelixApiImpl;
 pub use types::*;
-pub use context::CaelixContext;
 pub use tools::*;

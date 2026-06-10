@@ -259,7 +259,6 @@ dependencies = [
  "caelix-config",
  "caelix-llm",
  "caelix-message",
- "caelix-runtime",
  "caelix-task",
  "caelix-tools",
  "chrono",

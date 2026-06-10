@@ -12,6 +12,7 @@ pub mod hooks;
 pub mod commands;
 pub mod error;
 pub mod utils;
+pub mod managers;
 
 // 重新导出常用类型
 pub use agent::*;
@@ -24,6 +25,7 @@ pub use hooks::*;
 pub use commands::*;
 pub use error::*;
 pub use utils::*;
+pub use managers::*;
 
 // 重新导出 ChatMessage 以便其他包使用
 pub use provider::ChatMessage;

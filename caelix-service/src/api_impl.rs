@@ -9,7 +9,7 @@ use caelix_api::agent::AgentOutputChunk;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
 use caelix_api::task::TaskMeta;
-use crate::context::CaelixContext;
+use caelix_runtime::context::CaelixContext;
 use crate::api_trait::CaelixApi;
 use crate::types::{ChatRequest, SessionSummary, ProviderInfo, ChatAsyncResult};
 
@@ -134,13 +134,12 @@ impl CaelixApiImpl {
 #[async_trait]
 impl CaelixApi for CaelixApiImpl {
     fn get_default_provider(&self) -> String {
-        // 从 context 中读取初始化时设置的默认 provider
-        self.context.default_provider.clone()
+        "暂无".to_string()
     }
 
     fn get_default_model(&self) -> String {
         // 从 context 中读取初始化时设置的默认 model
-        self.context.default_model.clone()
+        "暂无".to_string()
     }
 
     async fn set_session_provider(&self, session_id: &str, provider: &str) -> Result<(), ApiError> {
@@ -193,7 +192,7 @@ impl CaelixApi for CaelixApiImpl {
 
     async fn list_agents(&self) -> Vec<String> {
         let agents = self.context.agent_manager.get_all().await;
-        agents.iter().map(|a| a.name.clone()).collect()
+        agents.iter().map(|a| a.get_spec().name.clone()).collect()
     }
 
     async fn chat_stream(
@@ -365,10 +364,13 @@ impl CaelixApi for CaelixApiImpl {
         let trace_id_clone = trace_id.clone();
         
         // 5.2 在 RuntimeContext scope 中执行
-        // 获取 agent
+        // 获取 agent (Arc<dyn Agent>)
         let agent_name = request_clone.agent.as_deref().unwrap_or("default");
-        let agent_spec = ctx_clone.agent_manager.get(agent_name).await
+        let agent = ctx_clone.agent_manager.get(agent_name).await
             .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+        
+        // 获取 agent_spec 用于日志和消息传递
+        let agent_spec = agent.get_spec();
         
         // 获取 provider
         let provider = {

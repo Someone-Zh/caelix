@@ -7,17 +7,17 @@ use caelix_api::agent::AgentOutputChunk;
 use caelix_api::context::RuntimeContext;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_task::{Runnable, TaskKind};
-use crate::context::CaelixContext;
+use caelix_runtime::context::CaelixContext;
 
 /// 统一执行 Agent 并消费流（纯核心逻辑，无链路ID污染）
 async fn run_agent_stream(
-    agent_spec: Arc<caelix_api::agent::AgentSpec>,
+    agent: Arc<dyn caelix_api::agent::Agent>,
     messages: Vec<ChatMessage>,
     provider: Arc<dyn caelix_api::provider::LlmProvider>,
     config: &LlmConfig,
 ) -> Result<String, anyhow::Error> {
     use futures::StreamExt;
-    let stream = caelix_agent::run_agent(agent_spec, messages, provider, config).await;
+    let stream = agent.run( messages, provider, config).await;
     let mut result_content = String::new();
     let mut stream = stream;
     while let Some(chunk_result) = stream.next().await {
@@ -49,9 +49,9 @@ impl DelegateTaskTool {
     async fn prepare_agent_exec(
         &self,
         agent_name: &str,
-    ) -> Result<(Arc<caelix_api::agent::AgentSpec>, Arc<dyn caelix_api::provider::LlmProvider>, LlmConfig), String> {
+    ) -> Result<(Arc<dyn caelix_api::agent::Agent>, Arc<dyn caelix_api::provider::LlmProvider>, LlmConfig), String> {
         // 1. 获取 Agent
-        let agent_spec = self
+        let agent = self
             .ctx
             .agent_manager
             .get(agent_name)
@@ -60,8 +60,7 @@ impl DelegateTaskTool {
 
         // 2. 获取 Provider
         let provider_name = RuntimeContext::try_current()
-            .map(|c| c.get_provider().to_string())
-            .unwrap_or_else(|| self.ctx.default_provider.clone());
+            .map(|c| c.get_provider().to_string()).ok_or_else(|| "未找到提供".to_string())?;
 
         let provider_mgr = self.ctx.llm_provider_manager.read().await;
         let provider = provider_mgr
@@ -73,19 +72,19 @@ impl DelegateTaskTool {
         // 3. 获取 Model Config
         let model_name = RuntimeContext::try_current()
             .map(|c| c.get_model().to_string())
-            .unwrap_or_else(|| self.ctx.default_model.clone());
+            .ok_or_else(|| "未找到模型")?;
 
         let config = LlmConfig { model_name };
-        Ok((agent_spec, provider, config))
+        Ok((agent, provider, config))
     }
 
     /// 执行目标 Agent（同步）
     pub async fn execute_agent(&self, agent_name: &str, task_content: &str) -> Result<String, String> {
-        let (agent_spec, provider, config) = self.prepare_agent_exec(agent_name).await?;
+        let (agent, provider, config) = self.prepare_agent_exec(agent_name).await?;
         let messages = vec![ChatMessage::user(task_content)];
 
         run_agent_stream( 
-            agent_spec,
+            agent,
             messages,
             provider,
             &config

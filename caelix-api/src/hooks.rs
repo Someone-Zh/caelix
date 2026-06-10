@@ -2,10 +2,13 @@
 
 use async_trait::async_trait;
 use std::fmt;
+use std::sync::Arc;
 use bitflags::bitflags;
+use tokio::sync::RwLock;
 use crate::agent::{AgentSpec, AgentOutputChunk};
 use crate::provider::ChatMessage;
 use crate::tool::ToolResult;
+use anyhow::Result;
 
 // Hook能力声明 - 位标志枚举
 bitflags! {
@@ -278,5 +281,213 @@ pub trait AgentHook: Send + Sync {
     /// On-Message-Update钩子：消息更新时调用
     async fn on_message_update(&self, _ctx: &MessageUpdateContext) -> Result<(), anyhow::Error> {
         Ok(())  // 默认空实现
+    }
+}
+
+/// 钩子引用类型别名
+type HookRef = Arc<dyn AgentHook>;
+
+/// 钩子注册中心
+/// 管理所有Agent增强钩子，并在Agent生命周期的不同阶段应用它们
+#[derive(Clone)]
+pub struct HookRegistry {
+    hooks: Arc<RwLock<Vec<HookRef>>>,
+    init_hooks: Arc<RwLock<Vec<HookRef>>>,
+    pre_hooks: Arc<RwLock<Vec<HookRef>>>,
+    post_hooks: Arc<RwLock<Vec<HookRef>>>,
+    error_hooks: Arc<RwLock<Vec<HookRef>>>,
+    pre_tool_exec_hooks: Arc<RwLock<Vec<HookRef>>>,
+    post_tool_exec_hooks: Arc<RwLock<Vec<HookRef>>>,
+    message_update_hooks: Arc<RwLock<Vec<HookRef>>>,
+}
+
+impl std::fmt::Debug for HookRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self
+            .hooks
+            .try_read()
+            .map(|guard: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>>| guard.len())
+            .unwrap_or(0);
+        f.debug_struct("HookRegistry")
+            .field("hook_count", &count)
+            .finish()
+    }
+}
+
+impl HookRegistry {
+    /// 创建新的钩子注册中心
+    pub fn new() -> Self {
+        Self {
+            hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            init_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            pre_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            post_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            error_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            pre_tool_exec_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            post_tool_exec_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+            message_update_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
+        }
+    }
+
+    /// 注册钩子
+    pub async fn register_hook(&self, hook: HookRef) {
+        let caps = hook.capabilities();
+        {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::INIT) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.init_hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::PRE_PROCESS) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.pre_hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::POST_PROCESS) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.post_hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::ERROR) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.error_hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::PRE_TOOL_EXEC) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.pre_tool_exec_hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::POST_TOOL_EXEC) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.post_tool_exec_hooks.write().await;
+            guard.push(hook.clone());
+        }
+        if caps.contains(HookCapability::ON_MESSAGE_UPDATE) {
+            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
+                self.message_update_hooks.write().await;
+            guard.push(hook.clone());
+        }
+    }
+
+    /// 获取已注册的钩子数量
+    pub async fn hook_count(&self) -> usize {
+        let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> = self.hooks.read().await;
+        hooks.len()
+    }
+
+    /// 应用Init阶段钩子到AgentSpec（用于Agent注册时的一次性增强）
+    pub async fn apply_init_hooks(
+        &self,
+        agent_spec: &mut AgentSpec,
+        session_id: Option<&str>,
+    ) -> Result<(), anyhow::Error> {
+        let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> = self.init_hooks.read().await;
+        let session_id = session_id.unwrap_or("init").to_string();
+
+        for obj in hooks.iter() {
+            let hook: &dyn AgentHook = &**obj;
+            if hook.should_apply(&agent_spec.name, agent_spec.group.as_ref().map(|s| s.as_str())) {
+                let base_ctx = BaseContext {
+                    session_id: session_id.clone(),
+                    request_id: format!("{}-init", session_id),
+                    span_id: format!("{}-init", session_id),
+                    agent_name: agent_spec.name.clone(),
+                    agent_group: agent_spec.group.as_ref().map(|g| g.to_string()),
+                };
+
+                let mut init_ctx = InitContext {
+                    base: base_ctx,
+                    agent_spec,
+                };
+
+                hook.on_init(&mut init_ctx).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 执行消息更新钩子
+    pub async fn execute_message_update(
+        &self,
+        ctx: &MessageUpdateContext,
+    ) -> Result<(), anyhow::Error> {
+        let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> =
+            self.message_update_hooks.read().await;
+        for obj in hooks.iter() {
+            let hook: &dyn AgentHook = &**obj;
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                hook.on_message_update(ctx).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 执行工具执行前钩子
+    pub async fn execute_pre_tool_exec(
+        &self,
+        ctx: &mut PreToolExecContext,
+    ) -> Result<(), anyhow::Error> {
+        let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> =
+            self.pre_tool_exec_hooks.read().await;
+        for obj in hooks.iter() {
+            let hook: &dyn AgentHook = &**obj;
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                hook.on_pre_tool_exec(ctx).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 执行工具执行后钩子
+    pub async fn execute_post_tool_exec(
+        &self,
+        ctx: &mut PostToolExecContext,
+    ) -> Result<(), anyhow::Error> {
+        let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> =
+            self.post_tool_exec_hooks.read().await;
+        for obj in hooks.iter() {
+            let hook: &dyn AgentHook = &**obj;
+            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+                hook.on_post_tool_exec(ctx).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for HookRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// HookExecutor trait 实现 - 提供统一的钩子执行接口
+#[async_trait]
+impl crate::context::HookExecutor for HookRegistry {
+    async fn execute_message_update(
+        &self,
+        ctx: &MessageUpdateContext,
+    ) -> Result<()> {
+        Self::execute_message_update(self, ctx).await
+    }
+
+    async fn execute_pre_tool_exec(
+        &self,
+        ctx: &mut PreToolExecContext,
+    ) -> Result<()> {
+        Self::execute_pre_tool_exec(self, ctx).await
+    }
+
+    async fn execute_post_tool_exec(
+        &self,
+        ctx: &mut PostToolExecContext,
+    ) -> Result<()> {
+        Self::execute_post_tool_exec(self, ctx).await
     }
 }
