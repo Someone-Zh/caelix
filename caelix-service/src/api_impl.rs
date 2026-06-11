@@ -9,7 +9,7 @@ use caelix_api::agent::AgentOutputChunk;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
 use caelix_api::task::TaskMeta;
-use crate::context::CaelixContext;
+use caelix_runtime::context::CaelixContext;
 use crate::api_trait::CaelixApi;
 use crate::types::{ChatRequest, SessionSummary, ProviderInfo, ChatAsyncResult};
 

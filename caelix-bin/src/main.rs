@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use caelix_service::CaelixContext;
+use caelix_runtime::context::CaelixContext;
 use caelix_service::{CaelixApi, CaelixApiImpl};
 use tokio::signal;
 
@@ -22,6 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 使用 CaelixContext 初始化
     println!("🔧 初始化 Caelix 上下文...");
     let mut context = CaelixContext::new();
+    let plugins = caelix_api::plugins::inventory_plugins(Arc::new(context.clone()));
+    context.register_plugins(plugins).await;
     context.init().await.expect("Failed to initialize context");
     let caelix_ctx = Arc::new(context);
     

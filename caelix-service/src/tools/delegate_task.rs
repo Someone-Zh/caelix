@@ -7,7 +7,7 @@ use caelix_api::agent::AgentOutputChunk;
 use caelix_api::context::RuntimeContext;
 use caelix_api::provider::{ChatMessage, LlmConfig};
 use caelix_task::{Runnable, TaskKind};
-use crate::context::CaelixContext;
+use caelix_runtime::context::CaelixContext;
 
 /// 统一执行 Agent 并消费流（纯核心逻辑，无链路ID污染）
 async fn run_agent_stream(
@@ -64,16 +64,20 @@ impl DelegateTaskTool {
             .unwrap_or_else(|| self.ctx.default_provider.clone());
 
         let provider_mgr = self.ctx.llm_provider_manager.read().await;
+        let all_providers = provider_mgr.get_all_providers();
         let provider = provider_mgr
             .get_provider(&provider_name)
             .cloned()
-            .or_else(|| provider_mgr.get_all_providers().first().map(|(_, p)| p.clone()))
+            .or_else(|| all_providers.first().map(|(_, p)| p.clone()))
             .ok_or("无可用 LLM Provider")?;
 
         // 3. 获取 Model Config
-        let model_name = RuntimeContext::try_current()
+        let mut model_name = RuntimeContext::try_current()
             .map(|c| c.get_model().to_string())
             .unwrap_or_else(|| self.ctx.default_model.clone());
+        if model_name.is_empty() {
+            model_name = provider.config().default_model().to_string();
+        }
 
         let config = LlmConfig { model_name };
         Ok((agent_spec, provider, config))

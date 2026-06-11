@@ -5,6 +5,7 @@
 pub mod context;
 pub mod hooks;
 pub mod id_generator;
+pub mod plugins;
 
 // 重新导出常用类型
 pub use hooks::HookRegistry;

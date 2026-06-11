@@ -24,4 +24,5 @@ once_cell.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 futures.workspace = true
+inventory.workspace = true
 tracing-subscriber = { workspace = true, optional = true }

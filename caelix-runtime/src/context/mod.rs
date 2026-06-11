@@ -1,13 +1,14 @@
+use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
+use caelix_api::plugins::{PluginManager, PluginRegistry};
+use caelix_config::{
+    EnvConfig,
+    managers::{AgentManager, CommandManager, ProviderManager, SkillManager, ToolManager},
+};
+use caelix_message::{FileStorage, MessageBus, SessionManager};
+use caelix_security::SecurityChecker;
+use caelix_task::{FilePersistence, RunnableFactory, TaskManager};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use caelix_config::{EnvConfig, managers::{AgentManager, ToolManager, ProviderManager, SkillManager, CommandManager}};
-use caelix_config::provider_loader::load_provider_configs;
-use caelix_config::agents_loader::register_all_agents;
-use caelix_config::skills_loader::register_all_skills;
-use caelix_message::{SessionManager, MessageBus, FileStorage};
-use caelix_task::{TaskManager, FilePersistence, RunnableFactory};
-use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
-use caelix_security::SecurityChecker;
 
 use crate::HookRegistry;
 
@@ -31,12 +32,18 @@ pub struct CaelixContext {
     pub command_manager: Arc<CommandManager>,
     /// 钩子注册中心实例
     pub hook_registry: Arc<HookRegistry>,
+    /// 插件注册中心实例
+    pub plugin_registry: Arc<PluginRegistry>,
     /// 消息总线实例
     pub message_bus: Arc<MessageBus>,
     /// 任务管理器实例
     pub task_manager: Option<Arc<TaskManager>>,
     /// 安全检查器实例
     pub security_checker: Arc<SecurityChecker>,
+    /// 默认 Provider 名称
+    pub default_provider: String,
+    /// 默认模型名称
+    pub default_model: String,
 }
 
 impl CaelixContext {
@@ -44,12 +51,12 @@ impl CaelixContext {
     pub fn new() -> Self {
         // 初始化环境变量配置
         let env_config = EnvConfig::new();
-        
+
         // 初始化消息总线和存储
         let bus = MessageBus::new(1024);
         let storage = Arc::new(FileStorage::new("./sessions".to_string()));
         let session_manager = Arc::new(SessionManager::new(bus.clone(), storage));
-        
+
         // 初始化任务管理器
         let task_persistence = Arc::new(FilePersistence::new("./tasks".to_string()));
         let runnable_factory = RunnableFactory::new();
@@ -59,7 +66,7 @@ impl CaelixContext {
             task_persistence,
             runnable_factory,
         ));
-        
+
         Self {
             env_config,
             agent_manager: Arc::new(AgentManager::new()),
@@ -69,157 +76,143 @@ impl CaelixContext {
             skill_manager: Arc::new(SkillManager::new()),
             command_manager: Arc::new(CommandManager::new()),
             hook_registry: Arc::new(HookRegistry::new()),
+            plugin_registry: Arc::new(PluginRegistry::new()),
             message_bus: Arc::new(bus),
             task_manager: Some(task_manager),
-            security_checker: Arc::new(SecurityChecker::new(caelix_security::SecurityConfig::default())),
+            security_checker: Arc::new(SecurityChecker::new(
+                caelix_security::SecurityConfig::default(),
+            )),
+            default_provider: String::new(),
+            default_model: String::new(),
         }
-        
     }
 }
 
 impl CaelixContext {
+    /// 注册插件到插件注册中心。
+    pub async fn register_plugin(&self, plugin: Arc<dyn caelix_api::plugins::Plugin>) {
+        self.plugin_registry.register_plugin(plugin).await;
+    }
+
+    /// 批量注册插件到插件注册中心。
+    pub async fn register_plugins(&self, plugins: Vec<Arc<dyn caelix_api::plugins::Plugin>>) {
+        self.plugin_registry.register_plugins(plugins).await;
+    }
+
     /// 初始化提供商配置
-    /// 读取配置文件并将提供商注册到 llm_provider_manager 中
+    /// 通过插件加载提供商并注册到 llm_provider_manager 中
     pub async fn init_provider(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let caelix_home = &self.env_config.caelix_home;
-        let configs = load_provider_configs(caelix_home)?;
-        
         let mut provider_manager = self.llm_provider_manager.write().await;
-        for (key, config) in configs {
-            let name = if config.name.is_empty() { key } else { config.name.clone() };
-            
-            // 根据 LlmType 创建对应的 Provider 实例
-            let provider: Arc<dyn caelix_api::provider::LlmProvider> = match config.llm_type {
-                caelix_api::provider::LlmType::OpenAI => {
-                    Arc::new(caelix_llm::OpenAIProvider::new(
-                        config.into()
-                    ))
-                }
-            };
-            
-            provider_manager.add_provider(name, provider)?;
+        for plugin in self.plugin_registry.llm_provider_plugins().await {
+            for named_provider in plugin.llm_providers().await? {
+                provider_manager.add_provider(named_provider.name, named_provider.provider)?;
+            }
         }
-        
+
         Ok(())
     }
-    
+
     /// 初始化工具管理器
-    /// 加载所有内置工具并注册到 tool_manager 中
+    /// 通过插件加载工具并注册到 tool_manager 中
     pub async fn init_tools(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // 加载所有内置工具实例（从 caelix-service::tools）
-        let tools = crate::tools::create_all_builtin_tools();
-
-        // 获取工具管理器写锁
-        let tool_manager = self.tool_manager.clone();
-        // 批量注册工具
-        for tool in tools {
-            tool_manager.register(tool).await;
+        for plugin in self.plugin_registry.tool_plugins().await {
+            for tool in plugin.tools().await? {
+                self.tool_manager.register(tool).await;
+            }
         }
-
-        // 注册委派任务工具（在 caelix-service 中创建）
-        let delegate_tool = crate::tools::DelegateTaskTool::new(self.clone().into());
-        tool_manager.register(Arc::new(delegate_tool)).await;
 
         Ok(())
     }
 
     /// 初始化智能体管理器
-    /// 从 CAELIX_HOME/agents 目录加载所有 .agent 文件
+    /// 通过插件加载所有智能体，并在注册前应用 init-hooks
     pub async fn init_agents(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let agents_dir = self.env_config.caelix_home.join("agents");
-        
-        // 如果 agents 目录不存在，创建它
-        if !agents_dir.exists() {
-            std::fs::create_dir_all(&agents_dir)?;
-            println!("Creating agents directory at: {:?}", agents_dir);
-            println!("Please add .agent files to this directory");
+        for plugin in self.plugin_registry.agent_plugins().await {
+            for mut agent in plugin.agents().await? {
+                self.hook_registry
+                    .apply_init_hooks(&mut agent, Some("init"))
+                    .await?;
+                self.agent_manager.register(agent).await?;
+            }
         }
-        
-        // 从 agents 目录加载并注册所有 agent
-        register_all_agents(self, &agents_dir.to_string_lossy()).await?;
+
         Ok(())
     }
 
     /// 初始化技能管理器
-    /// 从 CAELIX_HOME/skills 目录加载所有 .skill 文件
+    /// 通过插件加载所有技能
     pub async fn init_skills(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let skills_dir = self.env_config.caelix_home.join("skills");
-        
-        // 如果 skills 目录不存在，创建它
-        if !skills_dir.exists() {
-            std::fs::create_dir_all(&skills_dir)?;
-            println!("Creating skills directory at: {:?}", skills_dir);
+        for plugin in self.plugin_registry.skill_plugins().await {
+            for skill_def in plugin.skills().await? {
+                let skill = caelix_config::managers::Skill::new(
+                    skill_def.name,
+                    skill_def.namespace,
+                    skill_def.description,
+                    skill_def.content,
+                );
+                self.skill_manager.register(skill).await?;
+            }
         }
-        
-        // 从 skills 目录加载并注册所有 skill
-        register_all_skills(&skills_dir.to_string_lossy(), &self.skill_manager).await?;
+
         Ok(())
     }
 
     /// 初始化钩子系统
-    /// 使用HookLoader注册所有内置钩子（如技能钩子）
+    /// 通过插件加载钩子并注册到 HookRegistry
     pub async fn init_hooks(&self) -> Result<(), Box<dyn std::error::Error>> {
-        use caelix_runtime::hooks::loader::HookLoader;
-        // 使用HookLoader加载内置钩子
-        HookLoader::load_builtin_hooks(
-            &self.hook_registry,
-            self.skill_manager.clone(),
-        ).await?;
-        
+        for plugin in self.plugin_registry.hook_plugins().await {
+            for hook in plugin.agent_hooks().await? {
+                self.hook_registry.register_hook(hook).await;
+            }
+        }
+
         Ok(())
     }
 
     /// 初始化命令管理器
-    /// 从 CAELIX_HOME/commands 目录加载所有 .md 文件
+    /// 通过插件加载所有命令
     pub async fn init_commands(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let commands_dir = self.env_config.caelix_home.join("commands");
-        
-        // 如果 commands 目录不存在，创建它
-        if !commands_dir.exists() {
-            std::fs::create_dir_all(&commands_dir)?;
-            println!("Creating commands directory at: {:?}", commands_dir);
+        for plugin in self.plugin_registry.command_plugins().await {
+            let commands = plugin.commands().await?;
+            self.command_manager.register_batch(commands).await;
         }
-        
-        // 从 commands 目录加载并注册所有命令
-        caelix_config::commands_loader::register_all_commands(
-            &commands_dir.to_string_lossy(),
-            &self.command_manager,
-        ).await?;
-        
-        println!("Commands loaded. Total commands: {}", 
-            self.command_manager.get_all().await.len());
-        
+
+        println!(
+            "Commands loaded. Total commands: {}",
+            self.command_manager.get_all().await.len()
+        );
+
         Ok(())
     }
 
-    pub async fn init(&mut self) -> Result<(), Box<dyn std::error::Error>> { 
+    pub async fn init(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // 加载安全配置
-        let security_config = caelix_security::loader::load_security_config(
-            &self.env_config.caelix_home
-        )?;
-        
+        let security_config =
+            caelix_security::loader::load_security_config(&self.env_config.caelix_home)?;
+
         // 重新创建 SecurityChecker
         self.security_checker = Arc::new(SecurityChecker::new(security_config));
         println!("✅ Security checker initialized");
-        
+
         // 初始化工具
         self.init_tools().await?;
 
         // 初始化提供商
         self.init_provider().await?;
-        
+        self.update_defaults().await;
+
         // 初始化技能（必须在钩子之前）
         self.init_skills().await?;
-        
+
         // 初始化钩子（必须在agents之前，因为agents注册时需要应用init-hooks）
         self.init_hooks().await?;
 
         // 初始化智能体（会自动应用init-hooks进行增强）
         self.init_agents().await?;
-        
+
         // 初始化命令
         self.init_commands().await?;
-        
+
         // 恢复持久化的任务
         if let Some(tm) = &self.task_manager {
             if let Err(e) = tm.restore().await {
@@ -231,6 +224,13 @@ impl CaelixContext {
         Ok(())
     }
 
+    async fn update_defaults(&mut self) {
+        let providers = self.llm_provider_manager.read().await.get_all_providers();
+        if let Some((provider_name, provider)) = providers.first() {
+            self.default_provider = provider_name.clone();
+            self.default_model = provider.config().default_model().to_string();
+        }
+    }
 }
 
 impl Default for CaelixContext {
@@ -258,10 +258,9 @@ impl ContextProvider for CaelixContext {
     fn get_hook_executor(&self) -> Arc<dyn HookExecutor> {
         self.hook_registry.clone()
     }
-    
+
     fn get_message_sender(&self) -> Arc<dyn MessageSender> {
         // MessageBus 已经实现了 MessageSender trait
         self.message_bus.clone()
     }
-    
 }

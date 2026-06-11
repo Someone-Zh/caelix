@@ -10,6 +10,7 @@ pub mod task;
 pub mod context;
 pub mod hooks;
 pub mod commands;
+pub mod plugins;
 pub mod error;
 pub mod utils;
 
@@ -22,6 +23,7 @@ pub use task::*;
 pub use context::*;
 pub use hooks::*;
 pub use commands::*;
+pub use plugins::*;
 pub use error::*;
 pub use utils::*;
 

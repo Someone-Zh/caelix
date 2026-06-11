@@ -12,6 +12,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 futures.workspace = true
 bitflags.workspace = true
+inventory.workspace = true
 chrono.workspace = true
 snowflaked.workspace = true
 once_cell.workspace = true
