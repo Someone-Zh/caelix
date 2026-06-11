@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use serde_json::{json, Value as JsonValue};
+use caelix_api::tool::{Tool, ToolResult};
+use serde_json::{Value as JsonValue, json};
 use walkdir::WalkDir;
-use caelix_api::tool::{ToolResult, Tool};
 
 // 过滤类型枚举
 #[derive(Debug, Clone)]
@@ -10,7 +10,6 @@ enum FilterType {
     DirsOnly,  // 仅文件夹
     FilesOnly, // 仅文件
 }
-
 
 // ====================== 目录树工具实现 ======================
 #[derive(Debug, Clone, Default)]
@@ -78,20 +77,17 @@ impl Tool for DirectoryTreeTool {
             }
         };
 
-        let max_depth = input
-            .get("max_depth")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(3) as usize; // 默认值为 3
+        let max_depth = input.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize; // 默认值为 3
 
         // 限制最大深度为 10
         let max_depth = max_depth.min(10);
-        
+
         // 解析show_hidden参数，默认false
         let show_hidden = input
             .get("show_hidden")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        
+
         // 解析filter_type参数，默认all
         let filter_type_str = input
             .get("filter_type")
@@ -103,7 +99,7 @@ impl Tool for DirectoryTreeTool {
             "files_only" => FilterType::FilesOnly,
             _ => FilterType::All,
         };
-        
+
         // 解析extensions参数，支持文件后缀过滤
         let extensions: Vec<String> = input
             .get("extensions")
@@ -138,7 +134,13 @@ impl Tool for DirectoryTreeTool {
 }
 
 // ====================== 核心：walkdir 生成树形结构 ======================
-fn generate_tree(root: &str, max_depth: usize, show_hidden: bool, filter_type: FilterType, extensions: &[String]) -> anyhow::Result<String> {
+fn generate_tree(
+    root: &str,
+    max_depth: usize,
+    show_hidden: bool,
+    filter_type: FilterType,
+    extensions: &[String],
+) -> anyhow::Result<String> {
     let mut lines = Vec::new();
     lines.push(format!(" {} (目录)", root));
 
@@ -149,18 +151,21 @@ fn generate_tree(root: &str, max_depth: usize, show_hidden: bool, filter_type: F
         .into_iter()
         .filter_entry(|e| {
             // 如果show_hidden为false，过滤掉隐藏的目录
-            if !show_hidden
-                && let Some(name) = e.file_name().to_str() {
-                    // 忽略常见的版本控制和IDE目录
-                    if name == ".git" || name == ".idea" || name == ".vscode" 
-                       || name == "node_modules" || name == "__pycache__" {
-                        return false;
-                    }
-                    // 忽略以.开头的隐藏文件或目录
-                    if name.starts_with('.') {
-                        return false;
-                    }
+            if !show_hidden && let Some(name) = e.file_name().to_str() {
+                // 忽略常见的版本控制和IDE目录
+                if name == ".git"
+                    || name == ".idea"
+                    || name == ".vscode"
+                    || name == "node_modules"
+                    || name == "__pycache__"
+                {
+                    return false;
                 }
+                // 忽略以.开头的隐藏文件或目录
+                if name.starts_with('.') {
+                    return false;
+                }
+            }
             true
         });
 
@@ -179,13 +184,13 @@ fn generate_tree(root: &str, max_depth: usize, show_hidden: bool, filter_type: F
             FilterType::FilesOnly if entry.file_type().is_dir() => continue,
             _ => {}
         }
-        
+
         // 根据extensions过滤文件后缀
         if !extensions.is_empty() && entry.file_type().is_file() {
             if let Some(file_name) = entry.file_name().to_str() {
-                let has_matching_ext = extensions.iter().any(|ext| {
-                    file_name.to_lowercase().ends_with(ext)
-                });
+                let has_matching_ext = extensions
+                    .iter()
+                    .any(|ext| file_name.to_lowercase().ends_with(ext));
                 if !has_matching_ext {
                     continue;
                 }

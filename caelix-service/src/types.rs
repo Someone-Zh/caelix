@@ -2,10 +2,10 @@
 //! 这些类型是公共API的一部分，可能被外部使用
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
-use caelix_api::task::TaskMeta;
 use caelix_api::message::{AgentMessage, NotificationMessage};
+use caelix_api::task::TaskMeta;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// 聊天请求
 #[derive(Debug, Deserialize, Clone)]
@@ -65,7 +65,7 @@ pub struct TaskQueryParams {
 pub struct SessionSummary {
     pub session_id: String,
     pub created_at: DateTime<Utc>,
-    pub summary: String,  // 首次输入的前15个字符
+    pub summary: String, // 首次输入的前15个字符
 }
 
 /// 提供者信息

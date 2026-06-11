@@ -3,28 +3,34 @@
 //! 包含 AgentSpec 和 AgentOutputChunk 的定义
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 
-use crate::{AgentError, LlmConfig, LlmProvider};
-use crate::tool::Tool;
 use crate::provider::ChatMessage;
+use crate::tool::Tool;
+use crate::{AgentError, LlmConfig, LlmProvider};
 
 /// Agent 输出流分片
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentOutputChunk {
-    Start { timestamp: DateTime<Utc> },
-    CallProvider { 
+    Start {
+        timestamp: DateTime<Utc>,
+    },
+    CallProvider {
         timestamp: DateTime<Utc>,
         provider: String,
-        model: String 
+        model: String,
     },
-    Reasoning { content: String },
-    Content { content: String },
+    Reasoning {
+        content: String,
+    },
+    Content {
+        content: String,
+    },
     ToolCall {
         tool_call_id: String,
         name: String,
@@ -34,7 +40,9 @@ pub enum AgentOutputChunk {
         tool_name: String,
         result: String,
     },
-    Finish { reason: String },
+    Finish {
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for AgentOutputChunk {
@@ -61,19 +69,15 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
-    pub fn new(
-        name: String,
-        system_prompt: String,
-        tools: Vec<Arc<dyn Tool>>,
-    ) -> Self {
-        Self { 
-            name, 
+    pub fn new(name: String, system_prompt: String, tools: Vec<Arc<dyn Tool>>) -> Self {
+        Self {
+            name,
             system_prompt: Arc::new(system_prompt),
             tools,
             group: None,
         }
     }
-    
+
     /// 创建带group的AgentSpec
     pub fn with_group(
         name: String,
@@ -81,8 +85,8 @@ impl AgentSpec {
         tools: Vec<Arc<dyn Tool>>,
         group: Option<String>,
     ) -> Self {
-        Self { 
-            name, 
+        Self {
+            name,
             system_prompt: Arc::new(system_prompt),
             tools,
             group: group.map(Arc::new),
@@ -103,9 +107,13 @@ impl AgentSpec {
     }
 }
 
-
 #[async_trait]
 pub trait Agent: Send + Sync {
-    async fn run(&self, messages: Vec<ChatMessage>,llm_provider: Arc<dyn LlmProvider>,
-    config: &LlmConfig) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
+    async fn run(
+        &self,
+        messages: Vec<ChatMessage>,
+        llm_provider: Arc<dyn LlmProvider>,
+        config: &LlmConfig,
+    ) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
+    fn get_spec(&self) -> Arc<AgentSpec>;
 }

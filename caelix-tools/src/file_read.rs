@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -56,10 +56,12 @@ impl Tool for ReadFileTool {
         // 1. 解析必选参数：文件路径
         let file_path = match input["file_path"].as_str() {
             Some(v) => v,
-            None => return ToolResult {
-                output: String::new(),
-                error: Some("Missing required parameter: file_path".to_string()),
-            },
+            None => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("Missing required parameter: file_path".to_string()),
+                };
+            }
         };
 
         // 2. 解析新增参数
@@ -80,10 +82,12 @@ impl Tool for ReadFileTool {
                         error: None,
                     };
                 }
-                Err(e) => return ToolResult {
-                    output: String::new(),
-                    error: Some(format!("Failed to get file size: {}", e)),
-                },
+                Err(e) => {
+                    return ToolResult {
+                        output: String::new(),
+                        error: Some(format!("Failed to get file size: {}", e)),
+                    };
+                }
             }
         }
 
@@ -104,10 +108,12 @@ impl Tool for ReadFileTool {
         // 异步流式打开文件
         let file = match File::open(path).await {
             Ok(f) => f,
-            Err(e) => return ToolResult {
-                output: String::new(),
-                error: Some(format!("Failed to open file: {}", e)),
-            },
+            Err(e) => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some(format!("Failed to open file: {}", e)),
+                };
+            }
         };
 
         // 流式逐行读取
@@ -121,9 +127,10 @@ impl Tool for ReadFileTool {
 
             // 提前终止：超过结束行直接停止
             if let Some(end) = end_line
-                && current_line > end {
-                    break;
-                }
+                && current_line > end
+            {
+                break;
+            }
 
             match lines.next_line().await {
                 Ok(Some(line)) => {
@@ -137,10 +144,12 @@ impl Tool for ReadFileTool {
                     }
                 }
                 Ok(None) => break,
-                Err(e) => return ToolResult {
-                    output: String::new(),
-                    error: Some(format!("Failed to read line {}: {}", current_line, e)),
-                },
+                Err(e) => {
+                    return ToolResult {
+                        output: String::new(),
+                        error: Some(format!("Failed to read line {}: {}", current_line, e)),
+                    };
+                }
             }
         }
 

@@ -1,23 +1,23 @@
 use async_trait::async_trait;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
 
-use caelix_api::tool::{ToolResult, Tool};
 use caelix_api::agent::AgentOutputChunk;
 use caelix_api::context::RuntimeContext;
 use caelix_api::provider::{ChatMessage, LlmConfig};
-use caelix_task::{Runnable, TaskKind};
+use caelix_api::tool::{Tool, ToolResult};
 use caelix_runtime::context::CaelixContext;
+use caelix_task::{Runnable, TaskKind};
 
 /// 统一执行 Agent 并消费流（纯核心逻辑，无链路ID污染）
 async fn run_agent_stream(
-    agent_spec: Arc<caelix_api::agent::AgentSpec>,
+    agent: Arc<dyn caelix_api::agent::Agent>,
     messages: Vec<ChatMessage>,
     provider: Arc<dyn caelix_api::provider::LlmProvider>,
     config: &LlmConfig,
 ) -> Result<String, anyhow::Error> {
     use futures::StreamExt;
-    let stream = caelix_agent::run_agent(agent_spec, messages, provider, config).await;
+    let stream = agent.run(messages, provider, config).await;
     let mut result_content = String::new();
     let mut stream = stream;
     while let Some(chunk_result) = stream.next().await {
@@ -49,9 +49,16 @@ impl DelegateTaskTool {
     async fn prepare_agent_exec(
         &self,
         agent_name: &str,
-    ) -> Result<(Arc<caelix_api::agent::AgentSpec>, Arc<dyn caelix_api::provider::LlmProvider>, LlmConfig), String> {
+    ) -> Result<
+        (
+            Arc<dyn caelix_api::agent::Agent>,
+            Arc<dyn caelix_api::provider::LlmProvider>,
+            LlmConfig,
+        ),
+        String,
+    > {
         // 1. 获取 Agent
-        let agent_spec = self
+        let agent = self
             .ctx
             .agent_manager
             .get(agent_name)
@@ -80,22 +87,21 @@ impl DelegateTaskTool {
         }
 
         let config = LlmConfig { model_name };
-        Ok((agent_spec, provider, config))
+        Ok((agent, provider, config))
     }
 
     /// 执行目标 Agent（同步）
-    pub async fn execute_agent(&self, agent_name: &str, task_content: &str) -> Result<String, String> {
-        let (agent_spec, provider, config) = self.prepare_agent_exec(agent_name).await?;
+    pub async fn execute_agent(
+        &self,
+        agent_name: &str,
+        task_content: &str,
+    ) -> Result<String, String> {
+        let (agent, provider, config) = self.prepare_agent_exec(agent_name).await?;
         let messages = vec![ChatMessage::user(task_content)];
 
-        run_agent_stream( 
-            agent_spec,
-            messages,
-            provider,
-            &config
-        )
-        .await
-        .map_err(|e| format!("Agent 执行失败: {}", e))
+        run_agent_stream(agent, messages, provider, &config)
+            .await
+            .map_err(|e| format!("Agent 执行失败: {}", e))
     }
 }
 
@@ -163,25 +169,35 @@ impl Tool for DelegateTaskTool {
         // 参数解析
         let agent_name = match input.get("agent_name").and_then(|v| v.as_str()) {
             Some(s) => s,
-            None => return ToolResult {
-                output: String::new(),
-                error: Some("缺少 agent_name".into()),
-            },
-        }; 
+            None => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("缺少 agent_name".into()),
+                };
+            }
+        };
         let task_content = match input.get("task_content").and_then(|v| v.as_str()) {
             Some(s) => s,
-            None => return ToolResult {
-                output: String::new(),
-                error: Some("缺少 task_content".into()),
-            },
+            None => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("缺少 task_content".into()),
+                };
+            }
         };
         let sync = input.get("sync").and_then(|v| v.as_bool()).unwrap_or(true);
 
         if sync {
             // 同步执行
             match self.execute_agent(agent_name, task_content).await {
-                Ok(res) => ToolResult { output: res, error: None },
-                Err(error) => ToolResult { output: String::new(), error: Some(error) },
+                Ok(res) => ToolResult {
+                    output: res,
+                    error: None,
+                },
+                Err(error) => ToolResult {
+                    output: String::new(),
+                    error: Some(error),
+                },
             }
         } else {
             // 异步提交任务
@@ -198,7 +214,10 @@ impl Tool for DelegateTaskTool {
             let task_id = task_mgr
                 .submit(
                     None,
-                    input.get("task_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    input
+                        .get("task_name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     TaskKind::Async,
                     Box::new(runnable),
                 )
@@ -221,9 +240,15 @@ trait ToolResultExt {
 
 impl ToolResultExt for ToolResult {
     fn ok(output: impl Into<String>) -> Self {
-        Self { output: output.into(), error: None }
+        Self {
+            output: output.into(),
+            error: None,
+        }
     }
     fn fail(error: impl Into<String>) -> Self {
-        Self { output: String::new(), error: Some(error.into()) }
+        Self {
+            output: String::new(),
+            error: Some(error.into()),
+        }
     }
 }

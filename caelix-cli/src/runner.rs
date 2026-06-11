@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::io::Write;
 use clap::Parser;
 use futures::StreamExt;
+use std::io::Write;
+use std::sync::Arc;
 
-use caelix_service::{CaelixApiImpl, ChatRequest, CaelixApi};
-use caelix_api::message::{AgentMessageType, TaskMessageType};
-use super::input_handler::read_multiline_input;
 use super::commands::handle_command;
+use super::input_handler::read_multiline_input;
+use caelix_api::message::{AgentMessageType, TaskMessageType};
+use caelix_service::{CaelixApi, CaelixApiImpl, ChatRequest};
 
 /// 刷新已完成的 span 缓冲区，按顺序输出
 fn flush_completed_spans(
@@ -40,7 +40,7 @@ fn flush_all_buffers(
 ) {
     // 先输出已完成的
     flush_completed_spans(completed_spans, span_buffers, target_span_id);
-    
+
     // 再输出活跃的（可能没有收到 ChunkEnd）
     for span_id in active_spans.drain(..) {
         if let Some(content) = span_buffers.remove(&span_id) {
@@ -86,27 +86,28 @@ struct CliArgs {
 pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数，跳过第一个参数（后端名称）
     let all_args: Vec<String> = std::env::args().collect();
-    
-    let cli_args: Vec<String> = if all_args.len() > 1 && (all_args[1] == "cli" || all_args[1].starts_with('-')) {
-        // 如果第一个参数是"cli"或是选项，从适当的位置开始
-        if all_args.len() > 1 && all_args[1] == "cli" {
-            // 如果是 "caelix cli ..." 格式，跳过 "caelix" 和 "cli"
-            let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
-            args.extend_from_slice(&all_args[2..]);
-            args
+
+    let cli_args: Vec<String> =
+        if all_args.len() > 1 && (all_args[1] == "cli" || all_args[1].starts_with('-')) {
+            // 如果第一个参数是"cli"或是选项，从适当的位置开始
+            if all_args.len() > 1 && all_args[1] == "cli" {
+                // 如果是 "caelix cli ..." 格式，跳过 "caelix" 和 "cli"
+                let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
+                args.extend_from_slice(&all_args[2..]);
+                args
+            } else {
+                // 如果是 "caelix -a ..." 格式，跳过 "caelix" 但保留程序名
+                let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
+                args.extend_from_slice(&all_args[1..]);
+                args
+            }
         } else {
-            // 如果是 "caelix -a ..." 格式，跳过 "caelix" 但保留程序名
+            // 其他情况，只跳过程序名
             let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
             args.extend_from_slice(&all_args[1..]);
             args
-        }
-    } else {
-        // 其他情况，只跳过程序名
-        let mut args: Vec<String> = vec![all_args[0].clone()]; // 保留程序名
-        args.extend_from_slice(&all_args[1..]);
-        args
-    };
-    
+        };
+
     let args = CliArgs::parse_from(cli_args);
 
     println!("🚀 Caelix CLI 模式");
@@ -128,26 +129,33 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         println!("ℹ️  会话 {} 不存在，正在创建...", session_id);
         api.create_session_with_id(session_id.clone()).await;
     }
-    
+
     match api.get_session_messages(&session_id).await {
         Ok(messages) => {
             if !messages.is_empty() {
                 println!("\n📜 历史对话 ({} 条消息):", messages.len());
                 for (i, msg) in messages.iter().enumerate() {
                     // AgentMessage.content 现在是 ChatMessage 的 JSON 字符串
-                    let display_content = if let Ok(chat_msg) = serde_json::from_str::<caelix_api::provider::ChatMessage>(&msg.content) {
+                    let display_content = if let Ok(chat_msg) =
+                        serde_json::from_str::<caelix_api::provider::ChatMessage>(&msg.content)
+                    {
                         chat_msg.content
                     } else {
                         msg.content.clone()
                     };
-                    
-                    let truncated = if display_content.chars().count() > 100 { 
+
+                    let truncated = if display_content.chars().count() > 100 {
                         display_content.chars().take(100).collect::<String>()
-                    } else { 
+                    } else {
                         display_content.clone()
                     };
-                    
-                    println!("  [{}] {}: {}", i + 1, msg.timestamp.format("%H:%M:%S"), truncated);
+
+                    println!(
+                        "  [{}] {}: {}",
+                        i + 1,
+                        msg.timestamp.format("%H:%M:%S"),
+                        truncated
+                    );
                 }
                 println!();
             }
@@ -179,24 +187,24 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     // 显示配置信息
     let default_provider = api.get_default_provider();
     let default_model = api.get_default_model();
-    
+
     let provider_specified = args.provider.is_some();
     let model_specified = args.model.is_some();
-    
+
     let provider = args.provider.unwrap_or_else(|| {
         println!("✅ 使用默认 Provider: {}", default_provider);
         default_provider
     });
-    
+
     if provider_specified {
         println!("✅ 使用指定 Provider: {}", provider);
     }
-    
+
     let model = args.model.unwrap_or_else(|| {
         println!("✅ 使用默认 Model: {}", default_model);
         default_model
     });
-    
+
     if model_specified {
         println!("✅ 使用指定 Model: {}", model);
     }
@@ -221,34 +229,37 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         // 使用新的异步接口
         match api.chat_stream_async(request).await {
             Ok(result) => {
-                println!("📡 任务已提交，request_id: {}, span_id: {}", result.request_id, result.span_id);
-                
+                println!(
+                    "📡 任务已提交，request_id: {}, span_id: {}",
+                    result.request_id, result.span_id
+                );
+
                 // 订阅消息流
                 match api.subscribe_chat_stream(&result.session_id).await {
                     Ok(stream) => {
                         let mut stream = stream;
                         let target_span_id = result.span_id.clone();
-                        
+
                         // ✅ 使用缓冲区管理多个 span 的流式输出
                         use std::collections::HashMap;
                         let mut span_buffers: HashMap<String, String> = HashMap::new(); // span_id -> 累积内容
                         let mut active_spans: Vec<String> = Vec::new(); // 保持顺序的活跃 span 列表
                         let mut completed_spans: Vec<String> = Vec::new(); // 已完成的 span 列表
                         let mut target_span_completed = false; // 标记目标 span 是否已完成
-                        
+
                         while let Some(msg) = stream.next().await {
                             match msg.r#type {
                                 AgentMessageType::Chunk => {
                                     // 只处理当前会话的消息
                                     if msg.session_id == result.session_id {
                                         let span_id = msg.span_id.clone();
-                                        
+
                                         // 如果是新的 span，加入活跃列表
                                         if !span_buffers.contains_key(&span_id) {
                                             span_buffers.insert(span_id.clone(), String::new());
                                             active_spans.push(span_id.clone());
                                         }
-                                        
+
                                         // 累积 chunk 内容（不包含 [思考] 等标签）
                                         if let Some(buffer) = span_buffers.get_mut(&span_id) {
                                             buffer.push_str(&msg.content);
@@ -259,17 +270,19 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                     // 标记该 span 完成
                                     if msg.session_id == result.session_id {
                                         let span_id = msg.span_id.clone();
-                                        
+
                                         // 检查是否是目标 span
                                         if span_id == target_span_id {
                                             target_span_completed = true;
                                         }
-                                        
+
                                         // 从活跃列表移到完成列表
-                                        if let Some(pos) = active_spans.iter().position(|s| s == &span_id) {
+                                        if let Some(pos) =
+                                            active_spans.iter().position(|s| s == &span_id)
+                                        {
                                             active_spans.remove(pos);
                                             completed_spans.push(span_id.clone());
-                                            
+
                                             // ✅ 按顺序输出已完成的 span
                                             flush_completed_spans(
                                                 &mut completed_spans,
@@ -277,14 +290,16 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                                 &target_span_id,
                                             );
                                         }
-                                        
+
                                         // ✅ 如果目标 span 已完成且没有活跃的异步任务 span，退出循环
                                         if target_span_completed && active_spans.is_empty() {
                                             println!("\n✅ 快速对话完成，退出中...");
-                                            
+
                                             // 等待消息持久化完成
-                                            api.session_manager().flush_session(&result.session_id).await;
-                                            
+                                            api.session_manager()
+                                                .flush_session(&result.session_id)
+                                                .await;
+
                                             break;
                                         }
                                     }
@@ -294,25 +309,38 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                     if msg.span_id != target_span_id {
                                         let timestamp = msg.timestamp.format("%H:%M:%S");
                                         // 尝试解析为 ChatMessage 以获取更友好的显示
-                                        if let Ok(chat_msg) = serde_json::from_str::<caelix_api::provider::ChatMessage>(&msg.content) {
-                                            println!("\n[{}] 💬 [{}] {}", 
+                                        if let Ok(chat_msg) = serde_json::from_str::<
+                                            caelix_api::provider::ChatMessage,
+                                        >(
+                                            &msg.content
+                                        ) {
+                                            println!(
+                                                "\n[{}] 💬 [{}] {}",
                                                 timestamp,
                                                 msg.agent_name.as_deref().unwrap_or("AI"),
-                                                chat_msg.content);
+                                                chat_msg.content
+                                            );
                                         } else {
-                                            println!("\n[{}] 💬 [{}] {}", 
+                                            println!(
+                                                "\n[{}] 💬 [{}] {}",
                                                 timestamp,
                                                 msg.agent_name.as_deref().unwrap_or("AI"),
-                                                msg.content);
+                                                msg.content
+                                            );
                                         }
                                         let _ = std::io::stdout().flush();
                                     }
                                 }
                             }
                         }
-                        
+
                         // 最后刷新所有剩余的缓冲（如果循环提前退出，这里不会执行）
-                        flush_all_buffers(&mut active_spans, &mut completed_spans, &mut span_buffers, &target_span_id);
+                        flush_all_buffers(
+                            &mut active_spans,
+                            &mut completed_spans,
+                            &mut span_buffers,
+                            &target_span_id,
+                        );
                     }
                     Err(e) => {
                         eprintln!("❌ 订阅失败: {:?}", e);
@@ -330,7 +358,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     // 启动后台任务监听任务和通知消息
     let session_id_clone = session_id.clone();
     let message_bus = api.message_bus().clone();
-    
+
     // 监听任务消息 - 不需要 RuntimeContext，仅用于打印输出
     tokio::spawn(async move {
         let mut task_receiver = message_bus.subscribe_task();
@@ -343,12 +371,15 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                     TaskMessageType::Failed => "❌",
                     TaskMessageType::Progress => "⏳",
                 };
-                println!("\n[{}] {} [任务] {}", timestamp, status_icon, task_msg.content);
+                println!(
+                    "\n[{}] {} [任务] {}",
+                    timestamp, status_icon, task_msg.content
+                );
                 let _ = std::io::stdout().flush();
             }
         }
     });
-    
+
     // 监听通知消息 - 不需要 RuntimeContext，仅用于打印输出
     let session_id_clone2 = session_id.clone();
     let message_bus2 = api.message_bus().clone();
@@ -404,33 +435,36 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         // 使用新的异步接口
         match api.chat_stream_async(request).await {
             Ok(result) => {
-                println!("📡 任务已提交，request_id: {}, span_id: {}", result.request_id, result.span_id);
-                
+                println!(
+                    "📡 任务已提交，request_id: {}, span_id: {}",
+                    result.request_id, result.span_id
+                );
+
                 // 订阅消息流
                 match api.subscribe_chat_stream(&result.session_id).await {
                     Ok(stream) => {
                         let mut stream = stream;
                         let target_span_id = result.span_id.clone();
-                        
+
                         // ✅ 使用缓冲区管理多个 span 的流式输出
                         use std::collections::HashMap;
                         let mut span_buffers: HashMap<String, String> = HashMap::new(); // span_id -> 累积内容
                         let mut active_spans: Vec<String> = Vec::new(); // 保持顺序的活跃 span 列表
                         let mut completed_spans: Vec<String> = Vec::new(); // 已完成的 span 列表
-                        
+
                         while let Some(msg) = stream.next().await {
                             match msg.r#type {
                                 AgentMessageType::Chunk => {
                                     // 只处理当前会话的消息
                                     if msg.session_id == result.session_id {
                                         let span_id = msg.span_id.clone();
-                                        
+
                                         // 如果是新的 span，加入活跃列表
                                         if !span_buffers.contains_key(&span_id) {
                                             span_buffers.insert(span_id.clone(), String::new());
                                             active_spans.push(span_id.clone());
                                         }
-                                        
+
                                         // 累积 chunk 内容（不包含 [思考] 等标签）
                                         if let Some(buffer) = span_buffers.get_mut(&span_id) {
                                             buffer.push_str(&msg.content);
@@ -441,12 +475,14 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                     // 标记该 span 完成
                                     if msg.session_id == result.session_id {
                                         let span_id = msg.span_id.clone();
-                                        
+
                                         // 从活跃列表移到完成列表
-                                        if let Some(pos) = active_spans.iter().position(|s| s == &span_id) {
+                                        if let Some(pos) =
+                                            active_spans.iter().position(|s| s == &span_id)
+                                        {
                                             active_spans.remove(pos);
                                             completed_spans.push(span_id.clone());
-                                            
+
                                             // ✅ 按顺序输出已完成的 span
                                             flush_completed_spans(
                                                 &mut completed_spans,
@@ -461,25 +497,38 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                     if msg.content != input_clone && msg.span_id != target_span_id {
                                         let timestamp = msg.timestamp.format("%H:%M:%S");
                                         // 尝试解析为 ChatMessage 以获取更友好的显示
-                                        if let Ok(chat_msg) = serde_json::from_str::<caelix_api::provider::ChatMessage>(&msg.content) {
-                                            println!("\n[{}] 💬 [{}] {}", 
+                                        if let Ok(chat_msg) = serde_json::from_str::<
+                                            caelix_api::provider::ChatMessage,
+                                        >(
+                                            &msg.content
+                                        ) {
+                                            println!(
+                                                "\n[{}] 💬 [{}] {}",
                                                 timestamp,
                                                 msg.agent_name.as_deref().unwrap_or("AI"),
-                                                chat_msg.content);
+                                                chat_msg.content
+                                            );
                                         } else {
-                                            println!("\n[{}] 💬 [{}] {}", 
+                                            println!(
+                                                "\n[{}] 💬 [{}] {}",
                                                 timestamp,
                                                 msg.agent_name.as_deref().unwrap_or("AI"),
-                                                msg.content);
+                                                msg.content
+                                            );
                                         }
                                         let _ = std::io::stdout().flush();
                                     }
                                 }
                             }
                         }
-                        
+
                         // 最后刷新所有剩余的缓冲
-                        flush_all_buffers(&mut active_spans, &mut completed_spans, &mut span_buffers, &target_span_id);
+                        flush_all_buffers(
+                            &mut active_spans,
+                            &mut completed_spans,
+                            &mut span_buffers,
+                            &target_span_id,
+                        );
                     }
                     Err(e) => {
                         eprintln!("❌ 订阅失败: {:?}", e);

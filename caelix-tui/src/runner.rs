@@ -1,21 +1,18 @@
 use std::sync::Arc;
 
-use caelix_service::{CaelixApi, CaelixApiImpl};
-use super::state::{App, AppView, AppMessage, NotificationType};
 use super::events::{EventHandler, TuiEvent};
+use super::state::{App, AppMessage, AppView, NotificationType};
 use super::views;
+use caelix_service::{CaelixApi, CaelixApiImpl};
 
 /// 运行 TUI 应用
 pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         event::{DisableMouseCapture, EnableMouseCapture},
         execute,
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     };
-    use ratatui::{
-        backend::CrosstermBackend,
-        Terminal,
-    };
+    use ratatui::{Terminal, backend::CrosstermBackend};
 
     // 初始化终端
     enable_raw_mode()?;
@@ -26,7 +23,7 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 
     // 创建应用状态
     let mut app = App::new();
-    
+
     // 创建会话（需要异步调用）
     let session_id = api.create_session().await;
     app.session_id = Some(session_id.clone());
@@ -38,16 +35,16 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         app.available_agents = agents;
         app.current_agent = app.available_agents[0].clone();
     }
-    
+
     // 初始化消息总线订阅（订阅通知消息）
     let message_bus_rx = api.message_bus().subscribe_notification();
     app.message_bus_rx = Some(message_bus_rx);
-    
+
     // 加载初始任务列表
     if let Ok(tasks) = api.list_tasks(Some(&session_id)).await {
         app.tasks = tasks;
     }
-    
+
     // 加载通知历史
     if let Ok(notifs) = api.get_session_notifications(&session_id).await {
         app.notifications_history = notifs;
@@ -70,23 +67,23 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                 }
             }
         }
-        
+
         // 处理收集到的消息
         for msg in bus_messages {
             // NotificationMessage 不包含流式数据，只显示为通知
             // 将通知添加到气泡通知中
             use caelix_api::message::NotificationType as RuntimeNotificationType;
-            
+
             let notif_type = match msg.r#type {
                 RuntimeNotificationType::Info => NotificationType::Info,
                 RuntimeNotificationType::Success => NotificationType::Success,
                 RuntimeNotificationType::Error => NotificationType::Error,
                 RuntimeNotificationType::Warning => NotificationType::Warning,
             };
-            
+
             // 创建气泡通知
-            use std::time::Instant;
             use super::state::BubbleNotification;
+            use std::time::Instant;
             let bubble = BubbleNotification {
                 message: msg.content.clone(),
                 notif_type,
@@ -95,14 +92,14 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                 is_persistent: false,
             };
             app.bubble_notifications.push(bubble);
-            
+
             // 同时添加到通知历史
             app.notifications_history.push(msg);
         }
-        
+
         // 清理过期的气泡通知
         app.cleanup_expired_bubbles();
-        
+
         // 处理内部消息队列
         loop {
             let msg = if let Some(ref mut rx) = app.message_rx {
@@ -110,7 +107,7 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             } else {
                 None
             };
-            
+
             match msg {
                 Some(app_msg) => {
                     app.handle_app_message(app_msg);
@@ -130,25 +127,27 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             TuiEvent::Send => {
                 if !app.input_buffer.is_empty() && !app.is_loading {
                     let message = app.input_buffer.clone();
-                    
+
                     // 清空输入
                     app.input_buffer.clear();
-                    
+
                     // 标记已开始对话
                     app.has_started_chat = true;
-                    
+
                     // 添加用户消息
                     app.add_user_message(&message);
                     app.status_message = "正在思考...".to_string();
-                    
+
                     // 发送消息并处理流式响应
                     let tx = app.message_tx.clone().unwrap();
-                    
+
                     // 在后台任务中处理异步调用（RuntimeContext 在 API 层内部管理）
                     tokio::spawn(async move {
                         // 设置加载状态
                         let _ = tx.send(AppMessage::SetLoading(true)).await;
-                        let _ = tx.send(AppMessage::UpdateStatus("AI 正在回复...".to_string())).await;
+                        let _ = tx
+                            .send(AppMessage::UpdateStatus("AI 正在回复...".to_string()))
+                            .await;
                     });
                 }
             }
@@ -180,7 +179,7 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 /// 处理按键事件
 fn handle_key_event(app: &mut App, api: Arc<CaelixApiImpl>, key_event: crossterm::event::KeyEvent) {
     use crossterm::event::KeyCode;
-    
+
     match key_event.code {
         KeyCode::Char('d') | KeyCode::Delete => {
             // 在通知历史视图中删除选中项（简化：删除最后一个）
@@ -257,7 +256,10 @@ fn handle_key_event(app: &mut App, api: Arc<CaelixApiImpl>, key_event: crossterm
         }
         KeyCode::Up => {
             // 上箭头：在列表中向上移动
-            if app.active_view == AppView::Chat && app.input_buffer.starts_with('/') && !app.filtered_commands.is_empty() {
+            if app.active_view == AppView::Chat
+                && app.input_buffer.starts_with('/')
+                && !app.filtered_commands.is_empty()
+            {
                 // 在命令模式下，上下选择过滤后的命令
                 if app.selected_command_idx > 0 {
                     app.selected_command_idx -= 1;
@@ -299,7 +301,10 @@ fn handle_key_event(app: &mut App, api: Arc<CaelixApiImpl>, key_event: crossterm
         }
         KeyCode::Down => {
             // 下箭头：在列表中向下移动
-            if app.active_view == AppView::Chat && app.input_buffer.starts_with('/') && !app.filtered_commands.is_empty() {
+            if app.active_view == AppView::Chat
+                && app.input_buffer.starts_with('/')
+                && !app.filtered_commands.is_empty()
+            {
                 // 在命令模式下，上下选择过滤后的命令
                 if app.selected_command_idx + 1 < app.filtered_commands.len() {
                     app.selected_command_idx += 1;

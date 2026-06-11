@@ -1,10 +1,10 @@
 //! Storage 模块
 #![allow(dead_code)] // 部分API为将来扩展预留
 
-use caelix_api::message::AgentMessage;
 use crate::types::SessionState;
 use anyhow::Result;
 use async_trait::async_trait;
+use caelix_api::message::AgentMessage;
 use serde_json;
 use std::path::PathBuf;
 use tokio::fs;
@@ -15,13 +15,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub trait StorageBackend: Send + Sync + 'static {
     /// 追加单条 Agent 消息
     async fn append_agent_message(&self, msg: &AgentMessage) -> Result<()>;
-    
+
     /// 读取 Session 的全部历史 Agent 消息
     async fn read_agent_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>>;
-    
+
     /// 保存 Session 状态快照
     async fn save_state(&self, session_id: &str, state: &SessionState) -> Result<()>;
-    
+
     /// 加载 Session 状态快照
     async fn load_state(&self, session_id: &str) -> Result<Option<SessionState>>;
 }
@@ -43,7 +43,8 @@ impl FileStorage {
     }
 
     fn get_agent_messages_path(&self, session_id: &str) -> PathBuf {
-        self.get_session_dir(session_id).join("agent_messages.jsonl")
+        self.get_session_dir(session_id)
+            .join("agent_messages.jsonl")
     }
 
     fn get_state_path(&self, session_id: &str) -> PathBuf {
@@ -53,8 +54,6 @@ impl FileStorage {
     fn get_wal_path(&self, session_id: &str) -> PathBuf {
         self.get_session_dir(session_id).join("pending.log")
     }
-
-
 
     async fn ensure_session_dir(&self, session_id: &str) -> Result<()> {
         let dir = self.get_session_dir(session_id);
@@ -69,7 +68,7 @@ impl FileStorage {
 impl StorageBackend for FileStorage {
     async fn append_agent_message(&self, msg: &AgentMessage) -> Result<()> {
         self.ensure_session_dir(&msg.session_id).await?;
-        
+
         // 1. 写入 WAL (Write-Ahead Log)
         let wal_path = self.get_wal_path(&msg.session_id);
         let mut wal_file = fs::OpenOptions::new()
@@ -139,7 +138,7 @@ impl StorageBackend for FileStorage {
         self.ensure_session_dir(session_id).await?;
         let path = self.get_state_path(session_id);
         let tmp_path = path.with_extension("json.tmp");
-        
+
         let json = serde_json::to_string_pretty(state)?;
         fs::write(&tmp_path, json).await?;
         fs::rename(tmp_path, path).await?;
@@ -155,6 +154,4 @@ impl StorageBackend for FileStorage {
         let state: SessionState = serde_json::from_str(&json)?;
         Ok(Some(state))
     }
-
-
 }

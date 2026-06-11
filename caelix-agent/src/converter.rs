@@ -1,6 +1,6 @@
+use caelix_api::agent::AgentOutputChunk;
 use caelix_api::error::AgentError;
 use caelix_api::provider::ChatResponseChunk;
-use caelix_api::agent::AgentOutputChunk;
 
 /// 转换 LLM 响应分片为 Agent 输出分片
 pub fn convert_chunk(chunk: ChatResponseChunk) -> Result<AgentOutputChunk, AgentError> {
@@ -13,5 +13,7 @@ pub fn convert_chunk(chunk: ChatResponseChunk) -> Result<AgentOutputChunk, Agent
     if let Some(r) = chunk.finish_reason {
         return Ok(AgentOutputChunk::Finish { reason: r });
     }
-    Ok(AgentOutputChunk::Content { content: String::new() })
+    Ok(AgentOutputChunk::Content {
+        content: String::new(),
+    })
 }

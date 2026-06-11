@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use caelix_service::{CaelixApi, CaelixApiImpl};
 use super::state::{App, AppView, Notification, NotificationType, TuiMessage, TuiMessageType};
+use caelix_service::{CaelixApi, CaelixApiImpl};
 
 /// 命令处理器
 pub struct CommandHandler;
@@ -16,19 +16,22 @@ impl CommandHandler {
         } else {
             &app.input_buffer
         };
-        
+
         let prefix_lower = prefix.to_lowercase();
-        app.filtered_commands = app.available_commands
+        app.filtered_commands = app
+            .available_commands
             .iter()
             .filter(|cmd| cmd.to_lowercase().starts_with(&prefix_lower))
             .map(|cmd| cmd.to_string())
             .collect();
         app.selected_command_idx = 0;
     }
-    
+
     /// 选择当前高亮的命令并填充到输入框
     pub fn select_filtered_command(app: &mut App) -> bool {
-        if !app.filtered_commands.is_empty() && app.selected_command_idx < app.filtered_commands.len() {
+        if !app.filtered_commands.is_empty()
+            && app.selected_command_idx < app.filtered_commands.len()
+        {
             app.input_buffer = app.filtered_commands[app.selected_command_idx].clone();
             // 更新过滤列表（此时应该只有一个匹配项）
             Self::update_filtered_commands(app);
@@ -37,16 +40,12 @@ impl CommandHandler {
             false
         }
     }
-    
+
     /// 处理命令
     pub fn handle_command(app: &mut App, api: Arc<CaelixApiImpl>, cmd: &str) {
         // 提取命令（去除开头的 '/'）
-        let command = if cmd.starts_with('/') {
-            &cmd[1..]
-        } else {
-            cmd
-        };
-        
+        let command = if cmd.starts_with('/') { &cmd[1..] } else { cmd };
+
         match command {
             "quit" => {
                 app.running = false;
@@ -67,14 +66,16 @@ impl CommandHandler {
                 app.push_view(AppView::SessionList);
                 app.is_loading_sessions = true;
                 app.selected_session_idx = 0;
-                            
+
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
                 // 注意：API 层内部已经处理了 RuntimeContext，这里不需要额外传递
                 tokio::spawn(async move {
                     if let Ok(sessions) = api_clone.list_sessions().await {
                         if let Some(tx) = tx {
-                            let _ = tx.send(super::state::AppMessage::UpdateSessions(sessions)).await;
+                            let _ = tx
+                                .send(super::state::AppMessage::UpdateSessions(sessions))
+                                .await;
                         }
                     }
                 });
@@ -83,27 +84,30 @@ impl CommandHandler {
                 // 创建新session（使用 tokio::spawn 处理异步调用）
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
-                
+
                 // 先生成一个临时的 session_id 用于显示
                 let temp_session_id = caelix_runtime::id_generator::generate_session_id();
                 app.session_id = Some(temp_session_id.clone());
                 app.status_message = format!("正在创建新会话: {}", &temp_session_id[..8]);
-                
+
                 // 清空当前对话
                 app.messages.clear();
                 app.has_started_chat = false;
-                
+
                 // 返回聊天视图
                 app.view_stack.clear();
                 app.active_view = AppView::Chat;
-                
+
                 // 在后台异步创建会话配置
                 tokio::spawn(async move {
                     let new_session_id = api_clone.create_session().await;
                     if let Some(tx) = tx {
-                        let _ = tx.send(super::state::AppMessage::UpdateStatus(
-                            format!("新会话已创建: {}", &new_session_id[..8])
-                        )).await;
+                        let _ = tx
+                            .send(super::state::AppMessage::UpdateStatus(format!(
+                                "新会话已创建: {}",
+                                &new_session_id[..8]
+                            )))
+                            .await;
                     }
                 });
             }
@@ -112,13 +116,15 @@ impl CommandHandler {
                 app.push_view(AppView::ProviderList);
                 app.is_loading_providers = true;
                 app.selected_provider_idx = 0;
-                
+
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
                 tokio::spawn(async move {
                     if let Ok(providers) = api_clone.get_providers().await {
                         if let Some(tx) = tx {
-                            let _ = tx.send(super::state::AppMessage::UpdateProviders(providers)).await;
+                            let _ = tx
+                                .send(super::state::AppMessage::UpdateProviders(providers))
+                                .await;
                         }
                     }
                 });
@@ -129,13 +135,15 @@ impl CommandHandler {
                 app.is_loading_providers = true;
                 app.selected_provider_idx = 0;
                 app.selected_model_idx = 0;
-                
+
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
                 tokio::spawn(async move {
                     if let Ok(providers) = api_clone.get_providers().await {
                         if let Some(tx) = tx {
-                            let _ = tx.send(super::state::AppMessage::UpdateProviders(providers)).await;
+                            let _ = tx
+                                .send(super::state::AppMessage::UpdateProviders(providers))
+                                .await;
                         }
                     }
                 });
@@ -150,18 +158,18 @@ impl CommandHandler {
             }
         }
     }
-    
+
     /// 选择session并切换
     pub fn select_session(app: &mut App, api: Arc<CaelixApiImpl>) {
         if app.selected_session_idx < app.sessions.len() {
             let session = &app.sessions[app.selected_session_idx];
             app.session_id = Some(session.session_id.clone());
             app.status_message = format!("已切换到会话: {}", &session.session_id[..8]);
-            
+
             // 清空当前对话并加载新会话的消息
             app.messages.clear();
             app.has_started_chat = false;
-            
+
             // 异步加载会话消息
             let api_clone = api.clone();
             let session_id = session.session_id.clone();
@@ -172,14 +180,16 @@ impl CommandHandler {
                         for msg in messages {
                             // AgentMessage.content 现在是 ChatMessage 的 JSON 字符串
                             // 尝试解析 JSON 提取实际内容
-                            let display_content = if let Ok(chat_msg) = serde_json::from_str::<caelix_api::ChatMessage>(&msg.content) {
+                            let display_content = if let Ok(chat_msg) =
+                                serde_json::from_str::<caelix_api::ChatMessage>(&msg.content)
+                            {
                                 // 成功解析，使用 ChatMessage 的 content 字段
                                 chat_msg.content
                             } else {
                                 // 降级处理：直接使用原始 content（可能是旧数据）
                                 msg.content
                             };
-                            
+
                             let tui_msg = TuiMessage {
                                 msg_type: TuiMessageType::Assistant,
                                 content: display_content,
@@ -190,77 +200,83 @@ impl CommandHandler {
                     }
                 }
             });
-            
+
             // 返回聊天视图
             app.view_stack.clear();
             app.active_view = AppView::Chat;
         }
     }
-    
+
     /// 选择provider并切换
     pub fn select_provider(app: &mut App, api: Arc<CaelixApiImpl>) {
         if app.selected_provider_idx < app.providers.len() {
             let provider = &app.providers[app.selected_provider_idx];
             app.current_provider = provider.name.clone();
-            
+
             // 如果有session，设置session的provider
             if let Some(session_id) = &app.session_id {
                 let api_clone = api.clone();
                 let session_clone = session_id.clone();
                 let provider_clone = provider.name.clone();
                 tokio::spawn(async move {
-                    let _ = api_clone.set_session_provider(&session_clone, &provider_clone).await;
+                    let _ = api_clone
+                        .set_session_provider(&session_clone, &provider_clone)
+                        .await;
                 });
             }
-            
+
             app.status_message = format!("已切换提供者: {}", provider.name);
-            
+
             // 返回聊天视图
             app.view_stack.clear();
             app.active_view = AppView::Chat;
         }
     }
-    
+
     /// 在ModelList中选择provider（一级）
     pub fn select_provider_for_model(app: &mut App, api: Arc<CaelixApiImpl>) {
         if app.selected_provider_idx < app.providers.len() {
             let provider = &app.providers[app.selected_provider_idx];
-            
+
             // 加载该provider的models
             app.is_loading_models = true;
             app.selected_model_idx = 0;
-            
+
             let api_clone = api.clone();
             let provider_name = provider.name.clone();
             let tx = app.message_tx.clone();
             tokio::spawn(async move {
                 if let Ok(models) = api_clone.get_provider_models(&provider_name).await {
                     if let Some(tx) = tx {
-                        let _ = tx.send(super::state::AppMessage::UpdateProviderModels(models)).await;
+                        let _ = tx
+                            .send(super::state::AppMessage::UpdateProviderModels(models))
+                            .await;
                     }
                 }
             });
         }
     }
-    
+
     /// 选择model并切换
     pub fn select_model(app: &mut App, api: Arc<CaelixApiImpl>) {
         if app.selected_model_idx < app.provider_models.len() {
             let model = &app.provider_models[app.selected_model_idx];
             app.current_model = model.clone();
-            
+
             // 如果有session，设置session的model
             if let Some(session_id) = &app.session_id {
                 let api_clone = api.clone();
                 let session_clone = session_id.clone();
                 let model_clone = model.clone();
                 tokio::spawn(async move {
-                    let _ = api_clone.set_session_model(&session_clone, &model_clone).await;
+                    let _ = api_clone
+                        .set_session_model(&session_clone, &model_clone)
+                        .await;
                 });
             }
-            
+
             app.status_message = format!("已切换模型: {}", model);
-            
+
             // 返回聊天视图
             app.view_stack.clear();
             app.active_view = AppView::Chat;

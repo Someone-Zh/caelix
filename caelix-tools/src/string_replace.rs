@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::path::Path;
 use tokio::fs;
 
@@ -61,19 +61,26 @@ impl Tool for StringReplaceTool {
         // 解析文件路径
         let file_path = match input["file_path"].as_str() {
             Some(v) => v,
-            None => return ToolResult {
-                output: String::new(),
-                error: Some("Missing required parameter: file_path".to_string()),
-            },
+            None => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("Missing required parameter: file_path".to_string()),
+                };
+            }
         };
 
         // 解析替换操作列表
         let replacements = match input["replacements"].as_array() {
             Some(arr) if !arr.is_empty() => arr,
-            _ => return ToolResult {
-                output: String::new(),
-                error: Some("Missing or empty parameter: replacements (must be a non-empty array)".to_string()),
-            },
+            _ => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some(
+                        "Missing or empty parameter: replacements (must be a non-empty array)"
+                            .to_string(),
+                    ),
+                };
+            }
         };
 
         let path = Path::new(file_path);
@@ -82,24 +89,33 @@ impl Tool for StringReplaceTool {
         if !path.exists() || !path.is_file() {
             return ToolResult {
                 output: String::new(),
-                error: Some(format!("File does not exist or is not a file: {}", file_path)),
+                error: Some(format!(
+                    "File does not exist or is not a file: {}",
+                    file_path
+                )),
             };
         }
 
         // 读取文件内容
         let content = match fs::read_to_string(path).await {
             Ok(c) => c,
-            Err(e) => return ToolResult {
-                output: String::new(),
-                error: Some(format!("Failed to read file: {}", e)),
-            },
+            Err(e) => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some(format!("Failed to read file: {}", e)),
+                };
+            }
         };
 
         // 检查文件大小限制
         if content.len() > MAX_REPLACE_SIZE {
             return ToolResult {
                 output: String::new(),
-                error: Some(format!("File too large: {} bytes (max: {} bytes)", content.len(), MAX_REPLACE_SIZE)),
+                error: Some(format!(
+                    "File too large: {} bytes (max: {} bytes)",
+                    content.len(),
+                    MAX_REPLACE_SIZE
+                )),
             };
         }
 
@@ -112,11 +128,19 @@ impl Tool for StringReplaceTool {
                 Some(t) => t,
                 None => {
                     return ToolResult {
-                        output: format!("Successfully performed {} replacements before error\nDetails:\n{}", 
-                            idx, 
-                            replacement_stats.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                        output: format!(
+                            "Successfully performed {} replacements before error\nDetails:\n{}",
+                            idx,
+                            replacement_stats
+                                .iter()
+                                .map(|s| format!("  - {}", s))
+                                .collect::<Vec<_>>()
+                                .join("\n")
                         ),
-                        error: Some(format!("Replacement #{}: Missing old_text parameter", idx + 1)),
+                        error: Some(format!(
+                            "Replacement #{}: Missing old_text parameter",
+                            idx + 1
+                        )),
                     };
                 }
             };
@@ -137,11 +161,21 @@ impl Tool for StringReplaceTool {
                         }
                         Err(e) => {
                             return ToolResult {
-                                output: format!("Successfully performed {} replacements before error\nDetails:\n{}", 
-                                    idx, 
-                                    replacement_stats.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                                output: format!(
+                                    "Successfully performed {} replacements before error\nDetails:\n{}",
+                                    idx,
+                                    replacement_stats
+                                        .iter()
+                                        .map(|s| format!("  - {}", s))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
                                 ),
-                                error: Some(format!("Replacement #{}: Invalid regex pattern '{}': {}", idx + 1, old_text, e)),
+                                error: Some(format!(
+                                    "Replacement #{}: Invalid regex pattern '{}': {}",
+                                    idx + 1,
+                                    old_text,
+                                    e
+                                )),
                             };
                         }
                     }
@@ -164,8 +198,16 @@ impl Tool for StringReplaceTool {
             replacement_stats.push(format!(
                 "Replacement #{}: '{}' -> '{}' ({} occurrences, regex: {})",
                 idx + 1,
-                if old_text.len() > 50 { &old_text[..50] } else { old_text },
-                if new_text.len() > 50 { &new_text[..50] } else { new_text },
+                if old_text.len() > 50 {
+                    &old_text[..50]
+                } else {
+                    old_text
+                },
+                if new_text.len() > 50 {
+                    &new_text[..50]
+                } else {
+                    new_text
+                },
                 count,
                 use_regex
             ));
@@ -174,7 +216,8 @@ impl Tool for StringReplaceTool {
         // 写回文件
         if let Err(e) = fs::write(path, current_content).await {
             return ToolResult {
-                output: format!("Successfully performed {} replacements but failed to write file\nDetails:\n{}", 
+                output: format!(
+                    "Successfully performed {} replacements but failed to write file\nDetails:\n{}",
                     replacement_stats.len(),
                     replacement_stats.join("\n")
                 ),

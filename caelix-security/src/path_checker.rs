@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use crate::config::PathSecurityConfig;
 use crate::checker::SecurityError;
+use crate::config::PathSecurityConfig;
+use std::path::{Path, PathBuf};
 
 /// 路径安全检测器
 pub struct PathChecker {
@@ -14,28 +14,28 @@ impl PathChecker {
     }
 
     /// 检查路径是否可访问
-    /// 
+    ///
     /// 规则:
     /// 1. 如果路径在 exclude 列表中或其子目录,返回 false
     /// 2. 如果路径在 include 列表中或其子目录,返回 true
     /// 3. 否则返回 false
     pub fn is_safe(&self, path: &str) -> bool {
         let target_path = Path::new(path);
-        
+
         // 首先检查是否在排除列表中
         for excluded in &self.config.exclude {
             if self.is_subpath(target_path, Path::new(excluded)) {
                 return false;
             }
         }
-        
+
         // 然后检查是否在允许列表中
         for included in &self.config.include {
             if self.is_subpath(target_path, Path::new(included)) {
                 return true;
             }
         }
-        
+
         false
     }
 
@@ -76,21 +76,21 @@ impl PathChecker {
 /// 防止路径穿越攻击
 pub fn sanitize_path(path: &str) -> Result<PathBuf, SecurityError> {
     let path_obj = Path::new(path);
-    
+
     // 检查是否包含 ".." 组件
     for component in path_obj.components() {
         if component == std::path::Component::ParentDir {
             return Err(SecurityError::PathTraversalDetected);
         }
     }
-    
+
     Ok(path_obj.to_path_buf())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_allowed_path() {
         let config = PathSecurityConfig {
@@ -98,11 +98,11 @@ mod tests {
             exclude: vec![],
         };
         let checker = PathChecker::new(config);
-        
+
         assert!(checker.is_safe("/home/user/project"));
         assert!(checker.is_safe("/home/user"));
     }
-    
+
     #[test]
     fn test_excluded_path() {
         let config = PathSecurityConfig {
@@ -110,11 +110,11 @@ mod tests {
             exclude: vec!["/home/user/.git".to_string()],
         };
         let checker = PathChecker::new(config);
-        
+
         assert!(!checker.is_safe("/home/user/.git"));
         assert!(!checker.is_safe("/home/user/.git/objects"));
     }
-    
+
     #[test]
     fn test_not_allowed_path() {
         let config = PathSecurityConfig {
@@ -122,11 +122,11 @@ mod tests {
             exclude: vec![],
         };
         let checker = PathChecker::new(config);
-        
+
         assert!(!checker.is_safe("/etc/passwd"));
         assert!(!checker.is_safe("/tmp/test"));
     }
-    
+
     #[test]
     fn test_path_traversal() {
         assert!(sanitize_path("../etc/passwd").is_err());

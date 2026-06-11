@@ -1,12 +1,12 @@
 // src/runtime/task/manager.rs
-use caelix_api::error::AgentError;
-use caelix_message::bus::MessageBus;
-use caelix_message::task_message::{TaskMessage, TaskMessageType};
-use caelix_api::context::RuntimeContext;
 use crate::persistence::TaskPersistence;
 use crate::scheduler::TaskScheduler;
 use crate::types::*;
 use anyhow::Result;
+use caelix_api::context::RuntimeContext;
+use caelix_api::error::AgentError;
+use caelix_message::bus::MessageBus;
+use caelix_message::task_message::{TaskMessage, TaskMessageType};
 use chrono::Utc; // 修复：导入 Utc
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 type TaskHandle = (
     TaskMeta,
     Option<oneshot::Sender<Result<String, AgentError>>>,
-    Arc<RuntimeContext>,  // 新增：保存任务注册时的 RuntimeContext
+    Arc<RuntimeContext>, // 新增：保存任务注册时的 RuntimeContext
     Option<JoinHandle<()>>,
 );
 
@@ -34,10 +34,10 @@ pub struct TaskManager {
     #[allow(dead_code)] // 为将来扩展预留
     factory: Arc<RunnableFactory>,
     scheduler: Arc<TaskScheduler>,
-    
+
     // 修复：显式指定 DashMap 的泛型类型
     registry: Arc<DashMap<TaskId, TaskHandle>>,
-    
+
     // 调度器运行句柄
     _scheduler_handle: JoinHandle<()>,
 }
@@ -71,24 +71,34 @@ impl TaskManager {
             loop {
                 if let Some(scheduled) = scheduler_clone.next_ready().await {
                     let task_id = scheduled.task_id;
-                    
+
                     // 检查任务是否还在注册表中
                     if let Some(mut handle) = registry_clone.get_mut(&task_id) {
                         let (meta, _opt_tx, _, _) = handle.value_mut();
                         // 一次性更新所有字段
                         meta.status = TaskStatus::Running;
                         meta.updated_at = Utc::now();
-                        
+
                         // 尝试重建 Runnable
-                        if let Some(runnable) = factory_clone.create(&meta.task_type_name, meta.task_payload.clone()) {
+                        if let Some(runnable) =
+                            factory_clone.create(&meta.task_type_name, meta.task_payload.clone())
+                        {
                             let bus = bus_clone.clone();
                             let meta = meta.clone();
                             let registry = registry_clone.clone();
                             let scheduler = scheduler_clone.clone();
                             let persistence = persistence_clone.clone(); // 传给执行函数
-                                                       
+
                             tokio::spawn(async move {
-                                Self::execute_task_inner(runnable, meta, bus, registry, scheduler, persistence).await;
+                                Self::execute_task_inner(
+                                    runnable,
+                                    meta,
+                                    bus,
+                                    registry,
+                                    scheduler,
+                                    persistence,
+                                )
+                                .await;
                             });
                         }
                     }
@@ -112,14 +122,15 @@ impl TaskManager {
         for mut meta in metas {
             // 重置状态
             meta.status = TaskStatus::Scheduled;
-            
+
             // 重新注册 (修复：去掉未使用的 _rx)
             let (tx, _) = oneshot::channel();
             let task_id = meta.task_id.clone();
             let ctx = RuntimeContext::current();
-            
-            self.registry.insert(task_id, (meta.clone(), Some(tx), ctx.clone(), None));
-            
+
+            self.registry
+                .insert(task_id, (meta.clone(), Some(tx), ctx.clone(), None));
+
             // 重新调度
             self.scheduler.schedule(meta).await;
         }
@@ -159,24 +170,35 @@ impl TaskManager {
                 let meta_clone = meta.clone();
                 let scheduler = self.scheduler.clone();
                 let persistence = self.persistence.clone();
-                
+
                 // 立即 Spawn
                 let handle = tokio::spawn(async move {
-                    Self::execute_task_inner(runnable, meta_clone, bus, registry, scheduler, persistence).await;
+                    Self::execute_task_inner(
+                        runnable,
+                        meta_clone,
+                        bus,
+                        registry,
+                        scheduler,
+                        persistence,
+                    )
+                    .await;
                 });
-                
-                self.registry.insert(task_id.clone(), (meta, Some(tx), ctx.clone(), Some(handle)));
+
+                self.registry
+                    .insert(task_id.clone(), (meta, Some(tx), ctx.clone(), Some(handle)));
             }
             TaskKind::Once(_) | TaskKind::Cron(_) => {
                 meta.status = TaskStatus::Scheduled;
-                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
+                self.registry
+                    .insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
                 self.scheduler.schedule(meta.clone()).await;
                 let _ = self.persistence.save(&meta).await;
             }
             TaskKind::Todo => {
                 // Todo 任务不执行，只保存元数据
                 meta.status = TaskStatus::Pending;
-                self.registry.insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
+                self.registry
+                    .insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
                 let _ = self.persistence.save(&meta).await;
             }
         }
@@ -191,11 +213,11 @@ impl TaskManager {
             if let Some(handle) = opt_handle {
                 handle.abort();
             }
-            
+
             // 更新状态
             meta.status = TaskStatus::Cancelled;
             self.send_status_update(&meta).await;
-            
+
             // 清理
             self.scheduler.cancel(task_id.clone()).await;
             let _ = self.persistence.delete(&task_id.to_string()).await;
@@ -225,7 +247,7 @@ impl TaskManager {
                             return Some(Ok(String::new())); // 临时返回
                         }
                         return Some(Ok(String::new()));
-                    },
+                    }
                     TaskStatus::Failed(e) => return Some(Err(AgentError::TaskError(e))),
                     TaskStatus::Cancelled => return None,
                     _ => tokio::time::sleep(tokio::time::Duration::from_millis(100)).await,
@@ -257,9 +279,10 @@ impl TaskManager {
             // 一次性更新所有字段
             meta.progress = Some(progress.clamp(0.0, 1.0));
             meta.updated_at = Utc::now();
-            
+
             // 发送进度通知
-            Self::send_task_notification_static(meta, TaskNotificationType::Progress, &self.bus).await;
+            Self::send_task_notification_static(meta, TaskNotificationType::Progress, &self.bus)
+                .await;
             true
         } else {
             false
@@ -275,28 +298,28 @@ impl TaskManager {
     ) -> bool {
         if let Some(mut entry) = self.registry.get_mut(&task_id) {
             let (meta, _, _, _) = entry.value_mut();
-            
+
             // 只允许更新 Todo 类型的任务
             if meta.kind != TaskKind::Todo {
                 return false;
             }
-            
+
             // 更新状态和结果
             meta.status = new_status.clone();
             meta.result = result;
             meta.updated_at = Utc::now();
-            
+
             // 持久化更新
             let _ = self.persistence.save(meta).await;
-            
+
             // 发送状态变更通知
             let notif_type = match new_status {
                 TaskStatus::Completed => TaskNotificationType::Completed,
                 TaskStatus::Failed(_) => TaskNotificationType::Failed,
-                _ => return true,  // 其他状态不发送通知
+                _ => return true, // 其他状态不发送通知
             };
             Self::send_task_notification_static(meta, notif_type, &self.bus).await;
-            
+
             true
         } else {
             false
@@ -312,13 +335,13 @@ impl TaskManager {
         bus: Arc<MessageBus>,
         registry: Arc<DashMap<TaskId, TaskHandle>>,
         scheduler: Arc<TaskScheduler>,
-        persistence: Arc<dyn TaskPersistence>
+        persistence: Arc<dyn TaskPersistence>,
     ) {
         let task_id = meta.task_id.clone();
-        
+
         // 发送开始通知
         Self::send_task_notification_static(&meta, TaskNotificationType::Started, &bus).await;
-        
+
         // 在 RuntimeContext 的作用域内执行任务
         let result = runnable.run().await;
         // 更新状态
@@ -326,13 +349,13 @@ impl TaskManager {
             Ok(_) => TaskStatus::Completed,
             Err(e) => TaskStatus::Failed(e.to_string()),
         };
-        
+
         // 提取结果字符串
         let result_str = match &result {
             Ok(s) => Some(s.clone()),
             Err(e) => Some(format!("Error: {}", e)),
         };
-        
+
         // 先克隆结果用于通知判断
         let is_success = result.is_ok();
 
@@ -344,10 +367,10 @@ impl TaskManager {
             m.result = result_str.clone();
             m.updated_at = Utc::now();
             meta = m.clone();
-            
+
             // 持久化状态更新（包含结果）
             let _ = persistence.save(&meta).await;
-            
+
             // 通知等待者
             if let Some(tx) = opt_tx.take() {
                 let _ = tx.send(result);
@@ -388,7 +411,7 @@ impl TaskManager {
             TaskStatus::Failed(e) => format!("Task {} failed: {}", meta.task_id, e),
             _ => return,
         };
-    
+
         let msg = TaskMessage {
             task_id: meta.task_id.to_string(),
             session_id: meta.session_id.clone(),
@@ -397,12 +420,16 @@ impl TaskManager {
             content,
             result: meta.result.clone(),
         };
-            
+
         let _ = bus.send_task(msg);
     }
-    
+
     /// 发送任务通知消息
-    async fn send_task_notification_static(meta: &TaskMeta, notif_type: TaskNotificationType, bus: &Arc<MessageBus>) {
+    async fn send_task_notification_static(
+        meta: &TaskMeta,
+        notif_type: TaskNotificationType,
+        bus: &Arc<MessageBus>,
+    ) {
         let (msg_type, content) = match notif_type {
             TaskNotificationType::Started => (
                 TaskMessageType::Started,
@@ -414,15 +441,26 @@ impl TaskManager {
             ),
             TaskNotificationType::Failed => (
                 TaskMessageType::Failed,
-                format!("Task {} failed: {}", meta.task_id, 
-                    if let TaskStatus::Failed(e) = &meta.status { e } else { "unknown" }),
+                format!(
+                    "Task {} failed: {}",
+                    meta.task_id,
+                    if let TaskStatus::Failed(e) = &meta.status {
+                        e
+                    } else {
+                        "unknown"
+                    }
+                ),
             ),
             TaskNotificationType::Progress => (
                 TaskMessageType::Progress,
-                format!("Task {} progress: {:.0}%", meta.task_id, meta.progress.unwrap_or(0.0) * 100.0),
+                format!(
+                    "Task {} progress: {:.0}%",
+                    meta.task_id,
+                    meta.progress.unwrap_or(0.0) * 100.0
+                ),
             ),
         };
-            
+
         let msg = TaskMessage {
             task_id: meta.task_id.to_string(),
             session_id: meta.session_id.clone(),
@@ -431,7 +469,7 @@ impl TaskManager {
             content,
             result: meta.result.clone(),
         };
-            
+
         let _ = bus.send_task(msg);
     }
 

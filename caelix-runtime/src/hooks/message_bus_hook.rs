@@ -1,7 +1,7 @@
-use caelix_api::context::RuntimeContext;
 use crate::hooks::{AgentHook, HookCapability, MessageUpdateContext};
-use caelix_api::message::{AgentMessage, AgentMessageType};
 use async_trait::async_trait;
+use caelix_api::context::RuntimeContext;
+use caelix_api::message::{AgentMessage, AgentMessageType};
 use chrono::Utc;
 
 /// MessageBusHook - 负责将消息更新发送到消息总线并持久化

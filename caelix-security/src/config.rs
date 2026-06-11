@@ -45,7 +45,7 @@ impl Default for SecurityConfig {
 impl Default for PathSecurityConfig {
     fn default() -> Self {
         Self {
-            include: vec![],  // 默认不允许任何路径
+            include: vec![], // 默认不允许任何路径
             exclude: vec![],
         }
     }
@@ -54,7 +54,7 @@ impl Default for PathSecurityConfig {
 impl Default for UrlSecurityConfig {
     fn default() -> Self {
         Self {
-            include: vec![],  // 默认不允许任何 URL
+            include: vec![], // 默认不允许任何 URL
             exclude: vec![],
         }
     }

@@ -38,28 +38,34 @@ impl EventHandler {
             match event::read()? {
                 Event::Key(key) => {
                     // 检查 Command/Ctrl 修饰键
-                    let is_command = key.modifiers.contains(KeyModifiers::CONTROL) 
+                    let is_command = key.modifiers.contains(KeyModifiers::CONTROL)
                         || key.modifiers.contains(KeyModifiers::SUPER);
-                    
+
                     if is_command {
                         match key.code {
                             KeyCode::Char('c') | KeyCode::Char('q') => Ok(TuiEvent::Quit),
-                            KeyCode::Enter => Ok(TuiEvent::Send),  // Command+Enter 发送
+                            KeyCode::Enter => Ok(TuiEvent::Send), // Command+Enter 发送
                             _ => Ok(TuiEvent::Key(key)),
                         }
                     } else {
                         match key.code {
-                            KeyCode::Enter => Ok(TuiEvent::NewLine),  // 普通Enter换行
+                            KeyCode::Enter => Ok(TuiEvent::NewLine), // 普通Enter换行
                             KeyCode::Esc => Ok(TuiEvent::Key(key)),  // Esc作为普通按键处理
                             _ => Ok(TuiEvent::Key(key)),
                         }
                     }
                 }
                 Event::Resize(width, height) => Ok(TuiEvent::Resize(width, height)),
-                _ => Ok(TuiEvent::Key(KeyEvent::new(KeyCode::Null, KeyModifiers::NONE))),
+                _ => Ok(TuiEvent::Key(KeyEvent::new(
+                    KeyCode::Null,
+                    KeyModifiers::NONE,
+                ))),
             }
         } else {
-            Ok(TuiEvent::Key(KeyEvent::new(KeyCode::Null, KeyModifiers::NONE)))
+            Ok(TuiEvent::Key(KeyEvent::new(
+                KeyCode::Null,
+                KeyModifiers::NONE,
+            )))
         }
     }
 }

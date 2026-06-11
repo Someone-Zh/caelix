@@ -7,12 +7,12 @@
 //! - 运行时配置管理
 //! - 配置持久化
 
-pub mod config;
 pub mod checker;
+pub mod config;
+pub mod loader;
 pub mod path_checker;
 pub mod url_checker;
-pub mod loader;
 
-pub use config::*;
 pub use checker::SecurityChecker;
 pub use checker::SecurityError;
+pub use config::*;

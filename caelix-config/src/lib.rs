@@ -5,12 +5,12 @@
 use std::env;
 use std::path::PathBuf;
 
+pub mod agents_loader;
+pub mod commands_loader;
 pub mod managers;
 pub mod provider_loader;
-pub mod tools_loader;
-pub mod agents_loader;
 pub mod skills_loader;
-pub mod commands_loader;
+pub mod tools_loader;
 
 pub use managers::*;
 

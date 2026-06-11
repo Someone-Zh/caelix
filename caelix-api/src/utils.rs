@@ -2,14 +2,12 @@
 //!
 //! 包含ID生成器等公共工具
 
-use std::sync::Arc;
 use snowflaked::Generator;
+use std::sync::Arc;
 
 /// ID生成器单例
-static ID_GENERATOR: once_cell::sync::Lazy<Arc<std::sync::Mutex<Generator>>> = 
-    once_cell::sync::Lazy::new(|| {
-        Arc::new(std::sync::Mutex::new(Generator::new(1)))
-    });
+static ID_GENERATOR: once_cell::sync::Lazy<Arc<std::sync::Mutex<Generator>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(std::sync::Mutex::new(Generator::new(1))));
 
 /// ID前缀常量
 pub const SESSION_ID_PREFIX: &str = "S";

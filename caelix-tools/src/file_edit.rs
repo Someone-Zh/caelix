@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::path::Path;
 use tokio::fs;
 
@@ -45,10 +45,12 @@ impl Tool for DiffEditTool {
     async fn execute(&self, input: JsonValue) -> ToolResult {
         let file_path = match input["file_path"].as_str() {
             Some(v) => v,
-            None => return ToolResult {
-                output: String::new(),
-                error: Some("Missing parameter: file_path".to_string()),
-            },
+            None => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some("Missing parameter: file_path".to_string()),
+                };
+            }
         };
 
         let diff_content = input["diff_content"].as_str().unwrap_or("");
@@ -63,10 +65,12 @@ impl Tool for DiffEditTool {
             } else if !diff_content.is_empty() {
                 match parse_and_apply_unified_diff(&[], diff_content) {
                     Ok(lines) => lines.join("\n"),
-                    Err(e) => return ToolResult {
-                        output: String::new(),
-                        error: Some(format!("Failed to create from diff: {}", e)),
-                    },
+                    Err(e) => {
+                        return ToolResult {
+                            output: String::new(),
+                            error: Some(format!("Failed to create from diff: {}", e)),
+                        };
+                    }
                 }
             } else {
                 String::new()
@@ -81,27 +85,35 @@ impl Tool for DiffEditTool {
 
             let original = match fs::read_to_string(path).await {
                 Ok(c) => c,
-                Err(e) => return ToolResult {
-                    output: String::new(),
-                    error: Some(format!("Failed to read file: {}", e)),
-                },
+                Err(e) => {
+                    return ToolResult {
+                        output: String::new(),
+                        error: Some(format!("Failed to read file: {}", e)),
+                    };
+                }
             };
 
             // 检查文件大小限制
             if original.len() > MAX_EDIT_SIZE {
                 return ToolResult {
                     output: String::new(),
-                    error: Some(format!("File too large: {} bytes (max: {} bytes)", original.len(), MAX_EDIT_SIZE)),
+                    error: Some(format!(
+                        "File too large: {} bytes (max: {} bytes)",
+                        original.len(),
+                        MAX_EDIT_SIZE
+                    )),
                 };
             }
 
             let lines: Vec<&str> = original.lines().collect();
             match parse_and_apply_unified_diff(&lines, diff_content) {
                 Ok(res) => res.join("\n"),
-                Err(e) => return ToolResult {
-                    output: String::new(),
-                    error: Some(format!("Diff apply failed: {}", e)),
-                },
+                Err(e) => {
+                    return ToolResult {
+                        output: String::new(),
+                        error: Some(format!("Diff apply failed: {}", e)),
+                    };
+                }
             }
         };
 
@@ -130,9 +142,13 @@ impl Tool for DiffEditTool {
 }
 
 fn extract_context_lines(original: &[&str], line_idx: usize, context_size: usize) -> String {
-    let start = if line_idx >= context_size { line_idx - context_size } else { 0 };
+    let start = if line_idx >= context_size {
+        line_idx - context_size
+    } else {
+        0
+    };
     let end = (line_idx + context_size + 1).min(original.len());
-    
+
     let mut result = String::new();
     for i in start..end {
         let marker = if i == line_idx { ">>> " } else { "    " };
@@ -141,10 +157,7 @@ fn extract_context_lines(original: &[&str], line_idx: usize, context_size: usize
     result
 }
 
-fn parse_and_apply_unified_diff(
-    original: &[&str],
-    diff_text: &str,
-) -> Result<Vec<String>, String> {
+fn parse_and_apply_unified_diff(original: &[&str], diff_text: &str) -> Result<Vec<String>, String> {
     let mut result = Vec::new();
     let mut ptr = 0;
     let lines: Vec<&str> = diff_text.trim().lines().collect();
@@ -154,7 +167,11 @@ fn parse_and_apply_unified_diff(
         let line = lines[i];
         i += 1;
 
-        if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@") || line.is_empty() {
+        if line.starts_with("---")
+            || line.starts_with("+++")
+            || line.starts_with("@@")
+            || line.is_empty()
+        {
             continue;
         }
 

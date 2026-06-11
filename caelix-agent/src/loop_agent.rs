@@ -7,8 +7,8 @@ use caelix_api::{
 };
 use futures::{Stream, StreamExt};
 
-use crate::tool_executor::execute_tools_static;
 use super::util::{extract_pending_tool_calls, has_pending_tool_calls};
+use crate::tool_executor::execute_tools_static;
 
 pub struct LoopAgent {
     def: Arc<AgentSpec>,
@@ -28,8 +28,7 @@ impl Agent for LoopAgent {
         mut messages: Vec<ChatMessage>,
         llm_provider: Arc<dyn LlmProvider>,
         config: &LlmConfig,
-    ) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>
-    {
+    ) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>> {
         let def = self.def.clone();
         let llm = llm_provider.clone();
         let cfg = config.clone();
@@ -41,7 +40,7 @@ impl Agent for LoopAgent {
             messages = def.build_messages(messages);
 
             let should_resume = has_pending_tool_calls(&messages);
-        
+
             if should_resume {
                 if let Some(tools) = extract_pending_tool_calls(&messages) {
                     match execute_tools_static(&def, &tools).await {
@@ -132,6 +131,10 @@ impl Agent for LoopAgent {
 
         Box::pin(stream)
     }
+
+    fn get_spec(&self) -> Arc<AgentSpec> {
+        self.def.clone()
+    }
 }
 
 fn call_llm_static(
@@ -139,8 +142,7 @@ fn call_llm_static(
     messages: &[ChatMessage],
     llm_provider: &Arc<dyn LlmProvider>,
     config: &LlmConfig,
-) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>
-{
+) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>> {
     let tool_defs = def.get_tool_definitions();
     let llm = llm_provider.clone();
     let msgs = messages.to_vec();
@@ -212,4 +214,3 @@ fn call_llm_static(
     };
     Box::pin(s)
 }
-

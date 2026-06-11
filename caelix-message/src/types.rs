@@ -14,21 +14,21 @@ pub enum Role {
 /// 消息类型
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MessageType {
-    Thought,      // 思考过程
-    ToolCall,     // 工具调用请求
-    ToolResult,   // 工具执行结果
-    Chunk,        // 流式内容块
-    Status,       // 状态更新
+    Thought,    // 思考过程
+    ToolCall,   // 工具调用请求
+    ToolResult, // 工具执行结果
+    Chunk,      // 流式内容块
+    Status,     // 状态更新
     // 通用通知类型
-    Info,         // 普通信息
-    Error,        // 错误信息
-    Warning,      // 警告信息
-    Success,      // 成功信息
+    Info,    // 普通信息
+    Error,   // 错误信息
+    Warning, // 警告信息
+    Success, // 成功信息
     // 任务相关类型
-    TaskStarted,      // 任务开始
-    TaskCompleted,    // 任务完成
-    TaskFailed,       // 任务失败
-    TaskProgress,     // 任务进度
+    TaskStarted,   // 任务开始
+    TaskCompleted, // 任务完成
+    TaskFailed,    // 任务失败
+    TaskProgress,  // 任务进度
 }
 
 /// 执行状态
@@ -59,32 +59,32 @@ pub struct MessageMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,  // 关联的任务ID
+    pub task_id: Option<String>, // 关联的任务ID
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream_id: Option<String>,  // 流式消息组ID,同一组流式chunk共享此ID
+    pub stream_id: Option<String>, // 流式消息组ID,同一组流式chunk共享此ID
     #[serde(default)]
-    pub is_final: bool,              // 是否为流的最后一条消息
+    pub is_final: bool, // 是否为流的最后一条消息
 }
 
 /// 核心消息结构 (OTEL 风格)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub session_id: String,       // TraceId: 整个会话ID
-    pub span_id: String,          // SpanId: 当前步骤ID
+    pub session_id: String,             // TraceId: 整个会话ID
+    pub span_id: String,                // SpanId: 当前步骤ID
     pub parent_span_id: Option<String>, // 父步骤ID
-    pub seq: u64,                 // 全局序列号 (用于严格排序)
-    
+    pub seq: u64,                       // 全局序列号 (用于严格排序)
+
     pub role: Role,
-    pub name: String,             // 执行者名称 (e.g., "SearchTool", "CodeAgent")
+    pub name: String, // 执行者名称 (e.g., "SearchTool", "CodeAgent")
     pub r#type: MessageType,
     pub content: String,
-    
+
     pub status: Status,
     pub timestamp: DateTime<Utc>,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<MessageError>,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<MessageMeta>,
 }
@@ -118,18 +118,18 @@ impl Message {
             meta: None,
         }
     }
-    
+
     /// 从当前 RuntimeContext 自动创建消息
-    /// 
+    ///
     /// 自动从运行时上下文获取 session_id 和 span_id
-    /// 
+    ///
     /// # Panics
     /// 如果在不存在的上下文中调用，会 panic
-    /// 
+    ///
     /// # Example
     /// ```no_run
     /// use caelix::runtime::message::{Message, Role, MessageType, Status};
-    /// 
+    ///
     /// let msg = Message::from_context(
     ///     None,
     ///     Role::User,

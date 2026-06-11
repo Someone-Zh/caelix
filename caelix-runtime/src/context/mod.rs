@@ -1,9 +1,9 @@
 use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
-use caelix_api::plugins::{PluginManager, PluginRegistry};
-use caelix_config::{
-    EnvConfig,
-    managers::{AgentManager, CommandManager, ProviderManager, SkillManager, ToolManager},
+use caelix_api::managers::{
+    AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
 };
+use caelix_api::plugins::{PluginManager, PluginRegistry};
+use caelix_config::EnvConfig;
 use caelix_message::{FileStorage, MessageBus, SessionManager};
 use caelix_security::SecurityChecker;
 use caelix_task::{FilePersistence, RunnableFactory, TaskManager};
@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use crate::HookRegistry;
 
 /// 项目上下文对象
-/// 统一管理 AgentManager、ToolManager、LlmProviderManager 和 SessionManager 实例
+/// 统一管理 AgentManager、ToolManager、ProviderManager 和 SessionManager 实例
 #[derive(Debug, Clone)]
 pub struct CaelixContext {
     /// 环境变量配置
@@ -26,7 +26,7 @@ pub struct CaelixContext {
     pub llm_provider_manager: Arc<RwLock<ProviderManager>>,
     /// 会话管理器实例
     pub session_manager: Arc<SessionManager>,
-    ///  管理器实例
+    /// 技能管理器实例
     pub skill_manager: Arc<SkillManager>,
     /// 命令管理器实例
     pub command_manager: Arc<CommandManager>,
@@ -49,7 +49,6 @@ pub struct CaelixContext {
 impl CaelixContext {
     /// 创建新的应用上下文实例
     pub fn new() -> Self {
-        // 初始化环境变量配置
         let env_config = EnvConfig::new();
 
         // 初始化消息总线和存储
@@ -60,7 +59,6 @@ impl CaelixContext {
         // 初始化任务管理器
         let task_persistence = Arc::new(FilePersistence::new("./tasks".to_string()));
         let runnable_factory = RunnableFactory::new();
-        // TODO: 在这里注册具体的 Runnable 构造函数
         let task_manager = Arc::new(TaskManager::new(
             Arc::new(bus.clone()),
             task_persistence,
@@ -86,9 +84,7 @@ impl CaelixContext {
             default_model: String::new(),
         }
     }
-}
 
-impl CaelixContext {
     /// 注册插件到插件注册中心。
     pub async fn register_plugin(&self, plugin: Arc<dyn caelix_api::plugins::Plugin>) {
         self.plugin_registry.register_plugin(plugin).await;
@@ -102,6 +98,9 @@ impl CaelixContext {
     /// 初始化提供商配置
     /// 通过插件加载提供商并注册到 llm_provider_manager 中
     pub async fn init_provider(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let caelix_home = &self.env_config.caelix_home;
+        let _configs = caelix_config::provider_loader::load_provider_configs(caelix_home)?;
+
         let mut provider_manager = self.llm_provider_manager.write().await;
         for plugin in self.plugin_registry.llm_provider_plugins().await {
             for named_provider in plugin.llm_providers().await? {
@@ -127,11 +126,16 @@ impl CaelixContext {
     /// 初始化智能体管理器
     /// 通过插件加载所有智能体，并在注册前应用 init-hooks
     pub async fn init_agents(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let agents_dir = self.env_config.caelix_home.join("agents");
+
+        if !agents_dir.exists() {
+            std::fs::create_dir_all(&agents_dir)?;
+            println!("Creating agents directory at: {:?}", agents_dir);
+            println!("Please add .agent files to this directory");
+        }
+
         for plugin in self.plugin_registry.agent_plugins().await {
-            for mut agent in plugin.agents().await? {
-                self.hook_registry
-                    .apply_init_hooks(&mut agent, Some("init"))
-                    .await?;
+            for agent in plugin.agent_instances().await? {
                 self.agent_manager.register(agent).await?;
             }
         }
@@ -140,11 +144,24 @@ impl CaelixContext {
     }
 
     /// 初始化技能管理器
-    /// 通过插件加载所有技能
+    /// 通过本地 skill 文件和插件加载所有技能
     pub async fn init_skills(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let skills_dir = self.env_config.caelix_home.join("skills");
+
+        if !skills_dir.exists() {
+            std::fs::create_dir_all(&skills_dir)?;
+            println!("Creating skills directory at: {:?}", skills_dir);
+        }
+
+        caelix_config::skills_loader::register_all_skills(
+            &skills_dir.to_string_lossy(),
+            &self.skill_manager,
+        )
+        .await?;
+
         for plugin in self.plugin_registry.skill_plugins().await {
             for skill_def in plugin.skills().await? {
-                let skill = caelix_config::managers::Skill::new(
+                let skill = Skill::new(
                     skill_def.name,
                     skill_def.namespace,
                     skill_def.description,
@@ -170,8 +187,21 @@ impl CaelixContext {
     }
 
     /// 初始化命令管理器
-    /// 通过插件加载所有命令
+    /// 通过本地 command 文件和插件加载所有命令
     pub async fn init_commands(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let commands_dir = self.env_config.caelix_home.join("commands");
+
+        if !commands_dir.exists() {
+            std::fs::create_dir_all(&commands_dir)?;
+            println!("Creating commands directory at: {:?}", commands_dir);
+        }
+
+        caelix_config::commands_loader::register_all_commands(
+            &commands_dir.to_string_lossy(),
+            &self.command_manager,
+        )
+        .await?;
+
         for plugin in self.plugin_registry.command_plugins().await {
             let commands = plugin.commands().await?;
             self.command_manager.register_batch(commands).await;
@@ -221,6 +251,7 @@ impl CaelixContext {
                 println!("✅ 已恢复持久化的任务");
             }
         }
+
         Ok(())
     }
 
@@ -241,14 +272,14 @@ impl Default for CaelixContext {
 
 /// 为 CaelixContext 实现 HasAgentManager trait
 impl caelix_config::agents_loader::HasAgentManager for CaelixContext {
-    fn get_agent_manager(&self) -> Arc<caelix_config::managers::AgentManager> {
+    fn get_agent_manager(&self) -> Arc<AgentManager> {
         self.agent_manager.clone()
     }
 }
 
 /// 为 CaelixContext 实现 HasToolManager trait
 impl caelix_config::agents_loader::HasToolManager for CaelixContext {
-    fn get_tool_manager(&self) -> Arc<caelix_config::managers::ToolManager> {
+    fn get_tool_manager(&self) -> Arc<ToolManager> {
         self.tool_manager.clone()
     }
 }
@@ -260,7 +291,6 @@ impl ContextProvider for CaelixContext {
     }
 
     fn get_message_sender(&self) -> Arc<dyn MessageSender> {
-        // MessageBus 已经实现了 MessageSender trait
         self.message_bus.clone()
     }
 }

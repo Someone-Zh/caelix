@@ -7,14 +7,14 @@ use std::io::{self, BufRead, Write};
 pub fn read_multiline_input() -> io::Result<Option<String>> {
     let stdin = io::stdin();
     let mut lines = Vec::new();
-    
+
     loop {
         print!("> ");
         io::stdout().flush()?;
-        
+
         let mut line = String::new();
         let bytes_read = stdin.lock().read_line(&mut line)?;
-        
+
         if bytes_read == 0 {
             // EOF (Ctrl+D)
             if lines.is_empty() {
@@ -22,17 +22,17 @@ pub fn read_multiline_input() -> io::Result<Option<String>> {
             }
             break;
         }
-        
+
         let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
-        
+
         if trimmed.is_empty() && !lines.is_empty() {
             // 空行且已有内容，提交
             break;
         }
-        
+
         lines.push(trimmed);
     }
-    
+
     if lines.is_empty() {
         Ok(None)
     } else {
@@ -48,9 +48,9 @@ pub fn read_single_line() -> io::Result<Option<String>> {
     let mut input = String::new();
     print!("> ");
     io::stdout().flush()?;
-    
+
     let bytes_read = io::stdin().read_line(&mut input)?;
-    
+
     if bytes_read == 0 {
         Ok(None)
     } else {

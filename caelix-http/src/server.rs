@@ -1,26 +1,30 @@
 use axum::{
-    routing::{get, post, put},
     Router,
+    routing::{get, post, put},
 };
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
-use caelix_service::CaelixApiImpl;
 use super::handlers::*;
+use caelix_service::CaelixApiImpl;
 
 /// 启动 HTTP 服务器
-pub async fn start_http_server(api: Arc<CaelixApiImpl>, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_http_server(
+    api: Arc<CaelixApiImpl>,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
     let app = create_router(api);
-    
+
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     println!("🚀 HTTP Server starting on http://{}", addr);
-    
+
     axum::serve(
         tokio::net::TcpListener::bind(addr).await?,
-        app.into_make_service()
-    ).await?;
-    
+        app.into_make_service(),
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -32,12 +36,21 @@ fn create_router(api: Arc<CaelixApiImpl>) -> Router {
         // 会话管理
         .route("/api/sessions", post(create_session))
         .route("/api/sessions", get(list_sessions))
-        .route("/api/sessions/{session_id}/provider", put(set_session_provider))
+        .route(
+            "/api/sessions/{session_id}/provider",
+            put(set_session_provider),
+        )
         .route("/api/sessions/{session_id}/model", put(set_session_model))
         // 会话消息历史
-        .route("/api/sessions/{session_id}/messages", get(get_session_messages))
+        .route(
+            "/api/sessions/{session_id}/messages",
+            get(get_session_messages),
+        )
         // 会话通知历史
-        .route("/api/sessions/{session_id}/notifications", get(get_session_notifications))
+        .route(
+            "/api/sessions/{session_id}/notifications",
+            get(get_session_notifications),
+        )
         // Agent 列表
         .route("/api/agents", get(list_agents))
         // 任务管理

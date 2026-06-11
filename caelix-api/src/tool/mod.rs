@@ -3,8 +3,8 @@
 //! 包含 Tool trait、ToolDefinition、ToolResult 等定义
 
 use async_trait::async_trait;
-use serde_json::Value as JsonValue;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {

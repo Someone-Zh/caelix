@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use caelix_runtime::context::CaelixContext;
 use caelix_service::{CaelixApi, CaelixApiImpl};
+use std::sync::Arc;
 use tokio::signal;
 
 #[tokio::main]
@@ -9,16 +9,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
-    
+
     // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
-    
+
     // 检查是否请求帮助
     if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
         print_usage();
         return Ok(());
     }
-    
+
     // 使用 CaelixContext 初始化
     println!("🔧 初始化 Caelix 上下文...");
     let mut context = CaelixContext::new();
@@ -26,16 +26,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     context.register_plugins(plugins).await;
     context.init().await.expect("Failed to initialize context");
     let caelix_ctx = Arc::new(context);
-    
+
     // 创建 API 实现
     let api = Arc::new(CaelixApiImpl::new(caelix_ctx.clone()));
-    
+
     // 启动信号监听任务
     let session_manager_clone = caelix_ctx.session_manager.clone();
     tokio::spawn(async move {
         signal_ctrl_c(session_manager_clone).await;
     });
-    
+
     // 根据 features 和参数启动相应的后端
     if args.len() > 1 {
         // 用户显式指定了后端或选项
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("💻 启动 CLI 后端...");
         caelix_cli::run_cli(api).await?;
     }
-    
+
     Ok(())
 }
 
@@ -105,10 +105,10 @@ async fn signal_ctrl_c(session_manager: Arc<caelix_message::SessionManager>) {
     match signal::ctrl_c().await {
         Ok(()) => {
             println!("\n⚠️  收到退出信号，正在保存未持久化的消息...");
-            
+
             // Flush 所有 agent_buffers 中的 Chunk 消息
             flush_pending_messages(session_manager).await;
-            
+
             println!("✅ 消息已保存，安全退出");
             std::process::exit(0);
         }
@@ -121,14 +121,18 @@ async fn signal_ctrl_c(session_manager: Arc<caelix_message::SessionManager>) {
 /// Flush 待持久化的消息
 async fn flush_pending_messages(session_manager: Arc<caelix_message::SessionManager>) {
     use caelix_api::message::AgentMessageType;
-    
+
     // 访问 agent_buffers 并持久化所有待处理的 Chunk 消息
     let buffers = session_manager.get_agent_buffers().read().await;
     for ((_session_id, _request_id, _span_id), messages) in buffers.iter() {
         for msg in messages {
             // 只持久化 Msg 类型的消息（Chunk 不需要持久化）
             if msg.r#type == AgentMessageType::Msg {
-                if let Err(e) = session_manager.get_storage().append_agent_message(msg).await {
+                if let Err(e) = session_manager
+                    .get_storage()
+                    .append_agent_message(msg)
+                    .await
+                {
                     eprintln!("⚠️  保存消息失败: {:?}", e);
                 }
             }
@@ -140,23 +144,23 @@ async fn flush_pending_messages(session_manager: Arc<caelix_message::SessionMana
 async fn run_demo(api: Arc<CaelixApiImpl>) {
     println!("\n🚀 Caelix 演示模式");
     println!("==================");
-    
+
     // 获取默认配置
     let default_provider = api.get_default_provider();
     let default_model = api.get_default_model();
     println!("默认提供者: {}", default_provider);
     println!("默认模型: {}", default_model);
-    
+
     // 创建会话
     let session_id = api.create_session().await;
     println!("\n✅ 创建会话: {}", session_id);
-    
+
     // 获取 agent 列表
     let agents = api.list_agents().await;
     println!("\n📋 可用的 Agents:");
     for agent in agents {
         println!("  - {}", agent);
     }
-    
+
     println!("\n💡 提示: 使用 'caelix http' 或 'caelix tui' 启动相应的后端");
 }

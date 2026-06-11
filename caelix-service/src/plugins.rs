@@ -1,13 +1,13 @@
-use caelix_runtime::context::CaelixContext;
 use crate::tools::{DelegateTaskTool, create_all_builtin_tools};
 use anyhow::anyhow;
-use caelix_api::agent::AgentSpec;
+use caelix_api::agent::Agent;
 use caelix_api::plugins::{
     CommandSpec, NamedLlmProvider, Plugin, PluginCapability, PluginFactoryContext,
     PluginRegistration, SkillDef,
 };
 use caelix_api::provider::{LlmProvider, LlmType};
 use caelix_api::tool::Tool;
+use caelix_runtime::context::CaelixContext;
 use std::sync::Arc;
 
 struct DefaultServicePlugin {
@@ -87,7 +87,7 @@ impl Plugin for DefaultServicePlugin {
             .collect())
     }
 
-    async fn agents(&self) -> anyhow::Result<Vec<AgentSpec>> {
+    async fn agent_instances(&self) -> anyhow::Result<Vec<Arc<dyn Agent>>> {
         let agents_dir = self.context.env_config.caelix_home.join("agents");
         if !agents_dir.exists() {
             std::fs::create_dir_all(&agents_dir)?;
@@ -95,13 +95,27 @@ impl Plugin for DefaultServicePlugin {
             println!("Please add .agent files to this directory");
         }
 
-        let agents = caelix_config::agents_loader::load_agents_from_directory(
+        let mut agents = caelix_config::agents_loader::load_agents_from_directory(
             &agents_dir.to_string_lossy(),
             &self.context.tool_manager,
         )
         .await
         .map_err(|e| anyhow!(e))?;
-        Ok(agents)
+
+        for agent in &mut agents {
+            self.context
+                .hook_registry
+                .apply_init_hooks(agent, Some("init"))
+                .await?;
+        }
+
+        Ok(agents
+            .into_iter()
+            .map(|agent| {
+                Arc::new(caelix_agent::loop_agent::LoopAgent::new(Arc::new(agent)))
+                    as Arc<dyn Agent>
+            })
+            .collect())
     }
 
     async fn commands(&self) -> anyhow::Result<Vec<CommandSpec>> {

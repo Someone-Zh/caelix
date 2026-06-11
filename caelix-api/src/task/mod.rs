@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::utils;
 use crate::error::AgentError;
+use crate::utils;
 
 /// 任务ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ pub enum TaskKind {
     Async,
     Once(DateTime<Utc>),
     Cron(String),
-    Todo,  // 待办任务，完全由外部触发状态变更
+    Todo, // 待办任务，完全由外部触发状态变更
 }
 
 /// 任务状态
@@ -48,7 +48,7 @@ pub enum TaskStatus {
 #[async_trait]
 pub trait Runnable: Send + Sync + 'static {
     /// 执行任务并返回结果
-    /// 
+    ///
     /// # Returns
     /// - Ok(String): 任务执行成功，返回结果字符串
     /// - Err(AgentError): 任务执行失败，返回错误信息

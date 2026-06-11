@@ -86,10 +86,10 @@ impl TaskScheduler {
                         // 计算需要等待的时间
                         let duration = task.next_run.signed_duration_since(now);
                         let notify = self.notify.clone();
-                        
+
                         // 释放锁后等待
                         drop(heap);
-                        
+
                         tokio::select! {
                             _ = tokio::time::sleep(duration.to_std().unwrap_or(std::time::Duration::from_secs(0))) => {},
                             _ = notify.notified() => {},
@@ -115,7 +115,7 @@ impl TaskScheduler {
                     None
                 }
             }
-            TaskKind::Async | TaskKind::Todo => None,  // Todo 任务不由调度器触发
+            TaskKind::Async | TaskKind::Todo => None, // Todo 任务不由调度器触发
         }
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! 提供基于命令行的用户交互界面
 
-pub mod runner;
 pub mod commands;
 pub mod input_handler;
+pub mod runner;
 
 pub use runner::run_cli;

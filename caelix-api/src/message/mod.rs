@@ -68,7 +68,7 @@ pub struct TaskMessage {
     pub r#type: TaskMessageType,
     pub timestamp: DateTime<Utc>,
     pub content: String,
-    pub result: Option<String>,  // 任务执行结果
+    pub result: Option<String>, // 任务执行结果
 }
 
 /// Todo 任务触发消息（用于外部触发 Todo 任务状态变更）
@@ -84,7 +84,7 @@ pub struct TodoTriggerMessage {
 /// Todo 任务触发动作
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TodoTriggerAction {
-    Complete,   // 标记为完成
-    Fail(String),  // 标记为失败，附带原因
-    Cancel,     // 取消任务
+    Complete,     // 标记为完成
+    Fail(String), // 标记为失败，附带原因
+    Cancel,       // 取消任务
 }

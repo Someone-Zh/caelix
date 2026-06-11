@@ -1,22 +1,22 @@
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use thiserror::Error;
 use crate::config::SecurityConfig;
 use crate::path_checker::PathChecker;
 use crate::url_checker::UrlChecker;
+use std::sync::Arc;
+use thiserror::Error;
+use tokio::sync::RwLock;
 
 /// 安全错误类型
 #[derive(Debug, Error)]
 pub enum SecurityError {
     #[error("Path traversal detected")]
     PathTraversalDetected,
-    
+
     #[error("Invalid path: {0}")]
     InvalidPath(String),
-    
+
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
-    
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 }
@@ -41,7 +41,7 @@ impl SecurityChecker {
     pub fn new(config: SecurityConfig) -> Self {
         let path_config = config.path.clone();
         let url_config = config.url.clone();
-        
+
         Self {
             config: Arc::new(RwLock::new(config)),
             path_checker: Arc::new(RwLock::new(PathChecker::new(path_config))),
@@ -68,7 +68,7 @@ impl SecurityChecker {
             let mut checker = self.path_checker.write().await;
             checker.add_include(path.clone());
         }
-        
+
         // 更新全局配置
         {
             let mut config = self.config.write().await;
@@ -76,7 +76,7 @@ impl SecurityChecker {
                 config.path.include.push(path);
             }
         }
-        
+
         // TODO: 持久化到文件(由 caelix-config 负责)
         Ok(())
     }
@@ -87,14 +87,14 @@ impl SecurityChecker {
             let mut checker = self.path_checker.write().await;
             checker.add_exclude(path.clone());
         }
-        
+
         {
             let mut config = self.config.write().await;
             if !config.path.exclude.contains(&path) {
                 config.path.exclude.push(path);
             }
         }
-        
+
         Ok(())
     }
 
@@ -104,14 +104,14 @@ impl SecurityChecker {
             let mut checker = self.url_checker.write().await;
             checker.add_include(pattern.clone());
         }
-        
+
         {
             let mut config = self.config.write().await;
             if !config.url.include.contains(&pattern) {
                 config.url.include.push(pattern);
             }
         }
-        
+
         Ok(())
     }
 
@@ -121,14 +121,14 @@ impl SecurityChecker {
             let mut checker = self.url_checker.write().await;
             checker.add_exclude(pattern.clone());
         }
-        
+
         {
             let mut config = self.config.write().await;
             if !config.url.exclude.contains(&pattern) {
                 config.url.exclude.push(pattern);
             }
         }
-        
+
         Ok(())
     }
 
@@ -141,7 +141,7 @@ impl SecurityChecker {
     pub async fn reload_config(&self, new_config: SecurityConfig) {
         let path_config = new_config.path.clone();
         let url_config = new_config.url.clone();
-        
+
         *self.config.write().await = new_config;
         *self.path_checker.write().await = PathChecker::new(path_config);
         *self.url_checker.write().await = UrlChecker::new(url_config);

@@ -1,5 +1,5 @@
 use caelix_api::message::{AgentMessage, NotificationMessage, TaskMessage};
-use tokio::sync::broadcast; 
+use tokio::sync::broadcast;
 
 #[derive(Debug, Clone)]
 pub struct MessageBus {
@@ -25,20 +25,29 @@ impl MessageBus {
     /// 发送 Agent 消息
     #[allow(dead_code)] // 为将来外部访问预留
     #[allow(clippy::result_large_err)]
-    pub fn send_agent(&self, msg: AgentMessage) -> Result<(), broadcast::error::SendError<AgentMessage>> {
+    pub fn send_agent(
+        &self,
+        msg: AgentMessage,
+    ) -> Result<(), broadcast::error::SendError<AgentMessage>> {
         self.agent_sender.send(msg)?;
         Ok(())
     }
 
     /// 发送通知消息
     #[allow(dead_code)] // 为将来外部访问预留
-    pub fn send_notification(&self, msg: NotificationMessage) -> Result<(), broadcast::error::SendError<NotificationMessage>> {
+    pub fn send_notification(
+        &self,
+        msg: NotificationMessage,
+    ) -> Result<(), broadcast::error::SendError<NotificationMessage>> {
         self.notification_sender.send(msg)?;
         Ok(())
     }
 
     /// 发送任务消息
-    pub fn send_task(&self, msg: TaskMessage) -> Result<(), broadcast::error::SendError<TaskMessage>> {
+    pub fn send_task(
+        &self,
+        msg: TaskMessage,
+    ) -> Result<(), broadcast::error::SendError<TaskMessage>> {
         self.task_sender.send(msg)?;
         Ok(())
     }
@@ -67,7 +76,7 @@ impl caelix_api::context::MessageSender for MessageBus {
         Self::send_agent(self, message)
             .map_err(|e| anyhow::anyhow!("Failed to send agent message: {}", e))
     }
-    
+
     fn send_task(&self, message: caelix_api::message::TaskMessage) -> Result<(), anyhow::Error> {
         // 直接使用，无需转换（类型已统一）
         Self::send_task(self, message)

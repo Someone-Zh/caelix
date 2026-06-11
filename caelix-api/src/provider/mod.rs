@@ -3,18 +3,18 @@
 //! 包含 LlmProvider trait、ChatMessage、LlmConfig 等定义
 
 use async_trait::async_trait;
-use std::pin::Pin;
-use tokio_stream::Stream;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use tokio_stream::Stream;
 
-use crate::tool::{ToolCall, ToolDefinition};
 use crate::error::AgentError;
+use crate::tool::{ToolCall, ToolDefinition};
 
 /// 消息角色枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")] 
+#[serde(rename_all = "snake_case")]
 pub enum MessageRole {
     System,
     User,

@@ -1,6 +1,9 @@
+//! CommandManager - 命令管理器
+
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use caelix_api::commands::Command;
+
+use crate::commands::{Command, CommandType};
 
 #[derive(Debug, Clone)]
 pub struct CommandManager {
@@ -39,9 +42,10 @@ impl CommandManager {
     }
 
     /// 根据类型过滤命令
-    pub async fn get_by_type(&self, cmd_type: &caelix_api::commands::CommandType) -> Vec<Command> {
+    pub async fn get_by_type(&self, cmd_type: &CommandType) -> Vec<Command> {
         let commands = self.commands.read().await;
-        commands.iter()
+        commands
+            .iter()
             .filter(|c| c.command_type == *cmd_type)
             .cloned()
             .collect()

@@ -7,8 +7,8 @@ use std::fmt;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum CommandType {
     #[default]
-    Prompt,   // 提示词
-    Shell,    // Shell 命令
+    Prompt, // 提示词
+    Shell, // Shell 命令
 }
 
 impl fmt::Display for CommandType {
@@ -31,7 +31,12 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(name: String, description: String, command_type: CommandType, content: String) -> Self {
+    pub fn new(
+        name: String,
+        description: String,
+        command_type: CommandType,
+        content: String,
+    ) -> Self {
         Self {
             name,
             description,

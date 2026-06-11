@@ -8,9 +8,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::{Stream, StreamExt};
 
-use caelix_api::provider::{ChatMessage, LlmProvider, ChatResponseChunk, LlmConfig, ProviderConfig};
-use caelix_api::tool::{ToolCall, ToolDefinition, ApiToolCall};
 use caelix_api::error::AgentError;
+use caelix_api::provider::{
+    ChatMessage, ChatResponseChunk, LlmConfig, LlmProvider, ProviderConfig,
+};
+use caelix_api::tool::{ApiToolCall, ToolCall, ToolDefinition};
 
 #[derive(Debug, Serialize)]
 struct LlmChatRequest {
@@ -79,13 +81,18 @@ impl OpenAIProvider {
         messages
             .iter()
             .map(|m| {
-                let api_tool_calls = m.tool_calls.as_ref().map(|tcs| {
-                    tcs.iter().map(|tc| tc.to_api_format()).collect::<Vec<_>>()
-                });
+                let api_tool_calls = m
+                    .tool_calls
+                    .as_ref()
+                    .map(|tcs| tcs.iter().map(|tc| tc.to_api_format()).collect::<Vec<_>>());
 
                 let llm_msg = LlmChatMessage {
                     role: m.role.clone(),
-                    content: if m.content.is_empty() { None } else { Some(m.content.clone()) },
+                    content: if m.content.is_empty() {
+                        None
+                    } else {
+                        Some(m.content.clone())
+                    },
                     tool_call_id: m.tool_call_id.clone(),
                     tool_calls: api_tool_calls,
                     reasoning_content: None,
@@ -156,7 +163,9 @@ impl OpenAIProvider {
         tool_buffer: &mut Vec<ToolCallBuffer>,
         response_id: &mut String,
     ) -> Result<Option<ChatResponseChunk>, AgentError> {
-        if response_id.is_empty() && let Some(id) = json["id"].as_str() {
+        if response_id.is_empty()
+            && let Some(id) = json["id"].as_str()
+        {
             *response_id = id.to_string();
         }
 

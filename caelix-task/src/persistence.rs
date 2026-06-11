@@ -30,7 +30,9 @@ impl FilePersistence {
 
     /// 获取 session 级别的任务存储路径
     fn get_session_task_path(&self, session_id: &str, task_id: &str) -> PathBuf {
-        self.base_path.join(session_id).join(format!("{}.json", task_id))
+        self.base_path
+            .join(session_id)
+            .join(format!("{}.json", task_id))
     }
 
     async fn ensure_dir(&self) -> Result<()> {

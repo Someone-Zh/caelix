@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // 从 caelix-api 导入核心任务类型
-pub use caelix_api::task::{TaskId, TaskKind, TaskStatus, Runnable};
+pub use caelix_api::task::{Runnable, TaskId, TaskKind, TaskStatus};
 
 // ==================== 任务元数据 (用于持久化) ====================
 
@@ -17,7 +17,7 @@ pub struct TaskMeta {
     pub kind: TaskKind,
     pub status: TaskStatus,
     pub progress: Option<f32>,  // 任务进度 0.0-1.0
-    pub result: Option<String>,  // 任务执行结果
+    pub result: Option<String>, // 任务执行结果
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub task_type_name: String,

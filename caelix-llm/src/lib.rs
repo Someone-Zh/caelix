@@ -4,6 +4,6 @@
 
 pub mod openai;
 
-pub use openai::OpenAIProvider;
 pub use caelix_api::ChatMessage;
 pub use caelix_api::provider::LlmConfig;
+pub use openai::OpenAIProvider;

@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use serde_json::{json, Value as JsonValue};
+use caelix_api::tool::Tool;
+use caelix_api::tool::ToolResult;
+use serde_json::{Value as JsonValue, json};
 use std::fs::read_to_string;
 use std::sync::LazyLock;
 use tokio::process::Command;
 use walkdir::WalkDir;
-use caelix_api::tool::ToolResult;
-use caelix_api::tool::Tool;
 
 // ====================== 智能搜索工具（零新增依赖） ======================
 /// 全局文件搜索：优先使用ripgrep，无rg时自动降级为原生搜索
@@ -75,7 +75,7 @@ impl SmartSearchTool {
                 return ToolResult {
                     output: String::new(),
                     error: Some(format!("启动 rg 失败：{}", e)),
-                }
+                };
             }
         };
 
@@ -85,7 +85,11 @@ impl SmartSearchTool {
         if output.status.success() {
             ToolResult {
                 output: stdout,
-                error: if stderr.is_empty() { None } else { Some(stderr) },
+                error: if stderr.is_empty() {
+                    None
+                } else {
+                    Some(stderr)
+                },
             }
         } else {
             ToolResult {
@@ -166,7 +170,12 @@ impl SmartSearchTool {
 
                 if line_match {
                     if show_line_num {
-                        output.push_str(&format!("{}:{}: {}\n", file_path.display(), idx + 1, line));
+                        output.push_str(&format!(
+                            "{}:{}: {}\n",
+                            file_path.display(),
+                            idx + 1,
+                            line
+                        ));
                     } else {
                         output.push_str(&format!("{}: {}\n", file_path.display(), line));
                     }
@@ -174,7 +183,10 @@ impl SmartSearchTool {
             }
         }
 
-        ToolResult { output, error: None }
+        ToolResult {
+            output,
+            error: None,
+        }
     }
 }
 
@@ -240,6 +252,3 @@ impl Tool for SmartSearchTool {
         Box::new(self.clone())
     }
 }
-
-
-
