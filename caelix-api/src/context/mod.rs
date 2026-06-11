@@ -2,13 +2,8 @@
 //!
 //! 定义轻量级的接口 trait，允许运行时层通过统一接口访问配置层的组件，
 //! 避免 caelix-runtime 直接依赖 caelix-config
-use anyhow::Result;
-use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use crate::hooks::{MessageUpdateContext, PostToolExecContext, PreToolExecContext};
-use crate::message::{AgentMessage, TaskMessage};
 use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
 
 // ==================== Task Local 存储 ====================
@@ -36,43 +31,6 @@ pub trait ContextFutureExt: Future + Sized {
 }
 impl<F: Future> ContextFutureExt for F {}
 
-/// Hook 执行器接口
-///
-/// 抽象 HookRegistry 的核心功能，避免在 api 层暴露具体类型
-#[async_trait]
-pub trait HookExecutor: Send + Sync {
-    /// 执行消息更新钩子
-    async fn execute_message_update(&self, ctx: &MessageUpdateContext) -> Result<()>;
-
-    /// 执行工具执行前钩子
-    async fn execute_pre_tool_exec(&self, ctx: &mut PreToolExecContext) -> Result<()>;
-
-    /// 执行工具执行后钩子
-    async fn execute_post_tool_exec(&self, ctx: &mut PostToolExecContext) -> Result<()>;
-}
-
-/// 消息发送器接口
-///
-/// 抽象 MessageBus 的核心功能
-pub trait MessageSender: Send + Sync {
-    /// 发送 Agent 消息
-    fn send_agent(&self, message: AgentMessage) -> Result<()>;
-
-    /// 发送任务消息
-    fn send_task(&self, message: TaskMessage) -> Result<()>;
-}
-
-/// 上下文提供者 Trait
-///
-/// 允许运行时层通过统一接口访问配置层的组件
-/// 避免 caelix-runtime 直接依赖 caelix-config
-pub trait ContextProvider: Send + Sync {
-    /// 获取 Hook 执行器
-    fn get_hook_executor(&self) -> Arc<dyn HookExecutor>;
-
-    /// 获取消息发送器
-    fn get_message_sender(&self) -> Arc<dyn MessageSender>;
-}
 
 /// 运行时上下文 - Session 级别
 ///
@@ -103,9 +61,9 @@ pub struct RuntimeContext {
     /// Debug 模式是否启用（协程内可覆盖全局设置）
     debug_enabled: bool,
 
-    /// 上下文提供者（用于访问上层组件如 hook_registry）
-    context_provider: Arc<dyn ContextProvider>,
 }
+
+
 impl std::fmt::Debug for RuntimeContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeContext")
@@ -133,7 +91,6 @@ impl Clone for RuntimeContext {
             provider: self.provider.clone(),
             model: self.model.clone(),
             debug_enabled: self.debug_enabled,
-            context_provider: self.context_provider.clone(),
         }
     }
 }
@@ -156,7 +113,6 @@ impl RuntimeContext {
         provider: String,
         model: String,
         debug_enabled: bool,
-        context_provider: Arc<dyn ContextProvider>,
     ) -> Self {
         let session_id = session_id.unwrap_or_else(generate_session_id);
         let request_id = request_id.unwrap_or_else(generate_request_id);
@@ -172,7 +128,6 @@ impl RuntimeContext {
             provider,
             model,
             debug_enabled,
-            context_provider,
         }
     }
 
@@ -240,10 +195,7 @@ impl RuntimeContext {
     pub fn get_model(&self) -> &str {
         &self.model
     }
-
-    pub fn get_context_provider(&self) -> Arc<dyn ContextProvider> {
-        self.context_provider.clone()
-    }
+   
 }
 
 impl RuntimeContext {

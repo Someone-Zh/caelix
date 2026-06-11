@@ -30,9 +30,6 @@ impl AgentHook for MessageBusHook {
             "message_bus_hook: RuntimeContext 未在当前协程作用域中设置，请通过 with_runtime_ctx 绑定上下文后再调用钩子",
         );
 
-        let context_provider = runtime_ctx.get_context_provider();
-        let message_sender = context_provider.get_message_sender();
-
         // 获取最新的消息（最后一条）
         if let Some(latest_msg) = ctx.messages.last() {
             // 将整个 ChatMessage 序列化为 JSON 字符串，保留角色、工具调用等完整信息

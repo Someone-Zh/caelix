@@ -68,7 +68,12 @@ impl DelegateTaskTool {
         // 2. 获取 Provider
         let provider_name = RuntimeContext::try_current()
             .map(|c| c.get_provider().to_string())
-            .unwrap_or_else(|| self.ctx.default_provider.clone());
+            .expect(&format!(
+                        "[{}:{}] {} 没有提供提供者",
+                        file!(),
+                        line!(),
+                        function_name!()
+                    ).to_string());
 
         let provider_mgr = self.ctx.llm_provider_manager.read().await;
         let all_providers = provider_mgr.get_all_providers();

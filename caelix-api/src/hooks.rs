@@ -451,19 +451,3 @@ impl Default for HookRegistry {
         Self::new()
     }
 }
-
-/// HookExecutor trait 实现 - 提供统一的钩子执行接口
-#[async_trait]
-impl crate::context::HookExecutor for HookRegistry {
-    async fn execute_message_update(&self, ctx: &MessageUpdateContext) -> Result<()> {
-        Self::execute_message_update(self, ctx).await
-    }
-
-    async fn execute_pre_tool_exec(&self, ctx: &mut PreToolExecContext) -> Result<()> {
-        Self::execute_pre_tool_exec(self, ctx).await
-    }
-
-    async fn execute_post_tool_exec(&self, ctx: &mut PostToolExecContext) -> Result<()> {
-        Self::execute_post_tool_exec(self, ctx).await
-    }
-}

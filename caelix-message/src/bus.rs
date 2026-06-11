@@ -67,19 +67,3 @@ impl MessageBus {
         self.task_sender.subscribe()
     }
 }
-
-// ==================== 实现 MessageSender trait ====================
-
-impl caelix_api::context::MessageSender for MessageBus {
-    fn send_agent(&self, message: caelix_api::message::AgentMessage) -> Result<(), anyhow::Error> {
-        // 直接使用，无需转换（类型已统一）
-        Self::send_agent(self, message)
-            .map_err(|e| anyhow::anyhow!("Failed to send agent message: {}", e))
-    }
-
-    fn send_task(&self, message: caelix_api::message::TaskMessage) -> Result<(), anyhow::Error> {
-        // 直接使用，无需转换（类型已统一）
-        Self::send_task(self, message)
-            .map_err(|e| anyhow::anyhow!("Failed to send task message: {}", e))
-    }
-}

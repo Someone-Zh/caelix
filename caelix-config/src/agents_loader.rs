@@ -1,10 +1,9 @@
 use crate::skills_loader::parse_yaml_markdown_file;
 use caelix_api::agent::AgentSpec;
-use caelix_api::managers::{AgentRegistryError, ToolManager};
+use caelix_api::managers::{ToolManager};
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Agent 配置的 YAML 部分
 #[derive(Debug, Deserialize)]
@@ -78,39 +77,4 @@ pub async fn load_agents_from_directory(
     Ok(agents)
 }
 
-/// 注册所有角色智能体到注册中心（从指定目录加载）
-///
-/// 注意：此函数需要一个工厂函数来将 AgentSpec 转换为 Arc<dyn Agent>
-pub async fn register_all_agents<F, T>(
-    context: &T,
-    directory_path: &str,
-    agent_factory: F,
-) -> Result<(), AgentRegistryError>
-where
-    F: Fn(Arc<AgentSpec>) -> Arc<dyn caelix_api::agent::Agent>,
-    T: HasAgentManager + HasToolManager,
-{
-    let agent_manager = context.get_agent_manager();
-    let tool_manager = context.get_tool_manager();
 
-    let agents = load_agents_from_directory(directory_path, &tool_manager)
-        .await
-        .map_err(AgentRegistryError::LoadError)?;
-
-    for agent_spec in agents {
-        let agent = agent_factory(Arc::new(agent_spec));
-        agent_manager.register(agent).await?;
-    }
-
-    Ok(())
-}
-
-/// Trait for accessing AgentManager
-pub trait HasAgentManager {
-    fn get_agent_manager(&self) -> Arc<caelix_api::managers::AgentManager>;
-}
-
-/// Trait for accessing ToolManager
-pub trait HasToolManager {
-    fn get_tool_manager(&self) -> Arc<ToolManager>;
-}

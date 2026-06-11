@@ -1,4 +1,3 @@
-use caelix_api::context::{ContextProvider, HookExecutor, MessageSender};
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
 };
@@ -40,10 +39,7 @@ pub struct CaelixContext {
     pub task_manager: Option<Arc<TaskManager>>,
     /// 安全检查器实例
     pub security_checker: Arc<SecurityChecker>,
-    /// 默认 Provider 名称
-    pub default_provider: String,
-    /// 默认模型名称
-    pub default_model: String,
+
 }
 
 impl CaelixContext {
@@ -80,8 +76,6 @@ impl CaelixContext {
             security_checker: Arc::new(SecurityChecker::new(
                 caelix_security::SecurityConfig::default(),
             )),
-            default_provider: String::new(),
-            default_model: String::new(),
         }
     }
 
@@ -122,7 +116,6 @@ impl CaelixContext {
                 }
             }
         }
-        self.update_defaults().await;
 
         // 4. 插件 → 技能管理器（必须在钩子之前加载，因为钩子会依赖技能）
         for plugin in self.plugin_registry.skill_plugins().await {
@@ -176,14 +169,7 @@ impl CaelixContext {
 
         Ok(())
     }
-
-    async fn update_defaults(&mut self) {
-        let providers = self.llm_provider_manager.read().await.get_all_providers();
-        if let Some((provider_name, provider)) = providers.first() {
-            self.default_provider = provider_name.clone();
-            self.default_model = provider.config().default_model().to_string();
-        }
-    }
+    
 }
 
 impl Default for CaelixContext {
@@ -192,27 +178,3 @@ impl Default for CaelixContext {
     }
 }
 
-/// 为 CaelixContext 实现 HasAgentManager trait
-impl caelix_config::agents_loader::HasAgentManager for CaelixContext {
-    fn get_agent_manager(&self) -> Arc<AgentManager> {
-        self.agent_manager.clone()
-    }
-}
-
-/// 为 CaelixContext 实现 HasToolManager trait
-impl caelix_config::agents_loader::HasToolManager for CaelixContext {
-    fn get_tool_manager(&self) -> Arc<ToolManager> {
-        self.tool_manager.clone()
-    }
-}
-
-/// 为 CaelixContext 实现 ContextProvider trait
-impl ContextProvider for CaelixContext {
-    fn get_hook_executor(&self) -> Arc<dyn HookExecutor> {
-        self.hook_registry.clone()
-    }
-
-    fn get_message_sender(&self) -> Arc<dyn MessageSender> {
-        self.message_bus.clone()
-    }
-}

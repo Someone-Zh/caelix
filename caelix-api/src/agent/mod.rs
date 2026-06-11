@@ -115,5 +115,11 @@ pub trait Agent: Send + Sync {
         llm_provider: Arc<dyn LlmProvider>,
         config: &LlmConfig,
     ) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
+    
     fn get_spec(&self) -> Arc<AgentSpec>;
+
+    // fn update_messages(){
+    //    let context = crate::context::RuntimeContext::try_current().expect("Agent.update_messages not found ctx");
+    //    context.get_context_provider()
+    // }
 }
