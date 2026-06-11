@@ -152,59 +152,6 @@ impl HookContext {
     }
 }
 
-/// 基础上下文，所有阶段共享
-#[derive(Debug, Clone)]
-pub struct BaseContext {
-    pub session_id: String,
-    pub request_id: String,
-    pub span_id: String,
-    pub agent_name: String,
-    pub agent_group: Option<String>,
-}
-
-/// 消息更新上下文
-#[derive(Debug, Clone)]
-pub struct MessageUpdateContext {
-    pub base: BaseContext,
-    pub messages: std::sync::Arc<Vec<crate::provider::ChatMessage>>,
-}
-
-/// 工具执行前上下文
-#[derive(Debug, Clone)]
-pub struct PreToolExecContext {
-    pub base: BaseContext,
-    pub tool_name: String,
-    pub tool_args: serde_json::Value,
-}
-
-/// 工具执行后上下文（可修改结果）
-#[derive(Debug, Clone)]
-pub struct PostToolExecContext {
-    pub base: BaseContext,
-    pub tool_name: String,
-    pub tool_args: serde_json::Value,
-    pub tool_result: ToolResult,
-}
-
-/// Init阶段上下文
-pub struct InitContext<'a> {
-    pub base: BaseContext,
-    pub agent_spec: &'a mut AgentSpec,
-}
-
-/// Pre阶段上下文
-pub struct PreContext<'a> {
-    pub base: BaseContext,
-    pub messages: &'a mut Vec<ChatMessage>,
-}
-
-/// Post阶段上下文
-pub struct PostContext<'a> {
-    pub base: BaseContext,
-    pub input_messages: &'a [ChatMessage],
-    pub output_chunks: &'a [AgentOutputChunk],
-}
-
 /// Hook阶段枚举
 #[derive(Debug, Clone)]
 pub enum HookStage {
@@ -213,11 +160,59 @@ pub enum HookStage {
     Post,
 }
 
+/// 消息更新上下文
+#[derive(Debug, Clone)]
+pub struct MessageUpdateContext {
+    pub messages: std::sync::Arc<Vec<crate::provider::ChatMessage>>,
+    pub agent_name: String,
+    pub agent_group: Option<String>,
+}
+
+/// 工具执行前上下文
+#[derive(Debug, Clone)]
+pub struct PreToolExecContext {
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub agent_name: String,
+    pub agent_group: Option<String>,
+}
+
+/// 工具执行后上下文（可修改结果）
+#[derive(Debug, Clone)]
+pub struct PostToolExecContext {
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub tool_result: ToolResult,
+    pub agent_name: String,
+    pub agent_group: Option<String>,
+}
+
+/// Init阶段上下文
+pub struct InitContext<'a> {
+    pub agent_spec: &'a mut AgentSpec,
+}
+
+/// Pre阶段上下文
+pub struct PreContext<'a> {
+    pub messages: &'a mut Vec<ChatMessage>,
+    pub agent_name: String,
+    pub agent_group: Option<String>,
+}
+
+/// Post阶段上下文
+pub struct PostContext<'a> {
+    pub input_messages: &'a [ChatMessage],
+    pub output_chunks: &'a [AgentOutputChunk],
+    pub agent_name: String,
+    pub agent_group: Option<String>,
+}
+
 /// Error阶段上下文
 pub struct ErrorContext {
-    pub base: BaseContext,
     pub error: anyhow::Error,
     pub stage: HookStage,
+    pub agent_name: String,
+    pub agent_group: Option<String>,
 }
 
 /// Agent增强钩子trait
@@ -385,7 +380,7 @@ impl HookRegistry {
         session_id: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> = self.init_hooks.read().await;
-        let session_id = session_id.unwrap_or("init").to_string();
+        let _session_id = session_id.unwrap_or("init");
 
         for obj in hooks.iter() {
             let hook: &dyn AgentHook = &**obj;
@@ -393,18 +388,7 @@ impl HookRegistry {
                 &agent_spec.name,
                 agent_spec.group.as_ref().map(|s| s.as_str()),
             ) {
-                let base_ctx = BaseContext {
-                    session_id: session_id.clone(),
-                    request_id: format!("{}-init", session_id),
-                    span_id: format!("{}-init", session_id),
-                    agent_name: agent_spec.name.clone(),
-                    agent_group: agent_spec.group.as_ref().map(|g| g.to_string()),
-                };
-
-                let mut init_ctx = InitContext {
-                    base: base_ctx,
-                    agent_spec,
-                };
+                let mut init_ctx = InitContext { agent_spec };
 
                 hook.on_init(&mut init_ctx).await?;
             }
@@ -422,7 +406,7 @@ impl HookRegistry {
             self.message_update_hooks.read().await;
         for obj in hooks.iter() {
             let hook: &dyn AgentHook = &**obj;
-            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+            if hook.should_apply(&ctx.agent_name, ctx.agent_group.as_deref()) {
                 hook.on_message_update(ctx).await?;
             }
         }
@@ -438,7 +422,7 @@ impl HookRegistry {
             self.pre_tool_exec_hooks.read().await;
         for obj in hooks.iter() {
             let hook: &dyn AgentHook = &**obj;
-            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+            if hook.should_apply(&ctx.agent_name, ctx.agent_group.as_deref()) {
                 hook.on_pre_tool_exec(ctx).await?;
             }
         }
@@ -454,7 +438,7 @@ impl HookRegistry {
             self.post_tool_exec_hooks.read().await;
         for obj in hooks.iter() {
             let hook: &dyn AgentHook = &**obj;
-            if hook.should_apply(&ctx.base.agent_name, ctx.base.agent_group.as_deref()) {
+            if hook.should_apply(&ctx.agent_name, ctx.agent_group.as_deref()) {
                 hook.on_post_tool_exec(ctx).await?;
             }
         }

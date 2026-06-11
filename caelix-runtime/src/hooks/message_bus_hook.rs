@@ -25,6 +25,14 @@ impl AgentHook for MessageBusHook {
     }
 
     async fn on_message_update(&self, ctx: &MessageUpdateContext) -> Result<(), anyhow::Error> {
+        // 从全局 task_local 的 RuntimeContext 获取运行时信息（session/request/span/trace id）
+        let runtime_ctx = RuntimeContext::try_current().expect(
+            "message_bus_hook: RuntimeContext 未在当前协程作用域中设置，请通过 with_runtime_ctx 绑定上下文后再调用钩子",
+        );
+
+        let context_provider = runtime_ctx.get_context_provider();
+        let message_sender = context_provider.get_message_sender();
+
         // 获取最新的消息（最后一条）
         if let Some(latest_msg) = ctx.messages.last() {
             // 将整个 ChatMessage 序列化为 JSON 字符串，保留角色、工具调用等完整信息
@@ -37,31 +45,22 @@ impl AgentHook for MessageBusHook {
                 }
             };
 
-            // 创建 AgentMessage
+            // 创建 AgentMessage —— session/request/span/trace 全部来自 RuntimeContext
             let agent_msg = AgentMessage {
-                session_id: ctx.base.session_id.clone(),
-                request_id: ctx.base.request_id.clone(),
-                span_id: ctx.base.span_id.clone(),
-                trace_id: RuntimeContext::try_current()
-                    .map(|ctx| ctx.get_trace_id().to_string())
-                    .unwrap_or_default(),
+                session_id: runtime_ctx.get_session_id().to_string(),
+                request_id: runtime_ctx.get_request_id().to_string(),
+                span_id: runtime_ctx.get_span_id().to_string(),
+                trace_id: runtime_ctx.get_trace_id().to_string(),
                 r#type: AgentMessageType::Msg,
                 timestamp: Utc::now(),
                 content: content_json,
-                agent_name: Some(ctx.base.agent_name.clone()),
+                agent_name: Some(ctx.agent_name.clone()),
             };
 
-            // 通过 RuntimeContext 获取 ContextProvider 和 MessageSender
-            if let Some(runtime_ctx) = RuntimeContext::try_current() {
-                let context_provider = runtime_ctx.get_context_provider();
-                let message_sender = context_provider.get_message_sender();
-                // 发送消息到消息总线
-                // SessionManager 的存储消费者会自动持久化 Msg 类型的消息
-                if let Err(e) = message_sender.send_agent(agent_msg.clone()) {
-                    eprintln!("Warning: Failed to send message to bus: {}", e);
-                }
-            } else {
-                eprintln!("Warning: No runtime context available for message bus hook");
+            // 发送消息到消息总线
+            // SessionManager 的存储消费者会自动持久化 Msg 类型的消息
+            if let Err(e) = message_sender.send_agent(agent_msg) {
+                eprintln!("Warning: Failed to send message to bus: {}", e);
             }
         }
 

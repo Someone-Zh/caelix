@@ -95,70 +95,36 @@ impl CaelixContext {
         self.plugin_registry.register_plugins(plugins).await;
     }
 
-    /// 初始化提供商配置
-    /// 通过插件加载提供商并注册到 llm_provider_manager 中
-    pub async fn init_provider(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let caelix_home = &self.env_config.caelix_home;
-        let _configs = caelix_config::provider_loader::load_provider_configs(caelix_home)?;
+    /// 初始化整个应用上下文
+    /// 插件是贡献物的唯一来源（Single Source of Truth）。
+    /// 本方法只做两件事：1）从插件中读取贡献物并注册到各管理器；2）执行生命周期操作（安全配置、任务恢复、默认值）。
+    pub async fn init(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // 1. 加载安全配置
+        let security_config =
+            caelix_security::loader::load_security_config(&self.env_config.caelix_home)?;
+        self.security_checker = Arc::new(SecurityChecker::new(security_config));
+        println!("✅ Security checker initialized");
 
-        let mut provider_manager = self.llm_provider_manager.write().await;
-        for plugin in self.plugin_registry.llm_provider_plugins().await {
-            for named_provider in plugin.llm_providers().await? {
-                provider_manager.add_provider(named_provider.name, named_provider.provider)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// 初始化工具管理器
-    /// 通过插件加载工具并注册到 tool_manager 中
-    pub async fn init_tools(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // 2. 插件 → 工具管理器
         for plugin in self.plugin_registry.tool_plugins().await {
             for tool in plugin.tools().await? {
                 self.tool_manager.register(tool).await;
             }
         }
 
-        Ok(())
-    }
-
-    /// 初始化智能体管理器
-    /// 通过插件加载所有智能体，并在注册前应用 init-hooks
-    pub async fn init_agents(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let agents_dir = self.env_config.caelix_home.join("agents");
-
-        if !agents_dir.exists() {
-            std::fs::create_dir_all(&agents_dir)?;
-            println!("Creating agents directory at: {:?}", agents_dir);
-            println!("Please add .agent files to this directory");
-        }
-
-        for plugin in self.plugin_registry.agent_plugins().await {
-            for agent in plugin.agent_instances().await? {
-                self.agent_manager.register(agent).await?;
+        // 3. 插件 → LLM Provider 管理器
+        {
+            let mut provider_manager = self.llm_provider_manager.write().await;
+            for plugin in self.plugin_registry.llm_provider_plugins().await {
+                for named_provider in plugin.llm_providers().await? {
+                    provider_manager
+                        .add_provider(named_provider.name, named_provider.provider)?;
+                }
             }
         }
+        self.update_defaults().await;
 
-        Ok(())
-    }
-
-    /// 初始化技能管理器
-    /// 通过本地 skill 文件和插件加载所有技能
-    pub async fn init_skills(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let skills_dir = self.env_config.caelix_home.join("skills");
-
-        if !skills_dir.exists() {
-            std::fs::create_dir_all(&skills_dir)?;
-            println!("Creating skills directory at: {:?}", skills_dir);
-        }
-
-        caelix_config::skills_loader::register_all_skills(
-            &skills_dir.to_string_lossy(),
-            &self.skill_manager,
-        )
-        .await?;
-
+        // 4. 插件 → 技能管理器（必须在钩子之前加载，因为钩子会依赖技能）
         for plugin in self.plugin_registry.skill_plugins().await {
             for skill_def in plugin.skills().await? {
                 let skill = Skill::new(
@@ -167,83 +133,39 @@ impl CaelixContext {
                     skill_def.description,
                     skill_def.content,
                 );
-                self.skill_manager.register(skill).await?;
+                if let Err(e) = self.skill_manager.register(skill).await {
+                    eprintln!("⚠️  注册技能失败: {:?}", e);
+                }
             }
         }
 
-        Ok(())
-    }
-
-    /// 初始化钩子系统
-    /// 通过插件加载钩子并注册到 HookRegistry
-    pub async fn init_hooks(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // 5. 插件 → 钩子管理器（必须在 agents 之前，因为 agents 注册时会应用 init-hooks）
         for plugin in self.plugin_registry.hook_plugins().await {
             for hook in plugin.agent_hooks().await? {
                 self.hook_registry.register_hook(hook).await;
             }
         }
 
-        Ok(())
-    }
-
-    /// 初始化命令管理器
-    /// 通过本地 command 文件和插件加载所有命令
-    pub async fn init_commands(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let commands_dir = self.env_config.caelix_home.join("commands");
-
-        if !commands_dir.exists() {
-            std::fs::create_dir_all(&commands_dir)?;
-            println!("Creating commands directory at: {:?}", commands_dir);
+        // 6. 插件 → 智能体管理器（插件内部已完成文件加载 + init-hooks 应用 + LoopAgent 包装）
+        for plugin in self.plugin_registry.agent_plugins().await {
+            for agent in plugin.agent_instances().await? {
+                if let Err(e) = self.agent_manager.register(agent).await {
+                    eprintln!("⚠️  注册智能体失败: {:?}", e);
+                }
+            }
         }
 
-        caelix_config::commands_loader::register_all_commands(
-            &commands_dir.to_string_lossy(),
-            &self.command_manager,
-        )
-        .await?;
-
+        // 7. 插件 → 命令管理器
         for plugin in self.plugin_registry.command_plugins().await {
             let commands = plugin.commands().await?;
             self.command_manager.register_batch(commands).await;
         }
-
         println!(
-            "Commands loaded. Total commands: {}",
+            "✅ Commands loaded. Total: {}",
             self.command_manager.get_all().await.len()
         );
 
-        Ok(())
-    }
-
-    pub async fn init(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // 加载安全配置
-        let security_config =
-            caelix_security::loader::load_security_config(&self.env_config.caelix_home)?;
-
-        // 重新创建 SecurityChecker
-        self.security_checker = Arc::new(SecurityChecker::new(security_config));
-        println!("✅ Security checker initialized");
-
-        // 初始化工具
-        self.init_tools().await?;
-
-        // 初始化提供商
-        self.init_provider().await?;
-        self.update_defaults().await;
-
-        // 初始化技能（必须在钩子之前）
-        self.init_skills().await?;
-
-        // 初始化钩子（必须在agents之前，因为agents注册时需要应用init-hooks）
-        self.init_hooks().await?;
-
-        // 初始化智能体（会自动应用init-hooks进行增强）
-        self.init_agents().await?;
-
-        // 初始化命令
-        self.init_commands().await?;
-
-        // 恢复持久化的任务
+        // 8. 恢复持久化的任务
         if let Some(tm) = &self.task_manager {
             if let Err(e) = tm.restore().await {
                 eprintln!("⚠️  恢复任务失败: {:?}", e);
