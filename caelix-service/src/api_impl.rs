@@ -244,23 +244,10 @@ impl CaelixApi for CaelixApiImpl {
             }
         };
 
-        // 获取任务列表
+        // 获取任务列表（TaskMeta 现在已经是 caelix_api::task::TaskMeta）
         let task_metas = task_manager.list_tasks(session_id).await;
 
-        // 转换为 caelix_api::task::TaskMeta
-        let api_task_metas = task_metas
-            .into_iter()
-            .map(|tm| TaskMeta {
-                id: tm.task_id,
-                kind: tm.kind,
-                status: tm.status,
-                created_at: tm.created_at,
-                updated_at: tm.updated_at,
-                payload: tm.task_payload,
-            })
-            .collect();
-
-        Ok(api_task_metas)
+        Ok(task_metas)
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ApiError> {

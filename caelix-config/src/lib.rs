@@ -59,3 +59,14 @@ impl Default for EnvConfig {
         Self::new()
     }
 }
+
+// 实现 caelix-api 中定义的 EnvConfigTrait
+impl caelix_api::context::EnvConfigTrait for EnvConfig {
+    fn caelix_home(&self) -> &std::path::Path {
+        &self.caelix_home
+    }
+
+    fn debug_enabled(&self) -> bool {
+        self.debug_enabled
+    }
+}

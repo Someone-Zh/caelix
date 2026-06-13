@@ -67,3 +67,27 @@ impl MessageBus {
         self.task_sender.subscribe()
     }
 }
+
+// 实现 caelix-api 中定义的 MessageBusTrait
+impl caelix_api::message::MessageBusTrait for MessageBus {
+    fn send_agent(&self, msg: AgentMessage) -> Result<(), String> {
+        self.agent_sender
+            .send(msg)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn send_notification(&self, msg: NotificationMessage) -> Result<(), String> {
+        self.notification_sender
+            .send(msg)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn send_task(&self, msg: TaskMessage) -> Result<(), String> {
+        self.task_sender
+            .send(msg)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

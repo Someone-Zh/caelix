@@ -3,8 +3,114 @@
 //! 定义轻量级的接口 trait，允许运行时层通过统一接口访问配置层的组件，
 //! 避免 caelix-runtime 直接依赖 caelix-config
 use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use async_trait::async_trait;
+use tokio::sync::RwLock;
 use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
+use crate::message::{MessageBusTrait, SessionManagerTrait};
+use crate::task::TaskManagerTrait;
+use crate::managers::{AgentManager, ProviderManager, SkillManager, ToolManager, CommandManager};
+use crate::plugins::PluginManager;
+use crate::hooks::HookRegistry;
+
+// ==================== 全局唯一 CaelixContext 存储 ====================
+
+/// 全局存储 ContextProvider 的静态变量
+static CAELIX_CONTEXT: OnceLock<Arc<dyn ContextProvider>> = OnceLock::new();
+
+/// 设置全局 CaelixContext（程序启动时调用一次）
+pub fn set_caelix_context(ctx: Arc<dyn ContextProvider>) {
+    let _ = CAELIX_CONTEXT.set(ctx);
+}
+
+/// 获取全局 CaelixContext（如果已初始化）
+pub fn caelix_context() -> Arc<dyn ContextProvider> {
+    CAELIX_CONTEXT
+        .get()
+        .expect("CaelixContext 未初始化，请在程序启动时调用 set_caelix_context")
+        .clone()
+}
+
+/// 安全地获取全局 CaelixContext（如果未初始化则返回 None）
+pub fn try_caelix_context() -> Option<Arc<dyn ContextProvider>> {
+    CAELIX_CONTEXT.get().cloned()
+}
+
+// ==================== EnvConfig Trait ====================
+
+/// 环境配置 Trait
+///
+/// 暴露 CAELIX_HOME 路径与 debug 开关。
+/// 具体实现位于 `caelix-config` 包中。
+pub trait EnvConfigTrait: Send + Sync {
+    /// 获取 CAELIX_HOME 目录路径
+    fn caelix_home(&self) -> &Path;
+
+    /// 是否启用 debug 模式
+    fn debug_enabled(&self) -> bool;
+}
+
+impl std::fmt::Debug for dyn EnvConfigTrait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvConfigTrait")
+            .field("caelix_home", &self.caelix_home())
+            .field("debug_enabled", &self.debug_enabled())
+            .finish()
+    }
+}
+
+// ==================== SecurityChecker Trait ====================
+
+/// 安全检查 Trait
+///
+/// 提供文件路径和 URL 的安全检查。
+/// 具体实现位于 `caelix-security` 包中。
+#[async_trait]
+pub trait SecurityCheckerTrait: Send + Sync {
+    /// 检查文件路径是否安全（不在黑名单中）
+    async fn check_path(&self, path: &str) -> Result<(), String>;
+
+    /// 检查 URL 是否安全（不在黑名单中）
+    async fn check_url(&self, url: &str) -> Result<(), String>;
+}
+
+impl std::fmt::Debug for dyn SecurityCheckerTrait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityCheckerTrait").finish()
+    }
+}
+
+// ==================== ContextProvider Trait ====================
+
+/// 统一的上下文入口 Trait
+///
+/// 通过这个 Trait，可以跨包访问 AgentManager、ToolManager、SessionManager、
+/// MessageBus、TaskManager、SecurityChecker 等所有核心组件。
+///
+/// 具体实现位于 `caelix-runtime` 包中的 `CaelixContext`。
+#[async_trait]
+pub trait ContextProvider: Send + Sync {
+    fn env_config(&self) -> &dyn EnvConfigTrait;
+    fn agent_manager(&self) -> &AgentManager;
+    fn tool_manager(&self) -> &ToolManager;
+    fn llm_provider_manager(&self) -> &Arc<RwLock<ProviderManager>>;
+    fn session_manager(&self) -> Arc<dyn SessionManagerTrait>;
+    fn skill_manager(&self) -> &SkillManager;
+    fn command_manager(&self) -> &CommandManager;
+    fn hook_registry(&self) -> &HookRegistry;
+    fn plugin_manager(&self) -> Arc<dyn PluginManager>;
+    fn message_bus(&self) -> Arc<dyn MessageBusTrait>;
+    fn task_manager(&self) -> Option<Arc<dyn TaskManagerTrait>>;
+    fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait>;
+}
+
+impl std::fmt::Debug for dyn ContextProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContextProvider").finish()
+    }
+}
 
 // ==================== Task Local 存储 ====================
 

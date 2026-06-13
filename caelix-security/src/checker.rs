@@ -147,3 +147,23 @@ impl SecurityChecker {
         *self.url_checker.write().await = UrlChecker::new(url_config);
     }
 }
+
+// 实现 caelix-api 中定义的 SecurityCheckerTrait
+#[async_trait::async_trait]
+impl caelix_api::context::SecurityCheckerTrait for SecurityChecker {
+    async fn check_path(&self, path: &str) -> Result<(), String> {
+        if self.is_path_safe(path).await {
+            Ok(())
+        } else {
+            Err(format!("Path '{}' is not allowed (security policy)", path))
+        }
+    }
+
+    async fn check_url(&self, url: &str) -> Result<(), String> {
+        if self.is_url_safe(url).await {
+            Ok(())
+        } else {
+            Err(format!("URL '{}' is not allowed (security policy)", url))
+        }
+    }
+}

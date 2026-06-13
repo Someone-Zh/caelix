@@ -471,3 +471,77 @@ impl SessionManager {
         // 目前由于 Msg 是实时持久化的，只需要短暂等待即可
     }
 }
+
+// 实现 caelix-api 中定义的 SessionManagerTrait
+#[async_trait::async_trait]
+impl caelix_api::message::SessionManagerTrait for SessionManager {
+    async fn subscribe_agent(
+        &self,
+        session_id: String,
+    ) -> Result<
+        (
+            Vec<caelix_api::message::AgentMessage>,
+            std::pin::Pin<Box<dyn futures::Stream<Item = Result<caelix_api::message::AgentMessage, String>> + Send>>,
+        ),
+        String,
+    > {
+        let (history, stream) = self
+            .subscribe_agent(session_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mapped = stream.map(|item| item.map_err(|e| e.to_string()));
+        Ok((history, Box::pin(mapped)))
+    }
+
+    async fn subscribe_notification(
+        &self,
+        session_id: String,
+    ) -> Result<
+        (
+            Vec<caelix_api::message::NotificationMessage>,
+            std::pin::Pin<Box<dyn futures::Stream<Item = Result<caelix_api::message::NotificationMessage, String>> + Send>>,
+        ),
+        String,
+    > {
+        let (history, stream) = self
+            .subscribe_notification(session_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mapped = stream.map(|item| item.map_err(|e| e.to_string()));
+        Ok((history, Box::pin(mapped)))
+    }
+
+    async fn subscribe_task(
+        &self,
+        session_id: String,
+    ) -> Result<
+        (
+            Vec<caelix_api::message::TaskMessage>,
+            std::pin::Pin<Box<dyn futures::Stream<Item = Result<caelix_api::message::TaskMessage, String>> + Send>>,
+        ),
+        String,
+    > {
+        let (history, stream) = self
+            .subscribe_task(session_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mapped = stream.map(|item| item.map_err(|e| e.to_string()));
+        Ok((history, Box::pin(mapped)))
+    }
+
+    async fn get_session_state(&self, session_id: &str) -> String {
+        format!("{:?}", self.states.read().await.get(session_id).cloned())
+    }
+
+    async fn session_exists(&self, session_id: &str) -> bool {
+        self.states.read().await.contains_key(session_id)
+    }
+
+    async fn list_sessions(&self) -> Vec<String> {
+        self.states.read().await.keys().cloned().collect()
+    }
+
+    fn bus(&self) -> std::sync::Arc<dyn caelix_api::message::MessageBusTrait> {
+        Arc::new(self.bus.clone())
+    }
+}

@@ -54,10 +54,13 @@ impl AgentHook for MessageBusHook {
                 agent_name: Some(ctx.agent_name.clone()),
             };
 
-            // 发送消息到消息总线
-            // SessionManager 的存储消费者会自动持久化 Msg 类型的消息
-            if let Err(e) = message_sender.send_agent(agent_msg) {
-                eprintln!("Warning: Failed to send message to bus: {}", e);
+            // 通过全局 CaelixContext 获取消息总线并发送消息
+            if let Some(ctx_provider) = caelix_api::context::try_caelix_context() {
+                if let Err(e) = ctx_provider.message_bus().send_agent(agent_msg) {
+                    eprintln!("Warning: Failed to send message to bus: {}", e);
+                }
+            } else {
+                eprintln!("Warning: CaelixContext 尚未初始化，无法发送消息到总线");
             }
         }
 

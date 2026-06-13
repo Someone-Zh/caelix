@@ -69,10 +69,9 @@ impl DelegateTaskTool {
         let provider_name = RuntimeContext::try_current()
             .map(|c| c.get_provider().to_string())
             .expect(&format!(
-                        "[{}:{}] {} 没有提供提供者",
+                        "[{}:{}] prepare_agent_exec 没有提供提供者",
                         file!(),
                         line!(),
-                        function_name!()
                     ).to_string());
 
         let provider_mgr = self.ctx.llm_provider_manager.read().await;
@@ -86,7 +85,7 @@ impl DelegateTaskTool {
         // 3. 获取 Model Config
         let mut model_name = RuntimeContext::try_current()
             .map(|c| c.get_model().to_string())
-            .unwrap_or_else(|| self.ctx.default_model.clone());
+            .unwrap_or_else(|| provider.config().default_model().to_string());
         if model_name.is_empty() {
             model_name = provider.config().default_model().to_string();
         }

@@ -478,3 +478,46 @@ impl TaskManager {
         Self::send_status_update_static(meta, &self.bus).await;
     }
 }
+
+// 实现 caelix-api 中定义的 TaskManagerTrait
+#[async_trait::async_trait]
+impl caelix_api::task::TaskManagerTrait for TaskManager {
+    async fn submit(
+        &self,
+        tool_call_id: Option<String>,
+        task_name: Option<String>,
+        kind: caelix_api::task::TaskKind,
+        runnable: Box<dyn caelix_api::task::Runnable>,
+    ) -> caelix_api::task::TaskId {
+        self.submit(tool_call_id, task_name, kind, runnable).await
+    }
+
+    async fn cancel(&self, task_id: caelix_api::task::TaskId) -> bool {
+        self.cancel(task_id).await
+    }
+
+    async fn get_status(&self, task_id: &caelix_api::task::TaskId) -> Option<TaskMeta> {
+        self.get_status(task_id).await
+    }
+
+    async fn list_tasks(&self, filter_session: Option<&str>) -> Vec<TaskMeta> {
+        self.list_tasks(filter_session).await
+    }
+
+    async fn update_progress(&self, task_id: caelix_api::task::TaskId, progress: f32) -> bool {
+        self.update_progress(task_id, progress).await
+    }
+
+    async fn update_todo_status(
+        &self,
+        task_id: caelix_api::task::TaskId,
+        new_status: caelix_api::task::TaskStatus,
+        result: Option<String>,
+    ) -> bool {
+        self.update_todo_status(task_id, new_status, result).await
+    }
+
+    async fn restore(&self) -> Result<(), String> {
+        self.restore().await.map_err(|e| e.to_string())
+    }
+}

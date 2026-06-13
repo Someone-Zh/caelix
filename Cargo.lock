@@ -415,6 +415,8 @@ dependencies = [
 name = "caelix-security"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "caelix-api",
  "caelix-config",
  "glob",
  "serde",

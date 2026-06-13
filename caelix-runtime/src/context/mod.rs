@@ -1,7 +1,10 @@
+use caelix_api::context::{ContextProvider, EnvConfigTrait, SecurityCheckerTrait, set_caelix_context};
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
 };
+use caelix_api::message::{MessageBusTrait, SessionManagerTrait};
 use caelix_api::plugins::{PluginManager, PluginRegistry};
+use caelix_api::task::TaskManagerTrait;
 use caelix_config::EnvConfig;
 use caelix_message::{FileStorage, MessageBus, SessionManager};
 use caelix_security::SecurityChecker;
@@ -39,7 +42,6 @@ pub struct CaelixContext {
     pub task_manager: Option<Arc<TaskManager>>,
     /// 安全检查器实例
     pub security_checker: Arc<SecurityChecker>,
-
 }
 
 impl CaelixContext {
@@ -167,9 +169,64 @@ impl CaelixContext {
             }
         }
 
+        // 9. 将自身注册为全局唯一上下文
+        let ctx_arc: Arc<dyn ContextProvider> = Arc::new(self.clone());
+        set_caelix_context(ctx_arc);
+        println!("✅ CaelixContext 已注册为全局变量");
+
         Ok(())
     }
-    
+}
+
+// 实现 caelix-api 中定义的 ContextProvider trait
+impl ContextProvider for CaelixContext {
+    fn env_config(&self) -> &dyn EnvConfigTrait {
+        &self.env_config
+    }
+
+    fn agent_manager(&self) -> &AgentManager {
+        &self.agent_manager
+    }
+
+    fn tool_manager(&self) -> &ToolManager {
+        &self.tool_manager
+    }
+
+    fn llm_provider_manager(&self) -> &Arc<RwLock<ProviderManager>> {
+        &self.llm_provider_manager
+    }
+
+    fn session_manager(&self) -> Arc<dyn SessionManagerTrait> {
+        self.session_manager.clone()
+    }
+
+    fn skill_manager(&self) -> &SkillManager {
+        &self.skill_manager
+    }
+
+    fn command_manager(&self) -> &CommandManager {
+        &self.command_manager
+    }
+
+    fn hook_registry(&self) -> &HookRegistry {
+        &self.hook_registry
+    }
+
+    fn plugin_manager(&self) -> Arc<dyn PluginManager> {
+        self.plugin_registry.clone()
+    }
+
+    fn message_bus(&self) -> Arc<dyn MessageBusTrait> {
+        self.message_bus.clone()
+    }
+
+    fn task_manager(&self) -> Option<Arc<dyn TaskManagerTrait>> {
+        self.task_manager.clone().map(|tm| tm as Arc<dyn TaskManagerTrait>)
+    }
+
+    fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait> {
+        self.security_checker.clone()
+    }
 }
 
 impl Default for CaelixContext {
