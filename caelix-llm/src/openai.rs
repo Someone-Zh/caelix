@@ -153,6 +153,7 @@ impl OpenAIProvider {
                 index: b.index,
                 name: b.name.clone(),
                 arguments: Value::String(b.arguments.clone()),
+                approval_state: None,
             })
             .collect()
     }

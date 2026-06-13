@@ -81,4 +81,16 @@ pub trait CaelixApi: Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = AgentMessage> + Send>>, ApiError>;
+
+    /// 审批指定 tool_call：
+    /// - 从会话历史下方找到对应 Assistant 消息（含 tool_calls）中的指定项，
+    ///   标记其审批状态；
+    /// - 若 approved=true，则实际执行该工具并追加 tool_result；
+    /// - 若 approved=false，则追加一条拒绝文本 tool_result。
+    async fn approve_tool_call(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        approved: bool,
+    ) -> Result<(), ApiError>;
 }

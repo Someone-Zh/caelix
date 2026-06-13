@@ -12,6 +12,8 @@ pub enum AgentMessageType {
     Msg,
     ChunkEnd,
     Event,
+    /// 工具调用需人工审批：携带 tool_call_id、审批类型与参数
+    ManualApproval,
 }
 
 /// Agent 消息结构

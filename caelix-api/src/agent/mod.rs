@@ -6,11 +6,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::provider::ChatMessage;
-use crate::tool::Tool;
+use crate::tool::{Tool, ToolApprovalType};
 use crate::{AgentError, LlmConfig, LlmProvider};
 
 /// Agent 输出流分片
@@ -40,6 +41,13 @@ pub enum AgentOutputChunk {
         tool_name: String,
         result: String,
     },
+    /// 人机交互审批请求：Agent 执行到该 chunk 后应中断，等待前端批准。
+    ManualApproval {
+        tool_call_id: String,
+        tool_name: String,
+        approval_type: ToolApprovalType,
+        parameters: JsonValue,
+    },
     MessageUpdate {
         message: ChatMessage,
     },
@@ -57,6 +65,9 @@ impl std::fmt::Display for AgentOutputChunk {
             AgentOutputChunk::Content { content } => write!(f, "{}", content),
             AgentOutputChunk::ToolCall { name, .. } => write!(f, "[工具调用: {}]", name),
             AgentOutputChunk::ToolResult { result, .. } => write!(f, "{}", result),
+            AgentOutputChunk::ManualApproval { tool_name, .. } => {
+                write!(f, "[需要审批: {}]", tool_name)
+            }
             AgentOutputChunk::MessageUpdate { .. } => write!(f, ""),
             AgentOutputChunk::Finish { .. } => write!(f, ""),
         }

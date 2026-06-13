@@ -19,6 +19,15 @@ pub trait StorageBackend: Send + Sync + 'static {
     /// 读取 Session 的全部历史 Agent 消息
     async fn read_agent_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>>;
 
+    /// 替换 Session 中指定 index 的 Agent 消息（0-based）
+    /// 若 index 超出范围则将消息追加到末尾。
+    async fn replace_agent_message(
+        &self,
+        session_id: &str,
+        index: usize,
+        new_msg: &AgentMessage,
+    ) -> Result<()>;
+
     /// 保存 Session 状态快照
     async fn save_state(&self, session_id: &str, state: &SessionState) -> Result<()>;
 
@@ -153,5 +162,51 @@ impl StorageBackend for FileStorage {
         let json = fs::read_to_string(path).await?;
         let state: SessionState = serde_json::from_str(&json)?;
         Ok(Some(state))
+    }
+
+    async fn replace_agent_message(
+        &self,
+        session_id: &str,
+        index: usize,
+        new_msg: &AgentMessage,
+    ) -> Result<()> {
+        self.ensure_session_dir(session_id).await?;
+
+        let msg_path = self.get_agent_messages_path(session_id);
+        let tmp_path = msg_path.with_extension("jsonl.tmp");
+
+        // 1. 读取现有行
+        let mut lines: Vec<String> = if msg_path.exists() {
+            let file = fs::File::open(&msg_path).await?;
+            let reader = BufReader::new(file);
+            let mut out = Vec::new();
+            let mut iter = reader.lines();
+            while let Some(line) = iter.next_line().await? {
+                out.push(line);
+            }
+            out
+        } else {
+            Vec::new()
+        };
+
+        // 2. 替换或追加
+        if index >= lines.len() {
+            lines.push(serde_json::to_string(new_msg)?);
+        } else {
+            lines[index] = serde_json::to_string(new_msg)?;
+        }
+
+        // 3. 按 timestamp 排序（可选，保持顺序稳定）
+        //    由于替换了单条消息，时间戳可能不影响顺序，这里保持原顺序不动。
+
+        // 4. 原子写入 tmp -> rename
+        let content = lines
+            .into_iter()
+            .map(|l| if l.ends_with('\n') { l } else { l + "\n" })
+            .collect::<Vec<_>>()
+            .join("");
+        fs::write(&tmp_path, content).await?;
+        fs::rename(tmp_path, msg_path).await?;
+        Ok(())
     }
 }

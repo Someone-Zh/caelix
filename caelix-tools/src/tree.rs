@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use caelix_api::tool::{Tool, ToolResult};
+use caelix_api::tool::{Tool, ToolApprovalType, ToolPreCheckResult, ToolResult};
 use serde_json::{Value as JsonValue, json};
 use walkdir::WalkDir;
 
@@ -23,6 +23,14 @@ impl Tool for DirectoryTreeTool {
 
     fn description(&self) -> &str {
         "遍历目录生成文件树，可指定路径和最大深度，标注文件/文件夹类型。默认深度为1以防止数据过多，可根据需要调整max_depth（建议不超过5层）。默认忽略.git、.idea等隐藏文件夹以防止污染，如需查看请使用show_hidden参数。支持通过filter_type过滤只显示文件夹或文件"
+    }
+
+    fn pre_check(&self, input: &JsonValue) -> Option<ToolPreCheckResult> {
+        let path = input["path"].as_str().unwrap_or_default().to_string();
+        Some(ToolPreCheckResult {
+            approval_type: ToolApprovalType::Path,
+            parameters: json!({ "path": path }),
+        })
     }
 
     /// JSON 参数 schema：path(必选), max_depth(可选，默认1，最大10), show_hidden(可选，默认false), filter_type(可选，默认all)

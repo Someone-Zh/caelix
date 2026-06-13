@@ -362,21 +362,27 @@ impl CaelixApi for CaelixApiImpl {
                 }
             }
 
-            // 添加当前用户消息
-            messages.push(ChatMessage::user(request_clone.message.clone()));
+            // 如果带用户消息则添加
+            if let Some(user_message) = request_clone.message.clone() {
+                messages.push(ChatMessage::user(user_message.clone()));
 
-            // 发送用户消息到消息总线
-            let user_msg = AgentMessage {
-                session_id: request_clone.session_id.clone(),
-                request_id: request_id_clone.clone(),
-                span_id: span_id_clone.clone(), // 使用预先生成的 span_id
-                trace_id: trace_id_clone.clone(),
-                r#type: AgentMessageType::Msg,
-                timestamp: chrono::Utc::now(),
-                content: request_clone.message.clone(),
-                agent_name: request_clone.agent.clone(),
-            };
-            let _ = ctx_clone.message_bus.send_agent(user_msg);
+                // 发送用户消息到消息总线（只有带用户消息才发）
+                let user_msg = AgentMessage {
+                    session_id: request_clone.session_id.clone(),
+                    request_id: request_id_clone.clone(),
+                    span_id: span_id_clone.clone(), // 使用预先生成的 span_id
+                    trace_id: trace_id_clone.clone(),
+                    r#type: AgentMessageType::Msg,
+                    timestamp: chrono::Utc::now(),
+                    content: user_message,
+                    agent_name: request_clone.agent.clone(),
+                };
+                let _ = ctx_clone.message_bus.send_agent(user_msg);
+            } else {
+                // 恢复（resume）场景：不追加新用户消息，
+                // 若 messages 最后一条是 Assistant 且含 tool_calls，
+                // 则 LoopAgent 会进入 resume 流程继续处理工具执行
+            }
 
             // ✅ 使用 caelix_agent::run_agent（内部通过 ContextProvider 获取 message_bus 并发送消息）
             let _result = execute_agent_with_messaging(agent_spec, messages, provider, &config)
@@ -396,6 +402,228 @@ impl CaelixApi for CaelixApiImpl {
             span_id,
             session_id: request.session_id,
         })
+    }
+
+    async fn approve_tool_call(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        approved: bool,
+    ) -> Result<(), ApiError> {
+        // 1. 先从历史中找到 ChatMessage 以及 tool_call 的位置
+        let history_messages = self
+            .context
+            .session_manager
+            .get_session_messages(session_id)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+        let mut found_chat_msg: Option<(usize, ChatMessage, String, String)> = None;
+        for (msg_idx, msg) in history_messages.iter().enumerate().rev() {
+            if msg.r#type != AgentMessageType::Msg {
+                continue;
+            }
+            if let Ok(chat_msg) = serde_json::from_str::<ChatMessage>(&msg.content) {
+                if chat_msg.role != "assistant" {
+                    continue;
+                }
+                if let Some(tool_calls) = &chat_msg.tool_calls {
+                    if tool_calls.iter().any(|t| t.id == tool_call_id) {
+                        // 记录相关工具名与参数
+                        let (tool_name, args) = tool_calls
+                            .iter()
+                            .find(|t| t.id == tool_call_id)
+                            .map(|t| (t.name.clone(), t.arguments.clone()))
+                            .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
+                        found_chat_msg = Some((msg_idx, chat_msg, tool_name, args.to_string()));
+                        break;
+                    }
+                }
+            }
+        }
+
+        let (msg_idx, chat_msg, tool_name, _args) = match found_chat_msg {
+            Some(v) => v,
+            None => {
+                return Err(ApiError::InternalError(format!(
+                    "未在 session {} 中找到 tool_call_id = {} 的 Assistant 消息",
+                    session_id, tool_call_id
+                )))
+            }
+        };
+
+        // 2. 更新 approval_state 并写回存储
+        let mut updated_chat_msg = chat_msg.clone();
+        if let Some(tool_calls) = updated_chat_msg.tool_calls.as_mut() {
+            for tc in tool_calls.iter_mut() {
+                if tc.id == tool_call_id {
+                    tc.approval_state = if approved {
+                        Some(caelix_api::tool::ToolCallApprovalState::Approved)
+                    } else {
+                        Some(caelix_api::tool::ToolCallApprovalState::Rejected)
+                    };
+                    break;
+                }
+            }
+        }
+
+        // 构造新 AgentMessage，写入存储（replace_agent_message 在 FileStorage 中实现）
+        let new_content = serde_json::to_string(&updated_chat_msg).map_err(|e| {
+            ApiError::InternalError(format!("序列化更新后的 ChatMessage 失败: {}", e))
+        })?;
+
+        let session_for_storage = session_id.to_string();
+        let storage = self.context.session_manager.get_storage();
+        let new_agent_msg = AgentMessage {
+            session_id: session_for_storage.clone(),
+            request_id: String::new(),
+            span_id: String::new(),
+            trace_id: String::new(),
+            r#type: AgentMessageType::Msg,
+            timestamp: chrono::Utc::now(),
+            content: new_content,
+            agent_name: None,
+        };
+        storage
+            .replace_agent_message(&session_for_storage, msg_idx, &new_agent_msg)
+            .await
+            .map_err(|e| ApiError::InternalError(format!("写入审批状态失败: {}", e)))?;
+
+        // 3. 若批准：执行该工具一次，追加 tool_result 消息
+        if approved {
+            // 通过 agent_manager 获取 agent_spec
+            let agent_name = "default";
+            let agent = self
+                .context
+                .agent_manager
+                .get(agent_name)
+                .await
+                .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+            let agent_spec = agent.get_spec();
+
+            // 找到对应 tool_call 并执行
+            let mut tool_result_text = String::new();
+            if let Some(tcs) = &updated_chat_msg.tool_calls {
+                for tc in tcs.iter() {
+                    if tc.id == tool_call_id {
+                        // 解析参数
+                        let args_json = match &tc.arguments {
+                            serde_json::Value::String(s) => {
+                                serde_json::from_str::<serde_json::Value>(s)
+                                    .unwrap_or(serde_json::Value::String(s.clone()))
+                            }
+                            other => other.clone(),
+                        };
+
+                        // 查找工具
+                        let tool = agent_spec.tools.iter().find(|t| t.name() == tc.name);
+                        let tool = match tool {
+                            Some(t) => t,
+                            None => {
+                                tool_result_text =
+                                    format!("[ERROR] Tool '{}' not found", tc.name);
+                                break;
+                            }
+                        };
+
+                        let result = tool.execute(args_json).await;
+                        tool_result_text = match result.error {
+                            Some(e) => format!("[ERROR] {}", e),
+                            None => result.output,
+                        };
+                        break;
+                    }
+                }
+            }
+
+            // 构造 ChatMessage::tool 并发送到消息总线 + 持久化
+            let chat_tool_msg = ChatMessage {
+                role: "tool".to_string(),
+                content: tool_result_text.clone(),
+                tool_calls: None,
+                tool_call_id: Some(tool_call_id.to_string()),
+            };
+            // 通过 storage 写入
+            let agent_msg_for_storage = AgentMessage {
+                session_id: session_for_storage.clone(),
+                request_id: String::new(),
+                span_id: String::new(),
+                trace_id: String::new(),
+                r#type: AgentMessageType::Msg,
+                timestamp: chrono::Utc::now(),
+                content: serde_json::to_string(&chat_tool_msg).unwrap_or_else(|_| {
+                    format!("{{\"role\":\"tool\",\"content\":\"{}\"}}", tool_result_text)
+                }),
+                agent_name: Some(tool_name.clone()),
+            };
+            let _ = storage
+                .append_agent_message(&agent_msg_for_storage)
+                .await
+                .map_err(|e| {
+                    ApiError::InternalError(format!("持久化 tool_result 失败: {}", e))
+                })?;
+
+            // 发送一条 Event 消息让前端感知（通过消息总线）
+            let event_msg = AgentMessage {
+                session_id: session_for_storage.clone(),
+                request_id: String::new(),
+                span_id: String::new(),
+                trace_id: String::new(),
+                r#type: AgentMessageType::Event,
+                timestamp: chrono::Utc::now(),
+                content: format!(
+                    "[已批准] tool_call_id={}, tool_name={}",
+                    tool_call_id, tool_name
+                ),
+                agent_name: Some(tool_name),
+            };
+            let _ = self.context.message_bus.send_agent(event_msg);
+        } else {
+            // 拒绝：追加一条拒绝文本 tool_result 消息
+            let chat_tool_msg = ChatMessage {
+                role: "tool".to_string(),
+                content: format!(
+                    "[REJECTED] tool_call_id={} 已被拒绝执行",
+                    tool_call_id
+                ),
+                tool_calls: None,
+                tool_call_id: Some(tool_call_id.to_string()),
+            };
+            let agent_msg_for_storage = AgentMessage {
+                session_id: session_for_storage.clone(),
+                request_id: String::new(),
+                span_id: String::new(),
+                trace_id: String::new(),
+                r#type: AgentMessageType::Msg,
+                timestamp: chrono::Utc::now(),
+                content: serde_json::to_string(&chat_tool_msg).unwrap_or_default(),
+                agent_name: None,
+            };
+            let _ = storage.append_agent_message(&agent_msg_for_storage).await;
+
+            // 发送一条 Event 消息让前端感知
+            let event_msg = AgentMessage {
+                session_id: session_for_storage.clone(),
+                request_id: String::new(),
+                span_id: String::new(),
+                trace_id: String::new(),
+                r#type: AgentMessageType::Event,
+                timestamp: chrono::Utc::now(),
+                content: format!(
+                    "[已拒绝] tool_call_id={}, tool_name={}",
+                    tool_call_id, chat_msg.tool_calls.as_ref().map(|t| t
+                        .iter()
+                        .find(|tc| tc.id == tool_call_id)
+                        .map(|tc| tc.name.clone())
+                        .unwrap_or_default()
+                    ).unwrap_or_default()
+                ),
+                agent_name: None,
+            };
+            let _ = self.context.message_bus.send_agent(event_msg);
+        }
+
+        Ok(())
     }
 
     async fn subscribe_chat_stream(

@@ -96,10 +96,29 @@ pub async fn run_agent(
                     Some(format!("[工具调用] {}({}): {}", tool_call_id, name, arguments)),
                 )),
                 AgentOutputChunk::ToolResult { tool_name, result } => Some((
-                    AgentMessageType::Event,
-                    Some(format!("[工具结果] {}: {}", tool_name, result)),
-                )),
-                AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
+                AgentMessageType::Event,
+                Some(format!("[工具结果] {}: {}", tool_name, result)),
+            )),
+            AgentOutputChunk::ManualApproval {
+                tool_call_id,
+                tool_name,
+                approval_type,
+                parameters,
+            } => {
+                // 构造结构化 JSON 内容：{ "tool_call_id", "approval_type", "parameters" }
+                let content = match serde_json::json!({
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "approval_type": format!("{:?}", approval_type),
+                    "parameters": parameters,
+                }) {
+                    v => serde_json::to_string(&v).unwrap_or_else(|_| {
+                        format!("[需要审批] tool_call_id={}, tool_name={}", tool_call_id, tool_name)
+                    }),
+                };
+                Some((AgentMessageType::ManualApproval, Some(content)))
+            }
+            AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
             };
 
             if let Some((msg_type, payload)) = msg_type {

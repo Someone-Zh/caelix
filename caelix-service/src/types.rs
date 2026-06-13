@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatRequest {
     pub session_id: String,
-    pub message: String,
+    /// 若为 None，则视为 "继续" 或 "恢复流程" 触发：
+    /// 此时若会话最后一条消息是 Assistant 且含 tool_calls，则进入 resume 路径。
+    pub message: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub agent: Option<String>,

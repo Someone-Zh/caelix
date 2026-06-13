@@ -220,7 +220,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 
         let request = ChatRequest {
             session_id: session_id.clone(),
-            message: content,
+            message: Some(content),
             provider: Some(provider.clone()),
             model: Some(model.clone()),
             agent: selected_agent.clone(),
@@ -342,6 +342,15 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                     );
                                     let _ = std::io::stdout().flush();
                                 }
+                                AgentMessageType::ManualApproval => {
+                                    let timestamp = msg.timestamp.format("%H:%M:%S");
+                                    println!(
+                                        "\n[{}] ⚠️ [需要审批] {}",
+                                        timestamp,
+                                        msg.content
+                                    );
+                                    let _ = std::io::stdout().flush();
+                                }
                             }
                         }
 
@@ -437,7 +446,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         let input_clone = input.clone();
         let request = ChatRequest {
             session_id: session_id.clone(),
-            message: input,
+            message: Some(input),
             provider: Some(provider.clone()),
             model: Some(model.clone()),
             agent: selected_agent.clone(),
@@ -537,6 +546,15 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                         "\n[{}] ⚡ [{}] {}",
                                         timestamp,
                                         msg.agent_name.as_deref().unwrap_or("AI"),
+                                        msg.content
+                                    );
+                                    let _ = std::io::stdout().flush();
+                                }
+                                AgentMessageType::ManualApproval => {
+                                    let timestamp = msg.timestamp.format("%H:%M:%S");
+                                    println!(
+                                        "\n[{}] ⚠️ [需要审批] {}",
+                                        timestamp,
                                         msg.content
                                     );
                                     let _ = std::io::stdout().flush();

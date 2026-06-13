@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use caelix_api::tool::Tool;
-use caelix_api::tool::ToolResult;
+use caelix_api::tool::{ToolApprovalType, ToolPreCheckResult, ToolResult};
 use serde_json::{Value as JsonValue, json};
 use std::fs::read_to_string;
 use std::sync::LazyLock;
@@ -194,6 +194,15 @@ impl SmartSearchTool {
 impl Tool for SmartSearchTool {
     fn name(&self) -> &str {
         "global_file_search"
+    }
+
+    fn pre_check(&self, input: &JsonValue) -> Option<ToolPreCheckResult> {
+        let path = input["path"].as_str().unwrap_or_default().to_string();
+        let keyword = input["keyword"].as_str().unwrap_or_default().to_string();
+        Some(ToolPreCheckResult {
+            approval_type: ToolApprovalType::Path,
+            parameters: json!({ "path": path, "keyword": keyword }),
+        })
     }
 
     fn description(&self) -> &str {

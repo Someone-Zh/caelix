@@ -6,6 +6,8 @@ use crate::storage::StorageBackend;
 use crate::types::{SessionConfig, SessionState};
 use anyhow::Result;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage, TaskMessage};
+use caelix_api::provider::ChatMessage;
+use caelix_api::tool::ToolCallApprovalState;
 use futures::Stream;
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
@@ -75,6 +77,15 @@ async fn run_agent_consumer(
                 // 持久化 Event 类型（触发事件标记，供前端在历史中展示时机）
                 if let Err(e) = storage.append_agent_message(&msg).await {
                     eprintln!("[Storage Error] Failed to append event message: {}", e);
+                }
+            }
+            AgentMessageType::ManualApproval => {
+                // 持久化 ManualApproval：携带审批请求信息
+                if let Err(e) = storage.append_agent_message(&msg).await {
+                    eprintln!(
+                        "[Storage Error] Failed to append manual_approval message: {}",
+                        e
+                    );
                 }
             }
             AgentMessageType::Chunk => {
@@ -460,6 +471,70 @@ impl SessionManager {
     /// 获取 storage 引用（用于信号处理）
     pub fn get_storage(&self) -> &Arc<dyn StorageBackend> {
         &self.storage
+    }
+
+    /// 为指定 tool_call_id 审批一条 Assistant Msg 中的 tool_call（含 approval_state）。
+    /// 从历史中从后向前查找，找到第一个 role=assistant 且包含该 tool_call_id 的 Msg，
+    /// 然后在 tool_calls 中对应项设置 approval_state，并写回存储。
+    ///
+    /// 返回值：`Ok(Some(index))` 表示找到并替换；`Ok(None)` 未找到；`Err` 存储错误。
+    pub async fn update_tool_approval(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        approved: bool,
+    ) -> Result<Option<(usize, AgentMessage)>> {
+        let messages = self.storage.read_agent_messages(session_id).await?;
+
+        // 从后向前搜索
+        for (idx, msg) in messages.iter().enumerate().rev() {
+            if msg.r#type != AgentMessageType::Msg {
+                continue;
+            }
+            // 尝试反序列化为 ChatMessage
+            if let Ok(mut chat_msg) = serde_json::from_str::<ChatMessage>(&msg.content) {
+                if chat_msg.role != "assistant" {
+                    continue;
+                }
+                let tool_calls = match chat_msg.tool_calls.as_mut() {
+                    Some(tcs) => tcs,
+                    None => continue,
+                };
+                let mut found = false;
+                for tc in tool_calls.iter_mut() {
+                    if tc.id == tool_call_id {
+                        tc.approval_state = if approved {
+                            Some(ToolCallApprovalState::Approved)
+                        } else {
+                            Some(ToolCallApprovalState::Rejected)
+                        };
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    continue;
+                }
+                // 构造新的 AgentMessage（保持其他字段不变，仅替换 content 为新 JSON）
+                let new_content = serde_json::to_string(&chat_msg)?;
+                let new_agent_msg = AgentMessage {
+                    session_id: msg.session_id.clone(),
+                    request_id: msg.request_id.clone(),
+                    span_id: msg.span_id.clone(),
+                    trace_id: msg.trace_id.clone(),
+                    r#type: msg.r#type.clone(),
+                    timestamp: msg.timestamp,
+                    content: new_content,
+                    agent_name: msg.agent_name.clone(),
+                };
+                // 写回存储
+                self.storage
+                    .replace_agent_message(session_id, idx, &new_agent_msg)
+                    .await?;
+                return Ok(Some((idx, new_agent_msg)));
+            }
+        }
+        Ok(None)
     }
 
     /// 刷新指定 session 的所有待持久化消息

@@ -8,7 +8,7 @@ use caelix_api::{
 use futures::{Stream, StreamExt};
 
 use super::util::{extract_pending_tool_calls, has_pending_tool_calls};
-use crate::tool_executor::execute_tools_static;
+use crate::tool_executor::{ToolExecutionBatchResult, execute_tools_static_with_pre_check};
 
 pub struct LoopAgent {
     def: Arc<AgentSpec>,
@@ -43,8 +43,8 @@ impl Agent for LoopAgent {
 
             if should_resume {
                 if let Some(tools) = extract_pending_tool_calls(&messages) {
-                    match execute_tools_static(&def, &tools).await {
-                        Ok(results) => {
+                    match execute_tools_static_with_pre_check(&def, &tools).await {
+                        ToolExecutionBatchResult::Executed(results) => {
                             for (id, name, res) in &results {
                                 yield Ok(AgentOutputChunk::ToolResult {
                                     tool_name: name.clone(),
@@ -53,8 +53,32 @@ impl Agent for LoopAgent {
                                 messages.push(ChatMessage::tool(id.clone(), res.clone()));
                             }
                         }
-                        Err(e) => {
-                            yield Err(e);
+                        ToolExecutionBatchResult::NeedApproval {
+                            executed,
+                            tool_call_id,
+                            tool_name,
+                            approval_type,
+                            parameters,
+                        } => {
+                            // 先输出已执行的 tool_result 并追加到 messages
+                            for (id, _name, res) in &executed {
+                                yield Ok(AgentOutputChunk::ToolResult {
+                                    tool_name: _name.clone(),
+                                    result: res.clone(),
+                                });
+                                messages.push(ChatMessage::tool(id.clone(), res.clone()));
+                            }
+                            // 输出人工审批 chunk
+                            yield Ok(AgentOutputChunk::ManualApproval {
+                                tool_call_id: tool_call_id.clone(),
+                                tool_name: tool_name.clone(),
+                                approval_type: approval_type.clone(),
+                                parameters: parameters.clone(),
+                            });
+                            // 中断：收尾 Finish
+                            yield Ok(AgentOutputChunk::Finish {
+                                reason: "awaiting_approval".into(),
+                            });
                             return;
                         }
                     }
@@ -85,6 +109,7 @@ impl Agent for LoopAgent {
                                 index: final_tool_calls.len() as u32,
                                 name,
                                 arguments: serde_json::Value::String(arguments),
+                                approval_state: None,
                             });
 
                             yield Ok(AgentOutputChunk::ToolCall {
@@ -114,8 +139,8 @@ impl Agent for LoopAgent {
                     yield Ok(AgentOutputChunk::MessageUpdate { message: new_msg });
                 }
 
-                match execute_tools_static(&def, &final_tool_calls).await {
-                    Ok(results) => {
+                match execute_tools_static_with_pre_check(&def, &final_tool_calls).await {
+                    ToolExecutionBatchResult::Executed(results) => {
                         for (id, name, res) in &results {
                             yield Ok(AgentOutputChunk::ToolResult {
                                 tool_name: name.clone(),
@@ -124,9 +149,33 @@ impl Agent for LoopAgent {
                             messages.push(ChatMessage::tool(id.clone(), res.clone()));
                         }
                     }
-                    Err(e) => {
-                        yield Err(e);
-                        break;
+                    ToolExecutionBatchResult::NeedApproval {
+                        executed,
+                        tool_call_id,
+                        tool_name,
+                        approval_type,
+                        parameters,
+                    } => {
+                        // 先写回已执行的 tool_result
+                        for (id, _name, res) in &executed {
+                            yield Ok(AgentOutputChunk::ToolResult {
+                                tool_name: _name.clone(),
+                                result: res.clone(),
+                            });
+                            messages.push(ChatMessage::tool(id.clone(), res.clone()));
+                        }
+                        // 输出人工审批 chunk
+                        yield Ok(AgentOutputChunk::ManualApproval {
+                            tool_call_id: tool_call_id.clone(),
+                            tool_name: tool_name.clone(),
+                            approval_type: approval_type.clone(),
+                            parameters: parameters.clone(),
+                        });
+                        // 中断：收尾 Finish
+                        yield Ok(AgentOutputChunk::Finish {
+                            reason: "awaiting_approval".into(),
+                        });
+                        return;
                     }
                 }
             }
