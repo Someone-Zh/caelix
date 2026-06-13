@@ -13,104 +13,21 @@ use futures::stream::BoxStream;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// 临时执行器：执行 agent 并将流发送到消息总线
-/// TODO: 后续会通过别的方式实现
-#[allow(clippy::too_many_arguments)]
+/// 执行 Agent 并发送结果到消息总线
+///
+/// 消息总线的获取、各类分片 → 消息类型的映射全部下沉到
+/// `caelix_agent::run_agent` 内部处理（通过 `RuntimeContext` +
+/// `ContextProvider` 从 API 包中获取）。
+/// 这里只负责将执行结果包装为 anyhow::Error 并返回。
 async fn execute_agent_with_messaging(
     agent_spec: Arc<caelix_api::agent::AgentSpec>,
     messages: Vec<ChatMessage>,
     provider: Arc<dyn caelix_api::provider::LlmProvider>,
     config: &LlmConfig,
-    session_id: String,
-    request_id: String,
-    span_id: String,
-    trace_id: String,
-    agent_name: Option<String>,
-    message_bus: Arc<caelix_message::MessageBus>,
 ) -> Result<String, anyhow::Error> {
-    // 使用 loop_runner 执行 agent
-    let stream = caelix_agent::run_agent(agent_spec, messages, provider, config).await;
-
-    let mut result_content = String::new();
-    let mut stream = stream;
-
-    while let Some(chunk_result) = stream.next().await {
-        match chunk_result {
-            Ok(chunk) => {
-                // 提取内容并积累
-                let content = extract_chunk_content(&chunk);
-                if !content.is_empty() {
-                    result_content.push_str(&content);
-                }
-
-                // 发送 Chunk 到消息总线
-                let chunk_msg = AgentMessage {
-                    session_id: session_id.clone(),
-                    request_id: request_id.clone(),
-                    span_id: span_id.clone(),
-                    trace_id: trace_id.clone(),
-                    r#type: AgentMessageType::Chunk,
-                    timestamp: chrono::Utc::now(),
-                    content: content.clone(),
-                    agent_name: agent_name.clone(),
-                };
-                let _ = message_bus.send_agent(chunk_msg);
-
-                // 如果是 Finish，发送 ChunkEnd
-                if matches!(chunk, AgentOutputChunk::Finish { .. }) {
-                    let end_msg = AgentMessage {
-                        session_id: session_id.clone(),
-                        request_id: request_id.clone(),
-                        span_id: span_id.clone(),
-                        trace_id: trace_id.clone(),
-                        r#type: AgentMessageType::ChunkEnd,
-                        timestamp: chrono::Utc::now(),
-                        content: String::new(),
-                        agent_name: agent_name.clone(),
-                    };
-                    let _ = message_bus.send_agent(end_msg);
-                }
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!("Agent execution error: {:?}", e));
-            }
-        }
-    }
-
-    Ok(result_content)
-}
-
-/// 从 AgentOutputChunk 提取文本内容
-fn extract_chunk_content(chunk: &AgentOutputChunk) -> String {
-    match chunk {
-        AgentOutputChunk::Content { content } => content.clone(),
-        AgentOutputChunk::Reasoning { content } => content.clone(),
-        AgentOutputChunk::ToolCall {
-            name, arguments, ..
-        } => {
-            format!("\n[工具调用] {}({})", name, arguments)
-        }
-        AgentOutputChunk::ToolResult { tool_name, result } => {
-            format!("\n[工具结果] {}: {}", tool_name, result)
-        }
-        AgentOutputChunk::Start { timestamp } => {
-            format!("\n[开始] {}", timestamp.format("%H:%M:%S"))
-        }
-        AgentOutputChunk::CallProvider {
-            timestamp,
-            provider,
-            model,
-        } => {
-            format!(
-                "\n[调用模型] {} {}@{}",
-                timestamp.format("%H:%M:%S"),
-                provider,
-                model
-            )
-        }
-        AgentOutputChunk::MessageUpdate { .. } => String::new(),
-        AgentOutputChunk::Finish { .. } => String::new(),
-    }
+    caelix_agent::run_agent(agent_spec, messages, provider, config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Agent execution error: {:?}", e))
 }
 
 /// API 核心实现
@@ -461,21 +378,10 @@ impl CaelixApi for CaelixApiImpl {
             };
             let _ = ctx_clone.message_bus.send_agent(user_msg);
 
-            // ✅ 使用本地执行器（会自动发送流到消息总线）
-            let _result = execute_agent_with_messaging(
-                agent_spec,
-                messages,
-                provider,
-                &config,
-                request_clone.session_id.clone(),
-                request_id_clone.clone(),
-                span_id_clone.clone(),
-                trace_id_clone.clone(),
-                request_clone.agent.clone(),
-                ctx_clone.message_bus.clone(),
-            )
-            .await
-            .map_err(|e| ApiError::InternalError(e.to_string()));
+            // ✅ 使用 caelix_agent::run_agent（内部通过 ContextProvider 获取 message_bus 并发送消息）
+            let _result = execute_agent_with_messaging(agent_spec, messages, provider, &config)
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string()));
 
             let result = Ok::<_, ApiError>(());
 
