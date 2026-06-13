@@ -331,6 +331,17 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                         let _ = std::io::stdout().flush();
                                     }
                                 }
+                                AgentMessageType::Event => {
+                                    // 显示触发事件标记
+                                    let timestamp = msg.timestamp.format("%H:%M:%S");
+                                    println!(
+                                        "\n[{}] ⚡ [{}] {}",
+                                        timestamp,
+                                        msg.agent_name.as_deref().unwrap_or("AI"),
+                                        msg.content
+                                    );
+                                    let _ = std::io::stdout().flush();
+                                }
                             }
                         }
 
@@ -518,6 +529,17 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                         }
                                         let _ = std::io::stdout().flush();
                                     }
+                                }
+                                AgentMessageType::Event => {
+                                    // 显示触发事件标记
+                                    let timestamp = msg.timestamp.format("%H:%M:%S");
+                                    println!(
+                                        "\n[{}] ⚡ [{}] {}",
+                                        timestamp,
+                                        msg.agent_name.as_deref().unwrap_or("AI"),
+                                        msg.content
+                                    );
+                                    let _ = std::io::stdout().flush();
                                 }
                             }
                         }

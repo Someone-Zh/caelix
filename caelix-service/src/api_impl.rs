@@ -108,6 +108,7 @@ fn extract_chunk_content(chunk: &AgentOutputChunk) -> String {
                 model
             )
         }
+        AgentOutputChunk::MessageUpdate { .. } => String::new(),
         AgentOutputChunk::Finish { .. } => String::new(),
     }
 }

@@ -71,6 +71,12 @@ async fn run_agent_consumer(
                     eprintln!("[Storage Error] Failed to append agent message: {}", e);
                 }
             }
+            AgentMessageType::Event => {
+                // 持久化 Event 类型（触发事件标记，供前端在历史中展示时机）
+                if let Err(e) = storage.append_agent_message(&msg).await {
+                    eprintln!("[Storage Error] Failed to append event message: {}", e);
+                }
+            }
             AgentMessageType::Chunk => {
                 // 积累 Chunk 消息 - 使用 (session_id, request_id, span_id) 作为唯一标识
                 let key = (

@@ -103,10 +103,15 @@ impl Agent for LoopAgent {
                 }
 
                 if final_tool_calls.is_empty() {
-                    messages.push(ChatMessage::assistant(full_content));
+                    let new_msg = ChatMessage::assistant(full_content);
+                    messages.push(new_msg.clone());
+                    yield Ok(AgentOutputChunk::MessageUpdate { message: new_msg });
                     break;
                 } else {
-                    messages.push(ChatMessage::assistant_tool_calls(full_content, final_tool_calls.clone()));
+                    let new_msg =
+                        ChatMessage::assistant_tool_calls(full_content, final_tool_calls.clone());
+                    messages.push(new_msg.clone());
+                    yield Ok(AgentOutputChunk::MessageUpdate { message: new_msg });
                 }
 
                 match execute_tools_static(&def, &final_tool_calls).await {

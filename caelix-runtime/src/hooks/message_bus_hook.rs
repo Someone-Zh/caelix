@@ -30,15 +30,15 @@ impl AgentHook for MessageBusHook {
             "message_bus_hook: RuntimeContext 未在当前协程作用域中设置，请通过 with_runtime_ctx 绑定上下文后再调用钩子",
         );
 
-        // 获取最新的消息（最后一条）
-        if let Some(latest_msg) = ctx.messages.last() {
+        // 按序循环处理 ctx.messages 中的每一条 ChatMessage
+        for msg in ctx.messages.iter() {
             // 将整个 ChatMessage 序列化为 JSON 字符串，保留角色、工具调用等完整信息
-            let content_json = match serde_json::to_string(latest_msg) {
+            let content_json = match serde_json::to_string(msg) {
                 Ok(json) => json,
                 Err(e) => {
                     eprintln!("Warning: Failed to serialize ChatMessage to JSON: {}", e);
                     // 降级处理：只保存 content 字段
-                    latest_msg.content.clone()
+                    msg.content.clone()
                 }
             };
 

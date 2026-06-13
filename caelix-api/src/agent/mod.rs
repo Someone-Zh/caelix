@@ -40,6 +40,9 @@ pub enum AgentOutputChunk {
         tool_name: String,
         result: String,
     },
+    MessageUpdate {
+        message: ChatMessage,
+    },
     Finish {
         reason: String,
     },
@@ -54,6 +57,7 @@ impl std::fmt::Display for AgentOutputChunk {
             AgentOutputChunk::Content { content } => write!(f, "{}", content),
             AgentOutputChunk::ToolCall { name, .. } => write!(f, "[工具调用: {}]", name),
             AgentOutputChunk::ToolResult { result, .. } => write!(f, "{}", result),
+            AgentOutputChunk::MessageUpdate { .. } => write!(f, ""),
             AgentOutputChunk::Finish { .. } => write!(f, ""),
         }
     }
