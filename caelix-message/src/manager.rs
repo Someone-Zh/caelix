@@ -523,6 +523,7 @@ impl SessionManager {
                     timestamp: msg.timestamp,
                     content: new_content,
                     agent_name: msg.agent_name.clone(),
+                    usage: msg.usage.clone(),
                 };
                 // 写回存储
                 self.storage

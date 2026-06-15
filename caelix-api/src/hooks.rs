@@ -41,15 +41,16 @@ pub struct HookScope {
     pub targets: Vec<HookScopeType>,
 }
 
-impl HookScope {
-    /// 默认构造：无限制，对所有Agent生效
-    pub fn default() -> Self {
+impl Default for HookScope {
+    fn default() -> Self {
         Self {
             mode: HookScopeMode::Include,
             targets: vec![],
         }
     }
+}
 
+impl HookScope {
     /// 判断Hook是否对指定Agent生效
     pub fn matches(&self, agent_name: &str, agent_group: Option<&str>) -> bool {
         if self.targets.is_empty() {

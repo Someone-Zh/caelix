@@ -136,6 +136,12 @@ pub struct App {
     pub selected_command_idx: usize,           // 选中的命令索引
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(100);
@@ -265,12 +271,11 @@ impl App {
                 // 追加流式内容
                 self.streaming_content.push_str(&content);
                 // 更新最后一条消息的内容（如果存在）
-                if let Some(last_msg) = self.messages.last_mut() {
-                    if last_msg.msg_type == TuiMessageType::Assistant {
-                        last_msg.content = self.streaming_content.clone();
-                        // 自动滚动到最新消息
-                        self.scroll_offset = self.messages.len() as u16;
-                    }
+                if let Some(last_msg) = self.messages.last_mut()
+                    && last_msg.msg_type == TuiMessageType::Assistant
+                {
+                    last_msg.content = self.streaming_content.clone();
+                    self.scroll_offset = self.messages.len() as u16;
                 }
             }
             AppMessage::UpdateTasks(tasks) => {

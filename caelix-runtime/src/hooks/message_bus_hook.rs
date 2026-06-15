@@ -13,6 +13,12 @@ impl MessageBusHook {
     }
 }
 
+impl Default for MessageBusHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl AgentHook for MessageBusHook {
     fn name(&self) -> &str {
@@ -52,6 +58,7 @@ impl AgentHook for MessageBusHook {
                 timestamp: Utc::now(),
                 content: content_json,
                 agent_name: Some(ctx.agent_name.clone()),
+                usage: None,
             };
 
             // 通过全局 CaelixContext 获取消息总线并发送消息

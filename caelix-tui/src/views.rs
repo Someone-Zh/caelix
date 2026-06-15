@@ -379,8 +379,7 @@ fn render_notification_history_list(frame: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
         .notifications_history
         .iter()
-        .enumerate()
-        .map(|(_idx, msg)| {
+        .map(|msg| {
             use caelix_api::message::NotificationType as RuntimeNotificationType;
 
             let (icon, style) = match msg.r#type {

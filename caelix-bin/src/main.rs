@@ -136,14 +136,13 @@ async fn flush_pending_messages(session_manager: Arc<caelix_message::SessionMana
     let buffers = session_manager.get_agent_buffers().read().await;
     for ((_session_id, _request_id, _span_id), messages) in buffers.iter() {
         for msg in messages {
-            if msg.r#type == AgentMessageType::Msg {
-                if let Err(e) = session_manager
+            if msg.r#type == AgentMessageType::Msg
+                && let Err(e) = session_manager
                     .get_storage()
                     .append_agent_message(msg)
                     .await
-                {
-                    tracing::warn!(error = %e, "保存消息失败");
-                }
+            {
+                tracing::warn!(error = %e, "保存消息失败");
             }
         }
     }
@@ -219,19 +218,18 @@ fn list_logs(dir: &std::path::Path) {
             let mut files: Vec<(String, u64, String)> = Vec::new();
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                        if name.starts_with("caelix.") && name.ends_with(".log") {
-                            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                            let modified = entry
-                                .metadata()
-                                .ok()
-                                .and_then(|m| m.modified().ok())
-                                .map(|t| format!("{:?}", t))
-                                .unwrap_or_else(|| "-".to_string());
-                            files.push((name.to_string(), size, modified));
-                        }
-                    }
+                if path.is_file()
+                    && let Some(name) = path.file_name().and_then(|s| s.to_str())
+                    && name.starts_with("caelix.") && name.ends_with(".log")
+                {
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let modified = entry
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .map(|t| format!("{:?}", t))
+                        .unwrap_or_else(|| "-".to_string());
+                    files.push((name.to_string(), size, modified));
                 }
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));
@@ -239,7 +237,7 @@ fn list_logs(dir: &std::path::Path) {
                 println!("(暂无日志文件)");
                 return;
             }
-            println!("{:<40} {:>12} {}", "文件名", "大小", "修改时间");
+            println!("{:<40} {:>12} 修改时间", "文件名", "大小");
             println!("{}", "-".repeat(80));
             for (name, size, modified) in &files {
                 println!("{:<40} {:>10}B  {}", name, size, modified);
@@ -269,40 +267,38 @@ fn show_current_log(dir: &std::path::Path, n: usize) {
     match fs::File::open(&current) {
         Ok(file) => {
             let reader = BufReader::new(file);
-            let lines: Vec<String> = reader.lines().flatten().collect();
+            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
             let start = if lines.len() > n { lines.len() - n } else { 0 };
             for line in lines.iter().skip(start) {
-                // 若为 JSON 行，尝试提取关键字段做人类可读展示
-                if line.trim_start().starts_with('{') {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                        let ts = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
-                        let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
-                        let target = v.get("target").and_then(|t| t.as_str()).unwrap_or("");
-                        let msg = v.get("message").and_then(|t| t.as_str()).unwrap_or("");
-                        let fields: Option<serde_json::Value> = v.get("fields").cloned();
-                        let span: Option<serde_json::Value> = v.get("span").cloned();
-                        let spans: Option<serde_json::Value> = v.get("spans").cloned();
-                        print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
-                        if let Some(f) = &fields {
-                            if !f.is_null() && !f.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                                print!(" | {}", f);
-                            }
-                        }
-                        if let Some(s) = &span {
-                            if !s.is_null() {
-                                print!(" | span={}", s);
-                            }
-                        }
-                        if let Some(s) = &spans {
-                            if let Some(arr) = s.as_array() {
-                                if !arr.is_empty() {
-                                    print!(" | spans={}", s);
-                                }
-                            }
-                        }
-                        println!();
-                        continue;
+                if line.trim_start().starts_with('{')
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                {
+                    let ts = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                    let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
+                    let target = v.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                    let msg = v.get("message").and_then(|t| t.as_str()).unwrap_or("");
+                    let fields: Option<serde_json::Value> = v.get("fields").cloned();
+                    let span: Option<serde_json::Value> = v.get("span").cloned();
+                    let spans: Option<serde_json::Value> = v.get("spans").cloned();
+                    print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
+                    if let Some(f) = &fields
+                        && !f.is_null() && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
+                    {
+                        print!(" | {}", f);
                     }
+                    if let Some(s) = &span
+                        && !s.is_null()
+                    {
+                        print!(" | span={}", s);
+                    }
+                    if let Some(s) = &spans
+                        && let Some(arr) = s.as_array()
+                        && !arr.is_empty()
+                    {
+                        print!(" | spans={}", s);
+                    }
+                    println!();
+                    continue;
                 }
                 println!("{}", line);
             }
@@ -326,45 +322,44 @@ async fn follow_log(dir: &std::path::Path) {
 
     let mut pos: u64 = 0;
     // 先跳到文件末尾
-    if let Ok(file) = fs::File::open(&current) {
-        if let Ok(meta) = file.metadata() {
-            pos = meta.len();
-        }
+    if let Ok(file) = fs::File::open(&current)
+        && let Ok(meta) = file.metadata()
+    {
+        pos = meta.len();
     }
 
     loop {
-        if let Ok(mut file) = fs::File::open(&current) {
-            if file.seek(SeekFrom::Start(pos)).is_ok() {
-                use std::io::Read;
-                let mut buf = String::new();
-                if file.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
-                    pos += buf.len() as u64;
-                    for line in buf.lines() {
-                        // 同样尝试美化 JSON 输出
-                        if line.trim_start().starts_with('{') {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                                let ts =
-                                    v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
-                                let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
-                                let target =
-                                    v.get("target").and_then(|t| t.as_str()).unwrap_or("");
-                                let msg =
-                                    v.get("message").and_then(|t| t.as_str()).unwrap_or("");
-                                let fields: Option<serde_json::Value> = v.get("fields").cloned();
-                                print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
-                                if let Some(f) = &fields {
-                                    if !f.is_null()
-                                        && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
-                                    {
-                                        print!(" | {}", f);
-                                    }
-                                }
-                                println!();
-                                continue;
-                            }
+        if let Ok(mut file) = fs::File::open(&current)
+            && file.seek(SeekFrom::Start(pos)).is_ok()
+        {
+            use std::io::Read;
+            let mut buf = String::new();
+            if file.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
+                pos += buf.len() as u64;
+                for line in buf.lines() {
+                    // 同样尝试美化 JSON 输出
+                    if line.trim_start().starts_with('{')
+                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                    {
+                        let ts =
+                            v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                        let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
+                        let target =
+                            v.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                        let msg =
+                            v.get("message").and_then(|t| t.as_str()).unwrap_or("");
+                        let fields: Option<serde_json::Value> = v.get("fields").cloned();
+                        print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
+                        if let Some(f) = &fields
+                            && !f.is_null()
+                                && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
+                        {
+                            print!(" | {}", f);
                         }
-                        println!("{}", line);
+                        println!();
+                        continue;
                     }
+                    println!("{}", line);
                 }
             }
         }
@@ -395,16 +390,15 @@ fn clean_logs(dir: &std::path::Path) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    if name.starts_with("caelix.") && name.ends_with(".log") {
-                        if fs::remove_file(&path).is_ok() {
-                            count += 1;
-                            println!("已删除: {}", name);
-                        } else {
-                            eprintln!("删除失败: {}", name);
-                        }
-                    }
+            if path.is_file()
+                && let Some(name) = path.file_name().and_then(|s| s.to_str())
+                && name.starts_with("caelix.") && name.ends_with(".log")
+            {
+                if fs::remove_file(&path).is_ok() {
+                    count += 1;
+                    println!("已删除: {}", name);
+                } else {
+                    eprintln!("删除失败: {}", name);
                 }
             }
         }

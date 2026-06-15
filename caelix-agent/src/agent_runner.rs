@@ -29,6 +29,8 @@ pub async fn run_agent(
 ) -> Result<String, AgentError> {
     let agent_name = Some(agent_spec.name.clone());
     let agent = LoopAgent::new(agent_spec);
+    let provider_name = provider.config().name.clone();
+    let model_name = config.model_name.clone();
     let mut stream = agent.run(messages, provider, config).await;
 
     // 从 RuntimeContext 中获取 tracing ID；若不存在则回退为空字符串。
@@ -113,22 +115,45 @@ pub async fn run_agent(
                         approval_type,
                         parameters,
                     } => {
-                        let content = match serde_json::json!({
+                        let v = serde_json::json!({
                             "tool_call_id": tool_call_id,
                             "tool_name": tool_name,
                             "approval_type": format!("{:?}", approval_type),
                             "parameters": parameters,
-                        }) {
-                            v => serde_json::to_string(&v).unwrap_or_else(|_| {
-                                format!(
-                                    "[需要审批] tool_call_id={}, tool_name={}",
-                                    tool_call_id, tool_name
-                                )
-                            }),
-                        };
+                        });
+                        let content = serde_json::to_string(&v).unwrap_or_else(|_| {
+                            format!(
+                                "[需要审批] tool_call_id={}, tool_name={}",
+                                tool_call_id, tool_name
+                            )
+                        });
                         Some((AgentMessageType::ManualApproval, Some(content)))
                     }
-                    AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
+                    AgentOutputChunk::Finish { usage, .. } => {
+                        // 若本次请求有 usage 信息，则写入用量追踪器
+                        if let Some(u) = usage.clone()
+                            && let Some(bus_ctx) = &maybe_bus
+                            && let Some(tracker) = bus_ctx.usage_tracker()
+                        {
+                            let _ = tracker
+                                .accumulate(caelix_api::provider::UsageRecord {
+                                    session_id: session_id.clone(),
+                                    request_id: request_id.clone(),
+                                    trace_id: trace_id.clone(),
+                                    provider: provider_name.clone(),
+                                    model: model_name.clone(),
+                                    agent: agent_name.clone(),
+                                    prompt_tokens: u.prompt_tokens,
+                                    completion_tokens: u.completion_tokens,
+                                    total_tokens: u.total_tokens,
+                                    reasoning_tokens: u.reasoning_tokens,
+                                    cache_hit_tokens: u.cache_hit_tokens,
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                })
+                                .await;
+                        }
+                        Some((AgentMessageType::Event, None))
+                    }
                 };
 
                 if let Some((msg_type, payload)) = msg_type {
@@ -149,12 +174,13 @@ pub async fn run_agent(
                         timestamp: chrono::Utc::now(),
                         content,
                         agent_name: agent_name.clone(),
+                        usage: None,
                     };
                     let _ = bus_ctx.message_bus().send_agent(agent_msg);
                 }
 
                 // 遇到 Finish 时追加发送 ChunkEnd，清空消费者的请求缓冲
-                if matches!(chunk, AgentOutputChunk::Finish { .. }) {
+                if let AgentOutputChunk::Finish { usage, .. } = &chunk {
                     let end_msg = AgentMessage {
                         session_id: session_id.clone(),
                         request_id: request_id.clone(),
@@ -164,6 +190,7 @@ pub async fn run_agent(
                         timestamp: chrono::Utc::now(),
                         content: String::new(),
                         agent_name: agent_name.clone(),
+                        usage: usage.clone(),
                     };
                     let _ = bus_ctx.message_bus().send_agent(end_msg);
                 }

@@ -24,7 +24,7 @@ async fn run_agent_stream(
         let chunk = chunk_result?;
         // 收集最终结果
         if let AgentOutputChunk::Content { content } = &chunk {
-            result_content.push_str(&content);
+            result_content.push_str(content);
         }
     }
 
@@ -68,14 +68,13 @@ impl DelegateTaskTool {
         // 2. 获取 Provider
         let provider_name = RuntimeContext::try_current()
             .map(|c| c.get_provider().to_string())
-            .expect(
-                &format!(
+            .unwrap_or_else(|| {
+                panic!(
                     "[{}:{}] prepare_agent_exec 没有提供提供者",
                     file!(),
                     line!(),
                 )
-                .to_string(),
-            );
+            });
 
         let provider_mgr = self.ctx.llm_provider_manager.read().await;
         let all_providers = provider_mgr.get_all_providers();

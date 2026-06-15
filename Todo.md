@@ -1,100 +1,5 @@
 # Caelix 待实现功能设计文档
 
-本文档基于对 Caelix 现有代码架构（`caelix-api` / `caelix-llm` / `caelix-message` / `caelix-config` / `caelix-runtime` / `caelix-tools` / `caelix-task` / `caelix-agent` / `caelix-service` / `caelix-cli` / `caelix-http` / `caelix-tui` / `caelix-bin` / `caelix-security`）的全面分析，详细设计如下六大功能的实现方案。
-
----
-
-## 1. 上下文窗口记录 + 用量统计（各维度 token 使用）
-
-### 1.1 现状分析
-
-- **LLM 层**：`OpenAIProvider` 在 `openai.rs` 中发送请求时，仅通过 `ChatResponseChunk` 返回流式内容，**未解析和传递 `usage` 字段**。
-- **消息层**：`AgentMessage` 在 `message/mod.rs` 中仅携带 `content` / `timestamp` / `trace_id`，**缺少 token 用量字段**。
-- **RuntimeContext**（`context/mod.rs`）：仅维护 `session/request/span/trace` ID，**无上下文窗口大小约束与累计用量跟踪**。
-- **统计维度**：目前完全没有对 `prompt_tokens / completion_tokens / total_tokens / cache_hit_tokens` 进行任何累计与上报。
-
-### 1.2 设计方案
-
-#### 1.2.1 LLM Provider 层扩展 — 解析 usage
-
-**文件**：`caelix-api/src/provider/mod.rs`
-
-- 新增 `TokenUsage` 结构体：
-  ```rust
-  #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-  pub struct TokenUsage {
-      pub prompt_tokens: u32,
-      pub completion_tokens: u32,
-      pub total_tokens: u32,
-      /// 推理 token（Claude/DeepSeek 等模型有）
-      pub reasoning_tokens: Option<u32>,
-      /// 缓存命中 token（OpenAI prompt_cache_details）
-      pub cache_hit_tokens: Option<u32>,
-  }
-  ```
-- 在 `ChatResponseChunk` 中追加 `usage: Option<TokenUsage>` 字段。
-- 在 `ProviderConfig` 中追加 `ctx_window_tokens: Option<u32>`、`max_output_tokens: Option<u32>` 两个可选参数，用于配置上下文窗口大小与最大输出 token。
-- `LlmProvider` trait 中新增可选方法：
-  ```rust
-  async fn last_usage(&self) -> Option<TokenUsage> { None }
-  ```
-
-**文件**：`caelix-llm/src/openai.rs`
-
-- `LlmChatRequest` 结构中新增 `stream_options: Option<Value>`，始终发送 `{"include_usage": true}`，以确保在流式响应末尾 chunk 中返回 `usage` 对象。
-- `parse_sse_chunk` 中解析顶层 `usage` 字段并写入 `ChatResponseChunk.usage`。
-- `OpenAIProvider` 内部用 `Arc<RwLock<TokenUsage>>` 保存最近一次调用的用量，供 `last_usage()` 读取。
-- 在 `AgentRunner` 中拿到 `chunk.usage` 后，交给 `UsageTracker`（见下）累计。
-
-#### 1.2.2 用量跟踪器 `UsageTracker`
-
-**文件**：`caelix-runtime/src/usage_tracker.rs`（新文件）
-
-- 以 `(session_id, request_id, span_id, trace_id, provider, model, agent)` 为维度累计 token：
-  ```rust
-  #[derive(Debug, Clone, Default)]
-  pub struct UsageSnapshot {
-      pub session_id: String,
-      pub request_id: String,
-      pub trace_id: String,
-      pub provider: String,
-      pub model: String,
-      pub agent: Option<String>,
-      pub prompt_tokens: u32,
-      pub completion_tokens: u32,
-      pub total_tokens: u32,
-      pub reasoning_tokens: u32,
-      pub cache_hit_tokens: u32,
-      pub timestamp: DateTime<Utc>,
-  }
-  ```
-- 提供：
-  - `fn accumulate(&self, session_id, request_id, trace_id, provider, model, agent, usage)` 累加。
-  - `fn snapshot_session(&self, session_id) -> UsageSnapshot` 返回整个 session 累计。
-  - `fn snapshot_request(&self, request_id) -> UsageSnapshot`。
-  - `fn snapshot_global(&self) -> Vec<UsageSnapshot>` 汇总所有。
-- 通过 `CaelixContext` 暴露全局可访问实例（类似 `hook_registry`），并在 `ContextProvider` trait 中追加：
-  ```rust
-  fn usage_tracker(&self) -> &UsageTracker;
-  ```
-
-#### 1.2.3 Agent 消息携带 token 用量
-
-**文件**：`caelix-api/src/message/mod.rs`
-
-- `AgentMessage` 结构追加可选字段 `usage: Option<TokenUsage>`，让前端/日志都能拿到本次请求的 token 用量。
-
-#### 1.2.4 CLI / TUI / HTTP 统计入口
-
-**文件**：`caelix-service/src/api_impl.rs`
-
-- 新增 `get_usage(session_id)` / `get_global_usage()`，让 `caelix-cli` 与 `caelix-http` 都能查询。
-- `caelix-cli` 中新增子命令：
-  - `caelix usage [--session <id>]`：打印 session 维度的累计用量。
-  - `caelix usage --global`：打印所有 provider/model 维度累计。
-- `caelix-http` 新增接口：`GET /api/usage?session_id=xxx`、`GET /api/usage/global`。
-
----
 
 ## 2. 记忆融合、压缩、卸载
 
@@ -420,27 +325,9 @@ ast-c = ["tree-sitter-c"]
 
 
 
-## 7. 实施顺序建议
-
-| 顺序 | 模块 | 理由 |
-|------|------|------|
-| 1 | **日志系统（第 6 节）** | 最先做完；后续所有模块开发都能享受结构化日志 |
-| 2 | **项目级配置（第 3 节）** | 建立 `LogConfig`/`ProjectConfig` 的统一加载管线；后续功能可复用 |
-| 3 | **LLM usage 统计（第 1 节）** | 直接在 `openai.rs` + `ChatResponseChunk` 上扩展，不依赖其他功能 |
-| 4 | **记忆融合 / 压缩 / 卸载（第 2 节）** | 依赖 LLM usage（token 计数）；依赖日志 |
-| 5 | **技能包（第 4 节）** | 需要 `HookRegistry.on_init()` 正常工作；可与第 2 节并行 |
-| 6 | **AST 工具（第 5 节）** | 独立工具，最后集成即可 |
-
----
-
 ## 8. 测试与验收清单
 
 - [ ] `cargo build --workspace` 全部通过。
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 通过。
-- [ ] 单次 `caelix "你的提示词"` 后：
-  - `~/.caelix/logs/caelix.*.log` 中有若干 JSON 行，包含 session_id。
-  - `caelix usage` 能看到 `prompt_tokens / completion_tokens` 不为 0。
-- [ ] 连续多轮对话（> 8k tokens）后，`ContextManager` 应触发压缩并返回 `Summary`。
-- [ ] `caelix skills list` 能列出本地 skills；`caelix skills show <name>` 能显示内容。
+
 - [ ] `caelix ast list src/agent/loop_agent.rs` 能正确列出所有 `fn` 符号与行号。
-- [ ] 新起一个项目目录，在其中写 `.caelix.toml` 后执行 `caelix`，应读取到项目级覆盖配置。

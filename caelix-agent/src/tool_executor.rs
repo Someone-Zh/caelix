@@ -148,6 +148,7 @@ async fn pre_check_allowed(pre_result: &ToolPreCheckResult) -> bool {
 /// tool_call.arguments 有两种形式：
 /// - String 形式："{"a": 1}"
 /// - 已解析的 Object：{"a": 1}
+///
 /// 这里做兼容处理。
 fn parse_arguments(value: &serde_json::Value) -> serde_json::Value {
     match value {

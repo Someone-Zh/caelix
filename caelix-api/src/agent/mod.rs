@@ -10,7 +10,7 @@ use serde_json::Value as JsonValue;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::provider::ChatMessage;
+use crate::provider::{ChatMessage, TokenUsage};
 use crate::tool::{Tool, ToolApprovalType};
 use crate::{AgentError, LlmConfig, LlmProvider};
 
@@ -53,6 +53,8 @@ pub enum AgentOutputChunk {
     },
     Finish {
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
     },
 }
 

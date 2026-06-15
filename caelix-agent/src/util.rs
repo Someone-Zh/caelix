@@ -2,7 +2,7 @@ use caelix_api::{ChatMessage, ToolCall};
 
 /// 检查消息列表的最后一条消息是否包含未执行的 tool calls
 pub fn has_pending_tool_calls(messages: &[ChatMessage]) -> bool {
-    messages.last().map_or(false, |msg| {
+    messages.last().is_some_and(|msg| {
         msg.tool_calls.is_some() && !msg.tool_calls.as_ref().unwrap().is_empty()
     })
 }

@@ -140,6 +140,7 @@ impl Message {
     /// );
     /// ```
     #[allow(dead_code)] // 为将来使用预留
+    #[allow(clippy::too_many_arguments)]
     pub fn from_context(
         session_id: String,
         span_id: String,

@@ -6,6 +6,7 @@ use crate::hooks::HookRegistry;
 use crate::managers::{AgentManager, CommandManager, ProviderManager, SkillManager, ToolManager};
 use crate::message::{MessageBusTrait, SessionManagerTrait};
 use crate::plugins::PluginManager;
+use crate::provider::{SessionUsageView, UsageRecord};
 use crate::task::TaskManagerTrait;
 use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
 use async_trait::async_trait;
@@ -85,6 +86,28 @@ impl std::fmt::Debug for dyn SecurityCheckerTrait {
     }
 }
 
+// ==================== UsageTrackerTrait ====================
+
+/// Token 用量追踪器 Trait
+///
+/// 允许上层（caelix-agent、caelix-service 等）在不知道具体实现的情况下
+/// 记录与查询 Token 使用量。具体实现位于 `caelix-runtime` 中。
+#[async_trait]
+pub trait UsageTrackerTrait: Send + Sync {
+    /// 记录一次 LLM 调用的用量
+    async fn accumulate(&self, record: UsageRecord);
+
+    /// 查询指定 session 的累计用量（含 context_size_tokens）
+    async fn snapshot_session(
+        &self,
+        session_id: &str,
+        ctx_window_tokens: Option<u32>,
+    ) -> Option<SessionUsageView>;
+
+    /// 查询全局用量（按 provider/model 维度汇总）
+    async fn snapshot_global(&self) -> crate::provider::GlobalUsageView;
+}
+
 // ==================== ContextProvider Trait ====================
 
 /// 统一的上下文入口 Trait
@@ -107,6 +130,8 @@ pub trait ContextProvider: Send + Sync {
     fn message_bus(&self) -> Arc<dyn MessageBusTrait>;
     fn task_manager(&self) -> Option<Arc<dyn TaskManagerTrait>>;
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait>;
+    /// 获取用量追踪器（若已初始化）
+    fn usage_tracker(&self) -> Option<Arc<dyn UsageTrackerTrait>>;
 }
 
 impl std::fmt::Debug for dyn ContextProvider {

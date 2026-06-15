@@ -157,8 +157,8 @@ impl RollingFileInner {
 
         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S%.3f");
         let rotated = self.dir.join(format!("caelix.{}.log", ts));
-        if self.current_path.exists() {
-            if let Err(e) = fs::rename(&self.current_path, &rotated) {
+        if self.current_path.exists()
+            && let Err(e) = fs::rename(&self.current_path, &rotated) {
                 tracing::warn!(
                     from = %self.current_path.display(),
                     to = %rotated.display(),
@@ -166,7 +166,6 @@ impl RollingFileInner {
                     "log file rotate failed"
                 );
             }
-        }
 
         // 打开新文件
         let new_file = OpenOptions::new()
@@ -191,7 +190,7 @@ impl RollingFileInner {
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.file_name().and_then(|s| s.to_str()).map_or(false, |s| {
+            if path.file_name().and_then(|s| s.to_str()).is_some_and(|s| {
                 s.starts_with("caelix.") && s.ends_with(".log") && s != "caelix.current.log"
             }) {
                 entries.push(path);
@@ -225,7 +224,7 @@ impl RollingFileInner {
             *bytes_guard += n as u64;
             Ok(n)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "log file closed"))
+            Err(io::Error::other("log file closed"))
         }
     }
 

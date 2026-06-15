@@ -40,9 +40,10 @@ impl Agent for LoopAgent {
             messages = def.build_messages(messages);
 
             let should_resume = has_pending_tool_calls(&messages);
+            let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
-            if should_resume {
-                if let Some(tools) = extract_pending_tool_calls(&messages) {
+            if should_resume
+                && let Some(tools) = extract_pending_tool_calls(&messages) {
                     match execute_tools_static_with_pre_check(&def, &tools).await {
                         ToolExecutionBatchResult::Executed(results) => {
                             for (id, name, res) in &results {
@@ -75,15 +76,23 @@ impl Agent for LoopAgent {
                                 approval_type: approval_type.clone(),
                                 parameters: parameters.clone(),
                             });
-                            // 中断：收尾 Finish
+                            // 中断：收尾 Finish（携带当前累计 usage）
+                            let final_usage = if cumulative_usage.total_tokens > 0
+                                || cumulative_usage.reasoning_tokens.is_some()
+                                || cumulative_usage.cache_hit_tokens.is_some()
+                            {
+                                Some(cumulative_usage.clone())
+                            } else {
+                                None
+                            };
                             yield Ok(AgentOutputChunk::Finish {
                                 reason: "awaiting_approval".into(),
+                                usage: final_usage,
                             });
                             return;
                         }
                     }
                 }
-            }
 
             loop {
                 let llm_stream = call_llm_static(&def, &messages, &llm, &cfg);
@@ -117,6 +126,13 @@ impl Agent for LoopAgent {
                                 name: name2,
                                 arguments: arg2,
                             });
+                        }
+
+                        Ok(AgentOutputChunk::Finish { usage, .. }) => {
+                            // 拦截来自 call_llm_static 的内部 Finish，累加 usage（不会转发）
+                            if let Some(u) = usage {
+                                cumulative_usage.add(&u);
+                            }
                         }
 
                         Ok(other) => yield Ok(other),
@@ -171,16 +187,37 @@ impl Agent for LoopAgent {
                             approval_type: approval_type.clone(),
                             parameters: parameters.clone(),
                         });
-                        // 中断：收尾 Finish
+                        // 中断：收尾 Finish（携带当前累计 usage）
+                        let final_usage = if cumulative_usage.total_tokens > 0
+                            || cumulative_usage.reasoning_tokens.is_some()
+                            || cumulative_usage.cache_hit_tokens.is_some()
+                        {
+                            Some(cumulative_usage.clone())
+                        } else {
+                            None
+                        };
                         yield Ok(AgentOutputChunk::Finish {
                             reason: "awaiting_approval".into(),
+                            usage: final_usage,
                         });
                         return;
                     }
                 }
             }
 
-            yield Ok(AgentOutputChunk::Finish { reason: "stop".into() });
+            // 最终收尾 Finish：携带整个 Agent 会话的累计 usage
+            let final_usage = if cumulative_usage.total_tokens > 0
+                || cumulative_usage.reasoning_tokens.is_some()
+                || cumulative_usage.cache_hit_tokens.is_some()
+            {
+                Some(cumulative_usage.clone())
+            } else {
+                None
+            };
+            yield Ok(AgentOutputChunk::Finish {
+                reason: "stop".into(),
+                usage: final_usage,
+            });
         };
 
         Box::pin(stream)
@@ -212,6 +249,7 @@ fn call_llm_static(
         let mut stream = llm.chat_stream(&msgs, &tool_defs, &cfg).await;
 
         let mut tool_buffers: Vec<(usize, String, String, String)> = Vec::new();
+        let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
         while let Some(result) = stream.next().await {
             let chunk = match result {
@@ -222,12 +260,16 @@ fn call_llm_static(
                 }
             };
 
-            if let Some(r) = &chunk.reasoning_content {
-                if !r.is_empty() {
-                    yield Ok(AgentOutputChunk::Reasoning {
-                        content: r.clone(),
-                    });
-                }
+            if let Some(u) = &chunk.usage {
+                cumulative_usage.add(u);
+            }
+
+            if let Some(r) = &chunk.reasoning_content
+                && !r.is_empty()
+            {
+                yield Ok(AgentOutputChunk::Reasoning {
+                    content: r.clone(),
+                });
             }
 
             if let Some(c) = &chunk.content {
@@ -263,6 +305,18 @@ fn call_llm_static(
                 tool_call_id: id,
                 name,
                 arguments: args.trim().to_string(),
+            });
+        }
+
+        // 单次 LLM 调用结束：产出 Finish 并携带本次的累计 usage
+        // （外层 LoopAgent 会拦截这种 Finish，累加并最终产出全局 Finish）
+        if cumulative_usage.total_tokens > 0
+            || cumulative_usage.reasoning_tokens.is_some()
+            || cumulative_usage.cache_hit_tokens.is_some()
+        {
+            yield Ok(AgentOutputChunk::Finish {
+                reason: "llm_call_done".to_string(),
+                usage: Some(cumulative_usage),
             });
         }
     };

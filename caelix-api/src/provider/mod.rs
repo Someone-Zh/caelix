@@ -1,6 +1,6 @@
 //! LLM Provider 核心定义模块
 //!
-//! 包含 LlmProvider trait、ChatMessage、LlmConfig 等定义
+//! 包含 LlmProvider trait、ChatMessage、TokenUsage、LlmConfig 等定义
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,110 @@ use tokio_stream::Stream;
 
 use crate::error::AgentError;
 use crate::tool::{ToolCall, ToolDefinition};
+
+/// Token 用量信息（来自模型响应末尾的 usage 字段）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    /// Claude / DeepSeek 等模型的 reasoning token
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
+    /// OpenAI prompt_cache_details 中的缓存命中 token
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_tokens: Option<u32>,
+}
+
+impl TokenUsage {
+    /// 累加另一份 TokenUsage 到自身（None 视为 0，保留"维度是否被报告"的语义）
+    pub fn add(&mut self, other: &TokenUsage) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+        self.reasoning_tokens = match (self.reasoning_tokens, other.reasoning_tokens) {
+            (Some(a), Some(b)) => Some(a.saturating_add(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        self.cache_hit_tokens = match (self.cache_hit_tokens, other.cache_hit_tokens) {
+            (Some(a), Some(b)) => Some(a.saturating_add(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+    }
+}
+
+/// 持久化 JSONL 中的一条用量记录（供 UsageTrackerTrait 使用，定义放在这里方便跨包共享）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageRecord {
+    pub session_id: String,
+    pub request_id: String,
+    pub trace_id: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_tokens: Option<u32>,
+    pub timestamp: String,
+}
+
+/// 聚合视图（从多条 UsageRecord 汇总得到）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageSnapshot {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    #[serde(default)]
+    pub reasoning_tokens: u32,
+    #[serde(default)]
+    pub cache_hit_tokens: u32,
+    pub record_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_timestamp: Option<String>,
+}
+
+/// Session 维度用量视图（带上下文大小与窗口上限）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionUsageView {
+    pub session_id: String,
+    pub snapshot: UsageSnapshot,
+    /// 本 session 累计 prompt_tokens（用于上下文压缩检测）
+    pub context_size_tokens: u32,
+    /// Provider 配置的上下文窗口 token 上限（未知则为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctx_window_tokens: Option<u32>,
+}
+
+/// Provider/Model 维度用量视图
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderUsageView {
+    pub provider: String,
+    pub model: String,
+    pub snapshot: UsageSnapshot,
+}
+
+/// 全局用量总览
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GlobalUsageView {
+    pub total: UsageSnapshot,
+    #[serde(default)]
+    pub by_provider_model: Vec<ProviderUsageView>,
+    #[serde(default)]
+    pub by_session: Vec<SessionUsageView>,
+}
 
 /// 消息角色枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,13 +136,18 @@ impl MessageRole {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+}
+
+impl std::str::FromStr for MessageRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "system" => Some(MessageRole::System),
-            "user" => Some(MessageRole::User),
-            "assistant" => Some(MessageRole::Assistant),
-            "tool" => Some(MessageRole::Tool),
-            _ => None,
+            "system" => Ok(MessageRole::System),
+            "user" => Ok(MessageRole::User),
+            "assistant" => Ok(MessageRole::Assistant),
+            "tool" => Ok(MessageRole::Tool),
+            _ => Err(format!("unknown role: {}", s)),
         }
     }
 }
@@ -128,6 +237,8 @@ pub struct ChatResponseChunk {
     pub id: String,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
 }
 
 /// LLM提供者特质
@@ -141,6 +252,11 @@ pub trait LlmProvider: Send + Sync + std::fmt::Debug {
         _tools: &[ToolDefinition],
         config: &LlmConfig,
     ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>;
+
+    /// 返回最近一次调用的 usage（若 provider 支持）；默认实现返回 None
+    async fn last_usage(&self) -> Option<TokenUsage> {
+        None
+    }
 }
 
 /// LLM类型枚举
@@ -160,6 +276,12 @@ pub struct ProviderConfig {
     pub temperature: Option<f32>,
     pub models: HashMap<String, String>,
     pub options: serde_json::Value,
+    /// 上下文窗口 token 上限（如 128000），用于上下文压缩判断
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctx_window_tokens: Option<u32>,
+    /// 单次输出最大 token（如 4096）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ProviderConfig {

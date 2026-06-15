@@ -1,5 +1,5 @@
 use caelix_api::context::{
-    ContextProvider, EnvConfigTrait, SecurityCheckerTrait, set_caelix_context,
+    ContextProvider, EnvConfigTrait, SecurityCheckerTrait, UsageTrackerTrait, set_caelix_context,
 };
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
@@ -14,11 +14,11 @@ use caelix_task::{FilePersistence, RunnableFactory, TaskManager};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::HookRegistry;
+use crate::{HookRegistry, UsageTracker};
 
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、ProviderManager 和 SessionManager 实例
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CaelixContext {
     /// 环境变量配置
     pub env_config: EnvConfig,
@@ -44,6 +44,28 @@ pub struct CaelixContext {
     pub task_manager: Option<Arc<TaskManager>>,
     /// 安全检查器实例
     pub security_checker: Arc<SecurityChecker>,
+    /// Token 用量追踪器
+    pub usage_tracker: Arc<UsageTracker>,
+}
+
+impl std::fmt::Debug for CaelixContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaelixContext")
+            .field("env_config", &self.env_config)
+            .field("agent_manager", &self.agent_manager)
+            .field("tool_manager", &self.tool_manager)
+            .field("llm_provider_manager", &self.llm_provider_manager)
+            .field("session_manager", &self.session_manager)
+            .field("skill_manager", &self.skill_manager)
+            .field("command_manager", &self.command_manager)
+            .field("hook_registry", &self.hook_registry)
+            .field("plugin_registry", &self.plugin_registry)
+            .field("message_bus", &self.message_bus)
+            .field("task_manager", &self.task_manager)
+            .field("security_checker", &self.security_checker)
+            .field("usage_tracker", &"UsageTracker")
+            .finish()
+    }
 }
 
 impl CaelixContext {
@@ -65,6 +87,9 @@ impl CaelixContext {
             runnable_factory,
         ));
 
+        // 初始化 Token 用量追踪器（基于 caelix_home 目录）
+        let usage_tracker = Arc::new(UsageTracker::new(&env_config.caelix_home));
+
         Self {
             env_config,
             agent_manager: Arc::new(AgentManager::new()),
@@ -80,6 +105,7 @@ impl CaelixContext {
             security_checker: Arc::new(SecurityChecker::new(
                 caelix_security::SecurityConfig::default(),
             )),
+            usage_tracker,
         }
     }
 
@@ -229,6 +255,10 @@ impl ContextProvider for CaelixContext {
 
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait> {
         self.security_checker.clone()
+    }
+
+    fn usage_tracker(&self) -> Option<Arc<dyn UsageTrackerTrait>> {
+        Some(self.usage_tracker.clone())
     }
 }
 

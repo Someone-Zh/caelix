@@ -5,7 +5,7 @@ use caelix_api::agent::AgentOutputChunk;
 use caelix_api::context::{ContextFutureExt, ContextProvider};
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
-use caelix_api::provider::{ChatMessage, LlmConfig};
+use caelix_api::provider::{ChatMessage, LlmConfig, SessionUsageView, GlobalUsageView};
 use caelix_api::task::TaskMeta;
 use caelix_runtime::context::CaelixContext;
 use futures::Stream;
@@ -399,6 +399,7 @@ impl CaelixApi for CaelixApiImpl {
                         timestamp: chrono::Utc::now(),
                         content: user_message,
                         agent_name: request_clone.agent.clone(),
+                        usage: None,
                     };
                     let _ = ctx_clone.message_bus.send_agent(user_msg);
                 }
@@ -445,17 +446,17 @@ impl CaelixApi for CaelixApiImpl {
                 if chat_msg.role != "assistant" {
                     continue;
                 }
-                if let Some(tool_calls) = &chat_msg.tool_calls {
-                    if tool_calls.iter().any(|t| t.id == tool_call_id) {
-                        // 记录相关工具名与参数
-                        let (tool_name, args) = tool_calls
-                            .iter()
-                            .find(|t| t.id == tool_call_id)
-                            .map(|t| (t.name.clone(), t.arguments.clone()))
-                            .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
-                        found_chat_msg = Some((msg_idx, chat_msg, tool_name, args.to_string()));
-                        break;
-                    }
+                if let Some(tool_calls) = &chat_msg.tool_calls
+                    && tool_calls.iter().any(|t| t.id == tool_call_id)
+                {
+                    // 记录相关工具名与参数
+                    let (tool_name, args) = tool_calls
+                        .iter()
+                        .find(|t| t.id == tool_call_id)
+                        .map(|t| (t.name.clone(), t.arguments.clone()))
+                        .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
+                    found_chat_msg = Some((msg_idx, chat_msg, tool_name, args.to_string()));
+                    break;
                 }
             }
         }
@@ -501,6 +502,7 @@ impl CaelixApi for CaelixApiImpl {
             timestamp: chrono::Utc::now(),
             content: new_content,
             agent_name: None,
+            usage: None,
         };
         storage
             .replace_agent_message(&session_for_storage, msg_idx, &new_agent_msg)
@@ -572,6 +574,7 @@ impl CaelixApi for CaelixApiImpl {
                     format!("{{\"role\":\"tool\",\"content\":\"{}\"}}", tool_result_text)
                 }),
                 agent_name: Some(tool_name.clone()),
+                usage: None,
             };
             let _ = storage
                 .append_agent_message(&agent_msg_for_storage)
@@ -591,6 +594,7 @@ impl CaelixApi for CaelixApiImpl {
                     tool_call_id, tool_name
                 ),
                 agent_name: Some(tool_name),
+                usage: None,
             };
             let _ = self.context.message_bus.send_agent(event_msg);
         } else {
@@ -610,6 +614,7 @@ impl CaelixApi for CaelixApiImpl {
                 timestamp: chrono::Utc::now(),
                 content: serde_json::to_string(&chat_tool_msg).unwrap_or_default(),
                 agent_name: None,
+                usage: None,
             };
             let _ = storage.append_agent_message(&agent_msg_for_storage).await;
 
@@ -635,6 +640,7 @@ impl CaelixApi for CaelixApiImpl {
                         .unwrap_or_default()
                 ),
                 agent_name: None,
+                usage: None,
             };
             let _ = self.context.message_bus.send_agent(event_msg);
         }
@@ -684,10 +690,39 @@ impl CaelixApi for CaelixApiImpl {
                     timestamp: chrono::Utc::now(),
                     content: format!("订阅错误: {:?}", e),
                     agent_name: None,
+                    usage: None,
                 }
             })
         }));
 
         Ok(Box::pin(merged_stream))
+    }
+
+    async fn get_session_usage(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionUsageView>, ApiError> {
+        let tracker = self
+            .context
+            .usage_tracker()
+            .ok_or_else(|| ApiError::InternalError("UsageTracker 未初始化".to_string()))?;
+        let ctx_window_tokens = self
+            .context
+            .llm_provider_manager
+            .read()
+            .await
+            .get_all_providers()
+            .first()
+            .cloned()
+            .and_then(|(_name, p)| p.config().ctx_window_tokens);
+        Ok(tracker.snapshot_session(session_id, ctx_window_tokens).await)
+    }
+
+    async fn get_global_usage(&self) -> Result<GlobalUsageView, ApiError> {
+        let tracker = self
+            .context
+            .usage_tracker()
+            .ok_or_else(|| ApiError::InternalError("UsageTracker 未初始化".to_string()))?;
+        Ok(tracker.snapshot_global().await)
     }
 }
