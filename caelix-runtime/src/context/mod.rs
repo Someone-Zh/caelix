@@ -101,7 +101,7 @@ impl CaelixContext {
         let security_config =
             caelix_security::loader::load_security_config(&self.env_config.caelix_home)?;
         self.security_checker = Arc::new(SecurityChecker::new(security_config));
-        println!("✅ Security checker initialized");
+        tracing::info!("Security checker initialized");
 
         // 2. 插件 → 工具管理器
         for plugin in self.plugin_registry.tool_plugins().await {
@@ -130,7 +130,7 @@ impl CaelixContext {
                     skill_def.content,
                 );
                 if let Err(e) = self.skill_manager.register(skill).await {
-                    eprintln!("⚠️  注册技能失败: {:?}", e);
+                    tracing::warn!(error = %e, "注册技能失败");
                 }
             }
         }
@@ -146,7 +146,7 @@ impl CaelixContext {
         for plugin in self.plugin_registry.agent_plugins().await {
             for agent in plugin.agent_instances().await? {
                 if let Err(e) = self.agent_manager.register(agent).await {
-                    eprintln!("⚠️  注册智能体失败: {:?}", e);
+                    tracing::warn!(error = %e, "注册智能体失败");
                 }
             }
         }
@@ -156,24 +156,24 @@ impl CaelixContext {
             let commands = plugin.commands().await?;
             self.command_manager.register_batch(commands).await;
         }
-        println!(
-            "✅ Commands loaded. Total: {}",
-            self.command_manager.get_all().await.len()
+        tracing::info!(
+            commands_count = self.command_manager.get_all().await.len(),
+            "Commands loaded"
         );
 
         // 8. 恢复持久化的任务
         if let Some(tm) = &self.task_manager {
             if let Err(e) = tm.restore().await {
-                eprintln!("⚠️  恢复任务失败: {:?}", e);
+                tracing::warn!(error = %e, "恢复任务失败");
             } else {
-                println!("✅ 已恢复持久化的任务");
+                tracing::info!("已恢复持久化的任务");
             }
         }
 
         // 9. 将自身注册为全局唯一上下文
         let ctx_arc: Arc<dyn ContextProvider> = Arc::new(self.clone());
         set_caelix_context(ctx_arc);
-        println!("✅ CaelixContext 已注册为全局变量");
+        tracing::info!("CaelixContext 已注册为全局变量");
 
         Ok(())
     }

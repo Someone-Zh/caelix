@@ -5,6 +5,7 @@ use caelix_api::{
     message::{AgentMessage, AgentMessageType},
 };
 use futures::StreamExt;
+use tracing::Instrument;
 
 use crate::loop_agent::LoopAgent;
 
@@ -31,141 +32,158 @@ pub async fn run_agent(
     let mut stream = agent.run(messages, provider, config).await;
 
     // 从 RuntimeContext 中获取 tracing ID；若不存在则回退为空字符串。
-    let (session_id, request_id, span_id, trace_id) =
+    let (session_id, request_id, span_id, trace_id, session_span) =
         match caelix_api::context::RuntimeContext::try_current() {
             Some(ctx) => (
                 ctx.get_session_id().to_string(),
                 ctx.get_request_id().to_string(),
                 ctx.get_span_id().to_string(),
                 ctx.get_trace_id().to_string(),
+                Some(ctx.session_span()),
             ),
-            None => (String::new(), String::new(), String::new(), String::new()),
+            None => (
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                None,
+            ),
         };
 
-    // 从 ContextProvider 中获取 message_bus（可选；无则静默跳过）
-    let maybe_bus = caelix_api::context::try_caelix_context();
+    let fut = async move {
+        tracing::info!(agent = agent_name.as_deref().unwrap_or(""), "run_agent start");
 
-    let mut result_content = String::new();
+        // 从 ContextProvider 中获取 message_bus（可选；无则静默跳过）
+        let maybe_bus = caelix_api::context::try_caelix_context();
 
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result?;
+        let mut result_content = String::new();
 
-        // 根据分片类型构造并发送消息到 message_bus
-        if let Some(bus_ctx) = &maybe_bus {
-            let msg_type = match &chunk {
-                AgentOutputChunk::Content { .. } => Some((AgentMessageType::Chunk, None)),
-                AgentOutputChunk::MessageUpdate { message } => {
-                    let payload = match serde_json::to_string(message) {
-                        Ok(json) => json,
-                        Err(_) => message.content.clone(),
-                    };
-                    Some((AgentMessageType::Msg, Some(payload)))
-                }
-                AgentOutputChunk::Start { timestamp } => Some((
-                    AgentMessageType::Event,
-                    Some(format!("[开始] {}", timestamp.format("%H:%M:%S"))),
-                )),
-                AgentOutputChunk::CallProvider {
-                    timestamp,
-                    provider,
-                    model,
-                } => Some((
-                    AgentMessageType::Event,
-                    Some(format!(
-                        "[调用模型] {} {}@{}",
-                        timestamp.format("%H:%M:%S"),
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
+
+            // 根据分片类型构造并发送消息到 message_bus
+            if let Some(bus_ctx) = &maybe_bus {
+                let msg_type = match &chunk {
+                    AgentOutputChunk::Content { .. } => Some((AgentMessageType::Chunk, None)),
+                    AgentOutputChunk::MessageUpdate { message } => {
+                        let payload = match serde_json::to_string(message) {
+                            Ok(json) => json,
+                            Err(_) => message.content.clone(),
+                        };
+                        Some((AgentMessageType::Msg, Some(payload)))
+                    }
+                    AgentOutputChunk::Start { timestamp } => Some((
+                        AgentMessageType::Event,
+                        Some(format!("[开始] {}", timestamp.format("%H:%M:%S"))),
+                    )),
+                    AgentOutputChunk::CallProvider {
+                        timestamp,
                         provider,
-                        model
+                        model,
+                    } => Some((
+                        AgentMessageType::Event,
+                        Some(format!(
+                            "[调用模型] {} {}@{}",
+                            timestamp.format("%H:%M:%S"),
+                            provider,
+                            model
+                        )),
                     )),
-                )),
-                AgentOutputChunk::Reasoning { content } => {
-                    Some((AgentMessageType::Event, Some(format!("[思考] {}", content))))
-                }
-                AgentOutputChunk::ToolCall {
-                    tool_call_id,
-                    name,
-                    arguments,
-                } => Some((
-                    AgentMessageType::Event,
-                    Some(format!(
-                        "[工具调用] {}({}): {}",
-                        tool_call_id, name, arguments
+                    AgentOutputChunk::Reasoning { content } => {
+                        Some((AgentMessageType::Event, Some(format!("[思考] {}", content))))
+                    }
+                    AgentOutputChunk::ToolCall {
+                        tool_call_id,
+                        name,
+                        arguments,
+                    } => Some((
+                        AgentMessageType::Event,
+                        Some(format!(
+                            "[工具调用] {}({}): {}",
+                            tool_call_id, name, arguments
+                        )),
                     )),
-                )),
-                AgentOutputChunk::ToolResult { tool_name, result } => Some((
-                    AgentMessageType::Event,
-                    Some(format!("[工具结果] {}: {}", tool_name, result)),
-                )),
-                AgentOutputChunk::ManualApproval {
-                    tool_call_id,
-                    tool_name,
-                    approval_type,
-                    parameters,
-                } => {
-                    // 构造结构化 JSON 内容：{ "tool_call_id", "approval_type", "parameters" }
-                    let content = match serde_json::json!({
-                        "tool_call_id": tool_call_id,
-                        "tool_name": tool_name,
-                        "approval_type": format!("{:?}", approval_type),
-                        "parameters": parameters,
-                    }) {
-                        v => serde_json::to_string(&v).unwrap_or_else(|_| {
-                            format!(
-                                "[需要审批] tool_call_id={}, tool_name={}",
-                                tool_call_id, tool_name
-                            )
-                        }),
+                    AgentOutputChunk::ToolResult { tool_name, result } => Some((
+                        AgentMessageType::Event,
+                        Some(format!("[工具结果] {}: {}", tool_name, result)),
+                    )),
+                    AgentOutputChunk::ManualApproval {
+                        tool_call_id,
+                        tool_name,
+                        approval_type,
+                        parameters,
+                    } => {
+                        let content = match serde_json::json!({
+                            "tool_call_id": tool_call_id,
+                            "tool_name": tool_name,
+                            "approval_type": format!("{:?}", approval_type),
+                            "parameters": parameters,
+                        }) {
+                            v => serde_json::to_string(&v).unwrap_or_else(|_| {
+                                format!(
+                                    "[需要审批] tool_call_id={}, tool_name={}",
+                                    tool_call_id, tool_name
+                                )
+                            }),
+                        };
+                        Some((AgentMessageType::ManualApproval, Some(content)))
+                    }
+                    AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
+                };
+
+                if let Some((msg_type, payload)) = msg_type {
+                    let content = match (&msg_type, payload) {
+                        (AgentMessageType::Msg, Some(payload)) => payload,
+                        (AgentMessageType::Chunk, _) => extract_chunk_text(&chunk),
+                        (AgentMessageType::Event, Some(desc)) => desc,
+                        (AgentMessageType::Event, None) => String::new(),
+                        _ => String::new(),
                     };
-                    Some((AgentMessageType::ManualApproval, Some(content)))
+
+                    let agent_msg = AgentMessage {
+                        session_id: session_id.clone(),
+                        request_id: request_id.clone(),
+                        span_id: span_id.clone(),
+                        trace_id: trace_id.clone(),
+                        r#type: msg_type,
+                        timestamp: chrono::Utc::now(),
+                        content,
+                        agent_name: agent_name.clone(),
+                    };
+                    let _ = bus_ctx.message_bus().send_agent(agent_msg);
                 }
-                AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
-            };
 
-            if let Some((msg_type, payload)) = msg_type {
-                let content = match (&msg_type, payload) {
-                    (AgentMessageType::Msg, Some(payload)) => payload,
-                    (AgentMessageType::Chunk, _) => extract_chunk_text(&chunk),
-                    (AgentMessageType::Event, Some(desc)) => desc,
-                    (AgentMessageType::Event, None) => String::new(),
-                    _ => String::new(),
-                };
-
-                let agent_msg = AgentMessage {
-                    session_id: session_id.clone(),
-                    request_id: request_id.clone(),
-                    span_id: span_id.clone(),
-                    trace_id: trace_id.clone(),
-                    r#type: msg_type,
-                    timestamp: chrono::Utc::now(),
-                    content,
-                    agent_name: agent_name.clone(),
-                };
-                let _ = bus_ctx.message_bus().send_agent(agent_msg);
+                // 遇到 Finish 时追加发送 ChunkEnd，清空消费者的请求缓冲
+                if matches!(chunk, AgentOutputChunk::Finish { .. }) {
+                    let end_msg = AgentMessage {
+                        session_id: session_id.clone(),
+                        request_id: request_id.clone(),
+                        span_id: span_id.clone(),
+                        trace_id: trace_id.clone(),
+                        r#type: AgentMessageType::ChunkEnd,
+                        timestamp: chrono::Utc::now(),
+                        content: String::new(),
+                        agent_name: agent_name.clone(),
+                    };
+                    let _ = bus_ctx.message_bus().send_agent(end_msg);
+                }
             }
 
-            // 遇到 Finish 时追加发送 ChunkEnd，清空消费者的请求缓冲
-            if matches!(chunk, AgentOutputChunk::Finish { .. }) {
-                let end_msg = AgentMessage {
-                    session_id: session_id.clone(),
-                    request_id: request_id.clone(),
-                    span_id: span_id.clone(),
-                    trace_id: trace_id.clone(),
-                    r#type: AgentMessageType::ChunkEnd,
-                    timestamp: chrono::Utc::now(),
-                    content: String::new(),
-                    agent_name: agent_name.clone(),
-                };
-                let _ = bus_ctx.message_bus().send_agent(end_msg);
+            // 累积最终文本内容（仅 Content 类型的分片）
+            if let AgentOutputChunk::Content { content } = &chunk {
+                result_content.push_str(content);
             }
         }
 
-        // 累积最终文本内容（仅 Content 类型的分片）
-        if let AgentOutputChunk::Content { content } = &chunk {
-            result_content.push_str(content);
-        }
+        tracing::info!(output_len = result_content.len(), "run_agent finished");
+
+        Ok(result_content)
+    };
+
+    match session_span {
+        Some(span) => fut.instrument(span).await,
+        None => fut.await,
     }
-
-    Ok(result_content)
 }
 
 /// 从 `AgentOutputChunk` 中提取流式显示文本（仅 Content 产生文本）

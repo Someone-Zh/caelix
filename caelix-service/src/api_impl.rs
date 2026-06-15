@@ -2,6 +2,7 @@ use crate::api_trait::CaelixApi;
 use crate::types::{ChatAsyncResult, ChatRequest, ProviderInfo, SessionSummary};
 use async_trait::async_trait;
 use caelix_api::agent::AgentOutputChunk;
+use caelix_api::context::{ContextFutureExt, ContextProvider};
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
 use caelix_api::provider::{ChatMessage, LlmConfig};
@@ -293,10 +294,10 @@ impl CaelixApi for CaelixApiImpl {
                 .map_err(|e| ApiError::InternalError(e.to_string()))?;
         }
 
-        // 2. 生成 request_id、span_id 和 trace_id（为将来扩展预留）
+        // 2. 生成 request_id、span_id（为将来扩展预留，trace_id 由 RuntimeContext 内部生成）
         let request_id = caelix_api::utils::generate_request_id();
         let span_id = caelix_api::utils::generate_span_id();
-        let trace_id = caelix_api::utils::generate_trace_id();
+        let _trace_id = caelix_api::utils::generate_trace_id();
 
         // 3. 确定 provider 和 model
         let default_provider = self.get_default_provider();
@@ -308,8 +309,6 @@ impl CaelixApi for CaelixApiImpl {
         let ctx_clone = self.context.clone();
         let request_clone = request.clone();
         let request_id_clone = request_id.clone();
-        let span_id_clone = span_id.clone();
-        let trace_id_clone = trace_id.clone();
 
         // 5.2 在 RuntimeContext scope 中执行
         // 获取 agent (Arc<dyn Agent>)
@@ -343,57 +342,76 @@ impl CaelixApi for CaelixApiImpl {
             .get_session_messages(&request_clone.session_id)
             .await
             .map_err(|e| ApiError::InternalError(e.to_string()))?;
-        // 5. 在后台启动任务
+
+        // 获取工作目录（用于 RuntimeContext）
+        let work_dir = ctx_clone
+            .env_config()
+            .caelix_home()
+            .join("sessions")
+            .join(request_clone.session_id.clone());
+
+        // 5. 在后台启动任务，绑定 RuntimeContext
+        let debug_enabled = ctx_clone.env_config().debug_enabled();
         tokio::spawn(async move {
-            let mut messages: Vec<ChatMessage> = Vec::new();
-            for msg in history_messages.iter() {
-                if msg.r#type == AgentMessageType::Msg {
-                    match serde_json::from_str::<ChatMessage>(&msg.content) {
-                        Ok(chat_msg) => messages.push(chat_msg),
-                        Err(_) => {
-                            messages.push(ChatMessage {
-                                role: "user".to_string(),
-                                content: msg.content.clone(),
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
+            // 创建 RuntimeContext 并绑定到 task_local 作用域
+            // 所有子异步（agent、message_bus_hook 等）都能通过 try_current() 访问
+            let runtime_ctx = Arc::new(caelix_api::context::RuntimeContext::new(
+                Some(request_clone.session_id.clone()),
+                Some(request_id_clone.clone()),
+                work_dir,
+                provider_name.clone(),
+                model_name.clone(),
+                debug_enabled,
+            ));
+
+            // 先克隆一份给 scope 使用，再把 runtime_ctx move 进 async block
+            let ctx_for_scope = runtime_ctx.clone();
+
+            let fut = async move {
+                let mut messages: Vec<ChatMessage> = Vec::new();
+                for msg in history_messages.iter() {
+                    if msg.r#type == AgentMessageType::Msg {
+                        match serde_json::from_str::<ChatMessage>(&msg.content) {
+                            Ok(chat_msg) => messages.push(chat_msg),
+                            Err(_) => {
+                                messages.push(ChatMessage {
+                                    role: "user".to_string(),
+                                    content: msg.content.clone(),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                            }
                         }
                     }
                 }
-            }
 
-            // 如果带用户消息则添加
-            if let Some(user_message) = request_clone.message.clone() {
-                messages.push(ChatMessage::user(user_message.clone()));
+                // 如果带用户消息则添加
+                if let Some(user_message) = request_clone.message.clone() {
+                    messages.push(ChatMessage::user(user_message.clone()));
 
-                // 发送用户消息到消息总线（只有带用户消息才发）
-                let user_msg = AgentMessage {
-                    session_id: request_clone.session_id.clone(),
-                    request_id: request_id_clone.clone(),
-                    span_id: span_id_clone.clone(), // 使用预先生成的 span_id
-                    trace_id: trace_id_clone.clone(),
-                    r#type: AgentMessageType::Msg,
-                    timestamp: chrono::Utc::now(),
-                    content: user_message,
-                    agent_name: request_clone.agent.clone(),
-                };
-                let _ = ctx_clone.message_bus.send_agent(user_msg);
-            } else {
-                // 恢复（resume）场景：不追加新用户消息，
-                // 若 messages 最后一条是 Assistant 且含 tool_calls，
-                // 则 LoopAgent 会进入 resume 流程继续处理工具执行
-            }
+                    // 发送用户消息到消息总线（只有带用户消息才发）
+                    let user_msg = AgentMessage {
+                        session_id: request_clone.session_id.clone(),
+                        request_id: request_id_clone.clone(),
+                        span_id: runtime_ctx.get_span_id().to_string(),
+                        trace_id: runtime_ctx.get_trace_id().to_string(),
+                        r#type: AgentMessageType::Msg,
+                        timestamp: chrono::Utc::now(),
+                        content: user_message,
+                        agent_name: request_clone.agent.clone(),
+                    };
+                    let _ = ctx_clone.message_bus.send_agent(user_msg);
+                }
 
-            // ✅ 使用 caelix_agent::run_agent（内部通过 ContextProvider 获取 message_bus 并发送消息）
-            let _result = execute_agent_with_messaging(agent_spec, messages, provider, &config)
-                .await
-                .map_err(|e| ApiError::InternalError(e.to_string()));
+                // 使用 caelix_agent::run_agent（内部通过 RuntimeContext + ContextProvider 获取 message_bus）
+                let _result = execute_agent_with_messaging(agent_spec, messages, provider, &config)
+                    .await
+                    .map_err(|e| ApiError::InternalError(e.to_string()));
 
-            let result = Ok::<_, ApiError>(());
+                Ok::<_, ApiError>(())
+            };
 
-            if let Err(e) = result {
-                eprintln!("❌ chat_stream_async 执行失败: {:?}", e);
-            }
+            fut.with_runtime_ctx(ctx_for_scope).await
         });
 
         // 6. 立即返回完整信息

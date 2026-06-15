@@ -29,7 +29,7 @@ pub fn load_provider_configs(
     let configs: HashMap<String, ProviderConfig> = match serde_json::from_str(&content) {
         Ok(configs) => configs,
         Err(e) => {
-            eprintln!("❌ 解析 provider.json 失败: {}", e);
+            tracing::warn!(error = %e, "解析 provider.json 失败");
             return Err(Box::new(e));
         }
     };

@@ -79,11 +79,11 @@ async fn load_skills_recursive(
             Box::pin(load_skills_recursive(base_dir, &path, skills)).await?;
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("skill") {
             // 处理 .skill 文件
-            println!("Loading skill from: {:?}", path);
+            tracing::info!(skill_file = %path.display(), "Loading skill");
             match load_single_skill(&path, base_dir).await {
                 Ok(skill) => skills.push(skill),
                 Err(e) => {
-                    eprintln!("Warning: Failed to load skill from {:?}: {}", path, e);
+                    tracing::warn!(skill_file = %path.display(), error = %e, "Failed to load skill");
                 }
             }
         }

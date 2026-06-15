@@ -302,7 +302,7 @@ impl LlmProvider for OpenAIProvider {
                     let json = match serde_json::from_slice::<Value>(data) {
                         Ok(j) => j,
                         Err(e) => {
-                            eprintln!("JSON 解析失败: {}", e);
+                            tracing::warn!(error = %e, "JSON chunk parse failed");
                             continue;
                         }
                     };

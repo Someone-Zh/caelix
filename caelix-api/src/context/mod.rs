@@ -301,6 +301,29 @@ impl RuntimeContext {
     pub fn get_model(&self) -> &str {
         &self.model
     }
+
+    /// 创建一个绑定了 session/request/trace ID 等字段的 `tracing::Span`。
+    ///
+    /// 进入这个 span 后，本 session 内的所有 `tracing::info!/debug!/warn!/error!`
+    /// 等事件都会自动携带这些字段（前提是 subscriber 使用了 JSON 格式或
+    /// 在字段表中包含 span 字段）。
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let _guard = ctx.session_span().enter();
+    /// tracing::info!("开始处理请求");
+    /// ```
+    pub fn session_span(&self) -> tracing::Span {
+        tracing::info_span!(
+            "session",
+            session_id = %self.session_id,
+            request_id = %self.request_id,
+            span_id = %self.span_id,
+            trace_id = %self.trace_id,
+            provider = %self.provider,
+            model = %self.model,
+        )
+    }
 }
 
 impl RuntimeContext {
