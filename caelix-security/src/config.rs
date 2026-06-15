@@ -9,6 +9,9 @@ pub struct SecurityConfig {
     /// URL 安全配置
     #[serde(default)]
     pub url: UrlSecurityConfig,
+    /// 命令安全配置
+    #[serde(default)]
+    pub command: CommandSecurityConfig,
 }
 
 /// 路径安全配置
@@ -33,11 +36,23 @@ pub struct UrlSecurityConfig {
     pub exclude: Vec<String>,
 }
 
+/// 命令安全配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSecurityConfig {
+    /// 允许执行的命令列表，支持精确命令名、绝对路径和 glob 模式
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// 禁止执行的命令列表，优先级高于 include
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
             path: PathSecurityConfig::default(),
             url: UrlSecurityConfig::default(),
+            command: CommandSecurityConfig::default(),
         }
     }
 }
@@ -55,6 +70,15 @@ impl Default for UrlSecurityConfig {
     fn default() -> Self {
         Self {
             include: vec![], // 默认不允许任何 URL
+            exclude: vec![],
+        }
+    }
+}
+
+impl Default for CommandSecurityConfig {
+    fn default() -> Self {
+        Self {
+            include: vec![], // 默认不允许任何命令
             exclude: vec![],
         }
     }

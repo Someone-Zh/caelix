@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use caelix_api::tool::{Tool, ToolApprovalType, ToolPreCheckResult, ToolResult};
+use caelix_api::tool::{Tool, ToolPreCheckResult, ToolResult};
 use serde_json::{Value as JsonValue, json};
 use walkdir::WalkDir;
 
@@ -27,10 +27,7 @@ impl Tool for DirectoryTreeTool {
 
     fn pre_check(&self, input: &JsonValue) -> Option<ToolPreCheckResult> {
         let path = input["path"].as_str().unwrap_or_default().to_string();
-        Some(ToolPreCheckResult {
-            approval_type: ToolApprovalType::Path,
-            parameters: json!({ "path": path }),
-        })
+        Some(ToolPreCheckResult::path(path))
     }
 
     /// JSON 参数 schema：path(必选), max_depth(可选，默认1，最大10), show_hidden(可选，默认false), filter_type(可选，默认all)

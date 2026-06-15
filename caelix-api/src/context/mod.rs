@@ -2,18 +2,18 @@
 //!
 //! 定义轻量级的接口 trait，允许运行时层通过统一接口访问配置层的组件，
 //! 避免 caelix-runtime 直接依赖 caelix-config
-use std::path::PathBuf;
+use crate::hooks::HookRegistry;
+use crate::managers::{AgentManager, CommandManager, ProviderManager, SkillManager, ToolManager};
+use crate::message::{MessageBusTrait, SessionManagerTrait};
+use crate::plugins::PluginManager;
+use crate::task::TaskManagerTrait;
+use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
+use async_trait::async_trait;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use async_trait::async_trait;
 use tokio::sync::RwLock;
-use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
-use crate::message::{MessageBusTrait, SessionManagerTrait};
-use crate::task::TaskManagerTrait;
-use crate::managers::{AgentManager, ProviderManager, SkillManager, ToolManager, CommandManager};
-use crate::plugins::PluginManager;
-use crate::hooks::HookRegistry;
 
 // ==================== 全局唯一 CaelixContext 存储 ====================
 
@@ -65,7 +65,7 @@ impl std::fmt::Debug for dyn EnvConfigTrait {
 
 /// 安全检查 Trait
 ///
-/// 提供文件路径和 URL 的安全检查。
+/// 提供文件路径、URL 和命令的安全检查。
 /// 具体实现位于 `caelix-security` 包中。
 #[async_trait]
 pub trait SecurityCheckerTrait: Send + Sync {
@@ -74,6 +74,9 @@ pub trait SecurityCheckerTrait: Send + Sync {
 
     /// 检查 URL 是否安全（不在黑名单中）
     async fn check_url(&self, url: &str) -> Result<(), String>;
+
+    /// 检查命令是否安全（在白名单中，且不在黑名单中）
+    async fn check_command(&self, command: &str) -> Result<(), String>;
 }
 
 impl std::fmt::Debug for dyn SecurityCheckerTrait {
@@ -137,7 +140,6 @@ pub trait ContextFutureExt: Future + Sized {
 }
 impl<F: Future> ContextFutureExt for F {}
 
-
 /// 运行时上下文 - Session 级别
 ///
 /// 每个 Session 有独立的上下文实例，通过 tokio::task_local! 存储
@@ -166,9 +168,7 @@ pub struct RuntimeContext {
 
     /// Debug 模式是否启用（协程内可覆盖全局设置）
     debug_enabled: bool,
-
 }
-
 
 impl std::fmt::Debug for RuntimeContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -301,7 +301,6 @@ impl RuntimeContext {
     pub fn get_model(&self) -> &str {
         &self.model
     }
-   
 }
 
 impl RuntimeContext {

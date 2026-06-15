@@ -307,16 +307,17 @@ fn render_task_list(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             // 从 payload 中提取任务类型名称
-            let task_type_name =
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&task.task_payload) {
-                    if let Some(kind) = payload.get("kind") {
-                        kind.as_str().unwrap_or("unknown").to_string()
-                    } else {
-                        "unknown".to_string()
-                    }
+            let task_type_name = if let Ok(payload) =
+                serde_json::from_str::<serde_json::Value>(&task.task_payload)
+            {
+                if let Some(kind) = payload.get("kind") {
+                    kind.as_str().unwrap_or("unknown").to_string()
                 } else {
                     "unknown".to_string()
-                };
+                }
+            } else {
+                "unknown".to_string()
+            };
 
             let content = format!("{} {} {}", status_icon, task_type_name, status_str);
 

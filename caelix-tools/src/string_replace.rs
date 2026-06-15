@@ -3,7 +3,7 @@ use serde_json::{Value as JsonValue, json};
 use std::path::Path;
 use tokio::fs;
 
-use caelix_api::tool::{Tool, ToolApprovalType, ToolPreCheckResult, ToolResult};
+use caelix_api::tool::{Tool, ToolPreCheckResult, ToolResult};
 
 // 最大可编辑文件大小：10MB
 const MAX_REPLACE_SIZE: usize = 10 * 1024 * 1024;
@@ -23,10 +23,7 @@ impl Tool for StringReplaceTool {
 
     fn pre_check(&self, input: &JsonValue) -> Option<ToolPreCheckResult> {
         let file_path = input["file_path"].as_str()?.to_string();
-        Some(ToolPreCheckResult {
-            approval_type: ToolApprovalType::Path,
-            parameters: json!({ "file_path": file_path }),
-        })
+        Some(ToolPreCheckResult::path(file_path))
     }
 
     fn parameters_schema(&self) -> JsonValue {

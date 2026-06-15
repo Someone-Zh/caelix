@@ -1,6 +1,6 @@
 use crate::skills_loader::parse_yaml_markdown_file;
 use caelix_api::agent::AgentSpec;
-use caelix_api::managers::{ToolManager};
+use caelix_api::managers::ToolManager;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -76,5 +76,3 @@ pub async fn load_agents_from_directory(
 
     Ok(agents)
 }
-
-

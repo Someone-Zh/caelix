@@ -448,7 +448,7 @@ impl CaelixApi for CaelixApiImpl {
                 return Err(ApiError::InternalError(format!(
                     "未在 session {} 中找到 tool_call_id = {} 的 Assistant 消息",
                     session_id, tool_call_id
-                )))
+                )));
             }
         };
 
@@ -520,8 +520,7 @@ impl CaelixApi for CaelixApiImpl {
                         let tool = match tool {
                             Some(t) => t,
                             None => {
-                                tool_result_text =
-                                    format!("[ERROR] Tool '{}' not found", tc.name);
+                                tool_result_text = format!("[ERROR] Tool '{}' not found", tc.name);
                                 break;
                             }
                         };
@@ -559,9 +558,7 @@ impl CaelixApi for CaelixApiImpl {
             let _ = storage
                 .append_agent_message(&agent_msg_for_storage)
                 .await
-                .map_err(|e| {
-                    ApiError::InternalError(format!("持久化 tool_result 失败: {}", e))
-                })?;
+                .map_err(|e| ApiError::InternalError(format!("持久化 tool_result 失败: {}", e)))?;
 
             // 发送一条 Event 消息让前端感知（通过消息总线）
             let event_msg = AgentMessage {
@@ -582,10 +579,7 @@ impl CaelixApi for CaelixApiImpl {
             // 拒绝：追加一条拒绝文本 tool_result 消息
             let chat_tool_msg = ChatMessage {
                 role: "tool".to_string(),
-                content: format!(
-                    "[REJECTED] tool_call_id={} 已被拒绝执行",
-                    tool_call_id
-                ),
+                content: format!("[REJECTED] tool_call_id={} 已被拒绝执行", tool_call_id),
                 tool_calls: None,
                 tool_call_id: Some(tool_call_id.to_string()),
             };
@@ -611,12 +605,16 @@ impl CaelixApi for CaelixApiImpl {
                 timestamp: chrono::Utc::now(),
                 content: format!(
                     "[已拒绝] tool_call_id={}, tool_name={}",
-                    tool_call_id, chat_msg.tool_calls.as_ref().map(|t| t
-                        .iter()
-                        .find(|tc| tc.id == tool_call_id)
-                        .map(|tc| tc.name.clone())
+                    tool_call_id,
+                    chat_msg
+                        .tool_calls
+                        .as_ref()
+                        .map(|t| t
+                            .iter()
+                            .find(|tc| tc.id == tool_call_id)
+                            .map(|tc| tc.name.clone())
+                            .unwrap_or_default())
                         .unwrap_or_default()
-                    ).unwrap_or_default()
                 ),
                 agent_name: None,
             };

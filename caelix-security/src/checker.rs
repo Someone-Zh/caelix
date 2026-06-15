@@ -1,3 +1,4 @@
+use crate::command_checker::CommandChecker;
 use crate::config::SecurityConfig;
 use crate::path_checker::PathChecker;
 use crate::url_checker::UrlChecker;
@@ -26,6 +27,7 @@ pub struct SecurityChecker {
     config: Arc<RwLock<SecurityConfig>>,
     path_checker: Arc<RwLock<PathChecker>>,
     url_checker: Arc<RwLock<UrlChecker>>,
+    command_checker: Arc<RwLock<CommandChecker>>,
 }
 
 impl std::fmt::Debug for SecurityChecker {
@@ -41,11 +43,13 @@ impl SecurityChecker {
     pub fn new(config: SecurityConfig) -> Self {
         let path_config = config.path.clone();
         let url_config = config.url.clone();
+        let command_config = config.command.clone();
 
         Self {
             config: Arc::new(RwLock::new(config)),
             path_checker: Arc::new(RwLock::new(PathChecker::new(path_config))),
             url_checker: Arc::new(RwLock::new(UrlChecker::new(url_config))),
+            command_checker: Arc::new(RwLock::new(CommandChecker::new(command_config))),
         }
     }
 
@@ -59,6 +63,12 @@ impl SecurityChecker {
     pub async fn is_url_safe(&self, url: &str) -> bool {
         let checker = self.url_checker.read().await;
         checker.is_safe(url)
+    }
+
+    /// 检查命令是否安全
+    pub async fn is_command_safe(&self, command: &str) -> bool {
+        let checker = self.command_checker.read().await;
+        checker.is_safe(command)
     }
 
     /// 添加允许路径并持久化
@@ -132,6 +142,40 @@ impl SecurityChecker {
         Ok(())
     }
 
+    /// 添加允许命令并持久化
+    pub async fn add_command_include(&self, command: String) -> Result<(), SecurityError> {
+        {
+            let mut checker = self.command_checker.write().await;
+            checker.add_include(command.clone());
+        }
+
+        {
+            let mut config = self.config.write().await;
+            if !config.command.include.contains(&command) {
+                config.command.include.push(command);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 添加排除命令并持久化
+    pub async fn add_command_exclude(&self, command: String) -> Result<(), SecurityError> {
+        {
+            let mut checker = self.command_checker.write().await;
+            checker.add_exclude(command.clone());
+        }
+
+        {
+            let mut config = self.config.write().await;
+            if !config.command.exclude.contains(&command) {
+                config.command.exclude.push(command);
+            }
+        }
+
+        Ok(())
+    }
+
     /// 获取当前配置
     pub async fn get_config(&self) -> SecurityConfig {
         self.config.read().await.clone()
@@ -141,10 +185,12 @@ impl SecurityChecker {
     pub async fn reload_config(&self, new_config: SecurityConfig) {
         let path_config = new_config.path.clone();
         let url_config = new_config.url.clone();
+        let command_config = new_config.command.clone();
 
         *self.config.write().await = new_config;
         *self.path_checker.write().await = PathChecker::new(path_config);
         *self.url_checker.write().await = UrlChecker::new(url_config);
+        *self.command_checker.write().await = CommandChecker::new(command_config);
     }
 }
 
@@ -164,6 +210,17 @@ impl caelix_api::context::SecurityCheckerTrait for SecurityChecker {
             Ok(())
         } else {
             Err(format!("URL '{}' is not allowed (security policy)", url))
+        }
+    }
+
+    async fn check_command(&self, command: &str) -> Result<(), String> {
+        if self.is_command_safe(command).await {
+            Ok(())
+        } else {
+            Err(format!(
+                "Command '{}' is not allowed (security policy)",
+                command
+            ))
         }
     }
 }

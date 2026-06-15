@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use caelix_api::{
-    message::{AgentMessage, AgentMessageType},
     Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage, LlmConfig,
+    message::{AgentMessage, AgentMessageType},
 };
 use futures::StreamExt;
 
@@ -39,12 +39,7 @@ pub async fn run_agent(
                 ctx.get_span_id().to_string(),
                 ctx.get_trace_id().to_string(),
             ),
-            None => (
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
+            None => (String::new(), String::new(), String::new(), String::new()),
         };
 
     // 从 ContextProvider 中获取 message_bus（可选；无则静默跳过）
@@ -83,42 +78,47 @@ pub async fn run_agent(
                         model
                     )),
                 )),
-                AgentOutputChunk::Reasoning { content } => Some((
-                    AgentMessageType::Event,
-                    Some(format!("[思考] {}", content)),
-                )),
+                AgentOutputChunk::Reasoning { content } => {
+                    Some((AgentMessageType::Event, Some(format!("[思考] {}", content))))
+                }
                 AgentOutputChunk::ToolCall {
                     tool_call_id,
                     name,
                     arguments,
                 } => Some((
                     AgentMessageType::Event,
-                    Some(format!("[工具调用] {}({}): {}", tool_call_id, name, arguments)),
+                    Some(format!(
+                        "[工具调用] {}({}): {}",
+                        tool_call_id, name, arguments
+                    )),
                 )),
                 AgentOutputChunk::ToolResult { tool_name, result } => Some((
-                AgentMessageType::Event,
-                Some(format!("[工具结果] {}: {}", tool_name, result)),
-            )),
-            AgentOutputChunk::ManualApproval {
-                tool_call_id,
-                tool_name,
-                approval_type,
-                parameters,
-            } => {
-                // 构造结构化 JSON 内容：{ "tool_call_id", "approval_type", "parameters" }
-                let content = match serde_json::json!({
-                    "tool_call_id": tool_call_id,
-                    "tool_name": tool_name,
-                    "approval_type": format!("{:?}", approval_type),
-                    "parameters": parameters,
-                }) {
-                    v => serde_json::to_string(&v).unwrap_or_else(|_| {
-                        format!("[需要审批] tool_call_id={}, tool_name={}", tool_call_id, tool_name)
-                    }),
-                };
-                Some((AgentMessageType::ManualApproval, Some(content)))
-            }
-            AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
+                    AgentMessageType::Event,
+                    Some(format!("[工具结果] {}: {}", tool_name, result)),
+                )),
+                AgentOutputChunk::ManualApproval {
+                    tool_call_id,
+                    tool_name,
+                    approval_type,
+                    parameters,
+                } => {
+                    // 构造结构化 JSON 内容：{ "tool_call_id", "approval_type", "parameters" }
+                    let content = match serde_json::json!({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "approval_type": format!("{:?}", approval_type),
+                        "parameters": parameters,
+                    }) {
+                        v => serde_json::to_string(&v).unwrap_or_else(|_| {
+                            format!(
+                                "[需要审批] tool_call_id={}, tool_name={}",
+                                tool_call_id, tool_name
+                            )
+                        }),
+                    };
+                    Some((AgentMessageType::ManualApproval, Some(content)))
+                }
+                AgentOutputChunk::Finish { .. } => Some((AgentMessageType::Event, None)),
             };
 
             if let Some((msg_type, payload)) = msg_type {

@@ -27,6 +27,29 @@ pub struct ToolPreCheckResult {
     pub parameters: JsonValue,
 }
 
+impl ToolPreCheckResult {
+    pub fn path(path: impl Into<String>) -> Self {
+        Self {
+            approval_type: ToolApprovalType::Path,
+            parameters: serde_json::json!({ "path": path.into() }),
+        }
+    }
+
+    pub fn url(url: impl Into<String>) -> Self {
+        Self {
+            approval_type: ToolApprovalType::Url,
+            parameters: serde_json::json!({ "url": url.into() }),
+        }
+    }
+
+    pub fn command(command: impl Into<String>) -> Self {
+        Self {
+            approval_type: ToolApprovalType::Command,
+            parameters: serde_json::json!({ "command": command.into() }),
+        }
+    }
+}
+
 /// ToolCall 上的审批状态（业务侧使用，默认 None，持久化但不传 LLM）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ToolCallApprovalState {
@@ -45,6 +68,11 @@ pub trait Tool: Send + Sync + std::fmt::Debug + 'static {
     /// 默认 None 表示无需审批。各工具按需实现。
     fn pre_check(&self, _input: &JsonValue) -> Option<ToolPreCheckResult> {
         None
+    }
+
+    /// 批量预查：用于一次工具调用同时涉及多种资源（如命令 + cwd）。
+    fn pre_checks(&self, input: &JsonValue) -> Vec<ToolPreCheckResult> {
+        self.pre_check(input).into_iter().collect()
     }
 
     fn clone_box(&self) -> Box<dyn Tool>;

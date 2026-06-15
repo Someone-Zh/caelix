@@ -344,11 +344,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                 }
                                 AgentMessageType::ManualApproval => {
                                     let timestamp = msg.timestamp.format("%H:%M:%S");
-                                    println!(
-                                        "\n[{}] ⚠️ [需要审批] {}",
-                                        timestamp,
-                                        msg.content
-                                    );
+                                    println!("\n[{}] ⚠️ [需要审批] {}", timestamp, msg.content);
                                     let _ = std::io::stdout().flush();
                                 }
                             }
@@ -552,11 +548,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
                                 }
                                 AgentMessageType::ManualApproval => {
                                     let timestamp = msg.timestamp.format("%H:%M:%S");
-                                    println!(
-                                        "\n[{}] ⚠️ [需要审批] {}",
-                                        timestamp,
-                                        msg.content
-                                    );
+                                    println!("\n[{}] ⚠️ [需要审批] {}", timestamp, msg.content);
                                     let _ = std::io::stdout().flush();
                                 }
                             }

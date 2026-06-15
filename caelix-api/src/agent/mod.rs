@@ -130,7 +130,7 @@ pub trait Agent: Send + Sync {
         llm_provider: Arc<dyn LlmProvider>,
         config: &LlmConfig,
     ) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>>;
-    
+
     fn get_spec(&self) -> Arc<AgentSpec>;
 
     // fn update_messages(){

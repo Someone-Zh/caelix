@@ -562,7 +562,12 @@ impl caelix_api::message::SessionManagerTrait for SessionManager {
     ) -> Result<
         (
             Vec<caelix_api::message::AgentMessage>,
-            std::pin::Pin<Box<dyn futures::Stream<Item = Result<caelix_api::message::AgentMessage, String>> + Send>>,
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<Item = Result<caelix_api::message::AgentMessage, String>>
+                        + Send,
+                >,
+            >,
         ),
         String,
     > {
@@ -580,7 +585,13 @@ impl caelix_api::message::SessionManagerTrait for SessionManager {
     ) -> Result<
         (
             Vec<caelix_api::message::NotificationMessage>,
-            std::pin::Pin<Box<dyn futures::Stream<Item = Result<caelix_api::message::NotificationMessage, String>> + Send>>,
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<caelix_api::message::NotificationMessage, String>,
+                        > + Send,
+                >,
+            >,
         ),
         String,
     > {
@@ -598,7 +609,12 @@ impl caelix_api::message::SessionManagerTrait for SessionManager {
     ) -> Result<
         (
             Vec<caelix_api::message::TaskMessage>,
-            std::pin::Pin<Box<dyn futures::Stream<Item = Result<caelix_api::message::TaskMessage, String>> + Send>>,
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<Item = Result<caelix_api::message::TaskMessage, String>>
+                        + Send,
+                >,
+            >,
         ),
         String,
     > {

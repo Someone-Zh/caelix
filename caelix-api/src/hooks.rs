@@ -1,7 +1,6 @@
 //! Hook definitions for the API layer
 
-use crate::agent::{AgentOutputChunk, AgentSpec};
-use crate::provider::ChatMessage;
+use crate::agent::AgentSpec;
 use crate::tool::ToolResult;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -15,12 +14,9 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct HookCapability: u32 {
         const INIT = 1 << 0;              // Agent初始化阶段
-        const PRE_PROCESS = 1 << 1;       // Agent执行前阶段
-        const POST_PROCESS = 1 << 2;      // Agent执行后阶段
-        const ERROR = 1 << 3;             // 错误处理阶段
-        const PRE_TOOL_EXEC = 1 << 4;     // 工具执行前阶段（新增）
-        const ON_MESSAGE_UPDATE = 1 << 5; // 消息更新时阶段（新增）
-        const POST_TOOL_EXEC = 1 << 6;    // 工具执行后阶段（可修改结果）
+        const PRE_TOOL_EXEC = 1 << 1;     // 工具执行前阶段
+        const ON_MESSAGE_UPDATE = 1 << 2; // 消息更新时阶段
+        const POST_TOOL_EXEC = 1 << 3;    // 工具执行后阶段（可修改结果）
     }
 }
 
@@ -152,14 +148,6 @@ impl HookContext {
     }
 }
 
-/// Hook阶段枚举
-#[derive(Debug, Clone)]
-pub enum HookStage {
-    Init,
-    Pre,
-    Post,
-}
-
 /// 消息更新上下文
 #[derive(Debug, Clone)]
 pub struct MessageUpdateContext {
@@ -190,29 +178,6 @@ pub struct PostToolExecContext {
 /// Init阶段上下文
 pub struct InitContext<'a> {
     pub agent_spec: &'a mut AgentSpec,
-}
-
-/// Pre阶段上下文
-pub struct PreContext<'a> {
-    pub messages: &'a mut Vec<ChatMessage>,
-    pub agent_name: String,
-    pub agent_group: Option<String>,
-}
-
-/// Post阶段上下文
-pub struct PostContext<'a> {
-    pub input_messages: &'a [ChatMessage],
-    pub output_chunks: &'a [AgentOutputChunk],
-    pub agent_name: String,
-    pub agent_group: Option<String>,
-}
-
-/// Error阶段上下文
-pub struct ErrorContext {
-    pub error: anyhow::Error,
-    pub stage: HookStage,
-    pub agent_name: String,
-    pub agent_group: Option<String>,
 }
 
 /// Agent增强钩子trait
@@ -246,21 +211,6 @@ pub trait AgentHook: Send + Sync {
         Ok(()) // 默认空实现
     }
 
-    /// Pre-Process钩子：Agent执行前调用，可修改输入消息
-    async fn on_pre_process(&self, _ctx: &mut PreContext<'_>) -> Result<(), anyhow::Error> {
-        Ok(()) // 默认空实现
-    }
-
-    /// Post-Process钩子：Agent执行后调用，只读输出
-    async fn on_post_process(&self, _ctx: &PostContext<'_>) -> Result<(), anyhow::Error> {
-        Ok(()) // 默认空实现
-    }
-
-    /// On-Error钩子：出错时调用
-    async fn on_error(&self, _ctx: &ErrorContext) -> Result<(), anyhow::Error> {
-        Ok(()) // 默认空实现
-    }
-
     /// Pre-Tool-Execution钩子：工具执行前调用
     async fn on_pre_tool_exec(&self, _ctx: &mut PreToolExecContext) -> Result<(), anyhow::Error> {
         Ok(()) // 默认空实现
@@ -286,9 +236,6 @@ type HookRef = Arc<dyn AgentHook>;
 pub struct HookRegistry {
     hooks: Arc<RwLock<Vec<HookRef>>>,
     init_hooks: Arc<RwLock<Vec<HookRef>>>,
-    pre_hooks: Arc<RwLock<Vec<HookRef>>>,
-    post_hooks: Arc<RwLock<Vec<HookRef>>>,
-    error_hooks: Arc<RwLock<Vec<HookRef>>>,
     pre_tool_exec_hooks: Arc<RwLock<Vec<HookRef>>>,
     post_tool_exec_hooks: Arc<RwLock<Vec<HookRef>>>,
     message_update_hooks: Arc<RwLock<Vec<HookRef>>>,
@@ -313,9 +260,6 @@ impl HookRegistry {
         Self {
             hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
             init_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
-            pre_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
-            post_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
-            error_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
             pre_tool_exec_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
             post_tool_exec_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
             message_update_hooks: Arc::new(RwLock::new(Vec::<HookRef>::new())),
@@ -333,21 +277,6 @@ impl HookRegistry {
         if caps.contains(HookCapability::INIT) {
             let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
                 self.init_hooks.write().await;
-            guard.push(hook.clone());
-        }
-        if caps.contains(HookCapability::PRE_PROCESS) {
-            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
-                self.pre_hooks.write().await;
-            guard.push(hook.clone());
-        }
-        if caps.contains(HookCapability::POST_PROCESS) {
-            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
-                self.post_hooks.write().await;
-            guard.push(hook.clone());
-        }
-        if caps.contains(HookCapability::ERROR) {
-            let mut guard: tokio::sync::RwLockWriteGuard<'_, Vec<HookRef>> =
-                self.error_hooks.write().await;
             guard.push(hook.clone());
         }
         if caps.contains(HookCapability::PRE_TOOL_EXEC) {

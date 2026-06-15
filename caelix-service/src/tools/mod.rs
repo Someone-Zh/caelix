@@ -18,5 +18,9 @@ pub fn create_all_builtin_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(caelix_tools::SmartSearchTool),
         // 文件读取工具
         Arc::new(caelix_tools::ReadFileTool),
+        // 字符串替换工具
+        Arc::new(caelix_tools::StringReplaceTool),
+        // 命令行执行工具
+        Arc::new(caelix_tools::CommandExecTool),
     ]
 }

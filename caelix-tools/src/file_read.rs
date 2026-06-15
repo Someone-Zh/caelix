@@ -4,7 +4,7 @@ use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use caelix_api::tool::{Tool, ToolApprovalType, ToolPreCheckResult, ToolResult};
+use caelix_api::tool::{Tool, ToolPreCheckResult, ToolResult};
 
 #[derive(Debug, Clone)]
 pub struct ReadFileTool;
@@ -22,10 +22,7 @@ impl Tool for ReadFileTool {
     /// 预查：file_read 在有人机交互审批，避免误操作高价值文件
     fn pre_check(&self, input: &JsonValue) -> Option<ToolPreCheckResult> {
         let file_path = input["file_path"].as_str()?;
-        Some(ToolPreCheckResult {
-            approval_type: ToolApprovalType::Path,
-            parameters: json!({ "file_path": file_path }),
-        })
+        Some(ToolPreCheckResult::path(file_path))
     }
 
     fn parameters_schema(&self) -> JsonValue {

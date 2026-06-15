@@ -1,4 +1,6 @@
-use caelix_api::context::{ContextProvider, EnvConfigTrait, SecurityCheckerTrait, set_caelix_context};
+use caelix_api::context::{
+    ContextProvider, EnvConfigTrait, SecurityCheckerTrait, set_caelix_context,
+};
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
 };
@@ -113,8 +115,7 @@ impl CaelixContext {
             let mut provider_manager = self.llm_provider_manager.write().await;
             for plugin in self.plugin_registry.llm_provider_plugins().await {
                 for named_provider in plugin.llm_providers().await? {
-                    provider_manager
-                        .add_provider(named_provider.name, named_provider.provider)?;
+                    provider_manager.add_provider(named_provider.name, named_provider.provider)?;
                 }
             }
         }
@@ -221,7 +222,9 @@ impl ContextProvider for CaelixContext {
     }
 
     fn task_manager(&self) -> Option<Arc<dyn TaskManagerTrait>> {
-        self.task_manager.clone().map(|tm| tm as Arc<dyn TaskManagerTrait>)
+        self.task_manager
+            .clone()
+            .map(|tm| tm as Arc<dyn TaskManagerTrait>)
     }
 
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait> {
@@ -234,4 +237,3 @@ impl Default for CaelixContext {
         Self::new()
     }
 }
-
