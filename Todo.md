@@ -101,74 +101,6 @@ fn context_manager(&self) -> &ContextManager;
 
 ## 3. 项目级配置融合
 
-### 3.1 现状分析
-
-- `EnvConfig` 仅从环境变量读取 `CAELIX_HOME` 与 `CAELIX_DEBUG`，没有项目级（per-directory）配置文件。
-- `ProviderConfig` / `AgentSpec` 是全局加载的：一旦启动进程，所有 session 使用同一套 provider/agent，无法在**某个 Git 仓库根目录**下使用不同的 `api_key`、`default_model`、`work_dir`、`skills`、`allow_commands`。
-- 目前 `CommandExecTool` 的命令与路径白名单依赖 `caelix-security`，与 provider/agent 配置**不在同一处**，配置体验零散。
-
-### 3.2 设计方案
-
-#### 3.2.1 定义 `ProjectConfig` 结构
-
-**文件**：`caelix-api/src/project/mod.rs`（新模块）
-
-```toml
-# ~/my_project/.caelix.toml  （项目根目录文件）
-
-[project]
-name = "my_project"
-default_agent = "code_executor_agent"   # 覆盖全局默认
-default_provider = "openai"
-default_model = "gpt-4"
-
-[project.ctx_window]
-tokens = 8000        # 上下文窗口大小；超过时走第 2 节的压缩
-max_output_tokens = 2000
-
-[project.provider.overrides]
-# 只在本项目下替换 base_url / api_key 等字段，不写明文 key 时走环境变量
-openai.base_url = "https://xxx.yyy/v1"
-openai.api_key_env = "MY_PROJECT_OPENAI_KEY"
-openai.temperature = 0.2
-
-[project.security]
-allow_commands = ["git", "cargo", "npm"]
-allow_paths = ["/home/user/my_project", "/tmp"]
-
-[project.memory]
-enable_summary = true
-external_skills = ["skills/coding/rust.skill"]
-external_files = ["docs/README.md"]
-
-[project.logging]
-level = "debug"
-```
-
-#### 3.2.2 查找与合并策略
-
-**文件**：`caelix-config/src/project_loader.rs`（新文件）
-
-- 启动时从 `work_dir` 向上遍历到 `$HOME`，查找所有 `.caelix.toml`（允许多层：系统级 `~/.caelix/config.toml` + 项目级）。
-- 合并顺序（后面覆盖前面）：`defaults → ~/.caelix/config.toml → /parent/.caelix.toml → /current/.caelix.toml`。
-- 合并规则：
-  - 标量字段（`default_agent`、`default_model`）：直接覆盖。
-  - 数组字段（`allow_commands`、`external_skills`）：并集。
-  - `provider.overrides`：对 `ProviderConfig` 做字段级 patch（仅当配置文件中存在时覆盖）。
-- 在 `ContextProvider` 中暴露：
-  ```rust
-  fn project_config(&self) -> &ProjectConfig;
-  fn reload_project_config(&self, path: &Path) -> Result<(), String>;
-  ```
-- `RuntimeContext` 在 `new()` 时读取 `project_config()` 作为默认 `provider` / `model`。
-
-#### 3.2.3 安全性与隔离
-
-- `.caelix.toml` 中所有命令与路径都会被 `SecurityCheckerTrait` 校验；若项目级 `allow_*` 比全局更宽松，默认拒绝并提示（可通过 `CAELIX_ALLOW_UNSAFE_PROJECT=1` 显式启用）。
-- `api_key_env` 必须是**环境变量名**，不允许明文写入 key。
-
----
-
 ## 4. 技能包支持（技能与工具的列表以及技能内脚本）
 
 ### 4.1 现状分析
@@ -327,7 +259,7 @@ ast-c = ["tree-sitter-c"]
 
 ## 6. 记忆卸载工具
 
-## 7. 紧急停止 
+
 
 
 ## 8. 测试与验收清单

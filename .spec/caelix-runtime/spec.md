@@ -25,6 +25,7 @@ pub struct RuntimeContext {
     task_manager: Arc<TaskManager>,
     agent_manager: Arc<AgentManager>,
     tool_manager: Arc<ToolManager>,
+    cancellation_token: CancellationToken,
 }
 ```
 
@@ -48,6 +49,8 @@ impl RuntimeContext {
     
     pub fn message_bus(&self) -> &Arc<MessageBus> { &self.message_bus }
     pub fn task_manager(&self) -> &Arc<TaskManager> { &self.task_manager }
+    
+    pub fn cancellation_token(&self) -> &CancellationToken { &self.cancellation_token }
     
     // 创建子 Span（用于嵌套调用）
     pub fn create_child_span(&self) -> Self {
@@ -273,7 +276,195 @@ impl Hook for ToolResultCheckHook {
 }
 ```
 
-### 4. ID 生成器
+### 4. 紧急停止
+
+**概述**:
+紧急停止（Emergency Stop）是运行时系统的重要安全机制，允许外部在任何时刻立即中断正在执行的 Agent，包括断开当前 LLM HTTP 连接并抛弃所有未完成的部分内容。
+
+**核心组件**:
+- **CancellationToken**: 取消令牌，定义在 `caelix-api/src/cancel.rs`，提供优雅的协作式取消
+- **AgentRunManager**: 运行中 Agent 管理器，定义在 `caelix-runtime/src/agent_run_manager.rs`，按 session 追踪和管理运行中的 Agent
+
+**设计原则**:
+- 按 session 隔离：一个 session 同时只有一个运行中的 Agent
+- 双保险机制：CancellationToken（优雅取消） + AbortHandle（强制中止）
+- 即时响应：LLM 流立即断开，不等待响应完成
+- 内容安全：部分接收的内容完全抛弃，不持久化
+
+#### 4.1 CancellationToken
+
+**位置**: `caelix-api/src/cancel.rs`
+
+**结构定义**:
+```rust
+pub struct CancellationToken {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+```
+
+**关键方法**:
+```rust
+impl CancellationToken {
+    pub fn new() -> Self;
+    
+    // 触发取消
+    pub fn cancel(&self);
+    
+    // 检查是否已取消（非阻塞）
+    pub fn is_cancelled(&self) -> bool;
+    
+    // 等待取消（异步）
+    pub async fn cancelled(&self);
+    
+    // 创建子令牌（可选扩展）
+    pub fn child_token(&self) -> CancellationToken;
+}
+```
+
+**实现原理**:
+- 使用 `AtomicBool` 存储取消状态，无锁读取
+- 使用 `tokio::sync::Notify` 实现异步等待通知
+- `cancel()` 设置原子标志并唤醒所有等待者
+- `cancelled().await` 先检查标志，再等待通知
+
+**为什么自定义**:
+- 避免 tokio 版本/feature 兼容性问题（`tokio::sync::CancellationToken` 需要特定 feature）
+- 保持 API 层的轻量性，不引入额外依赖
+- 接口更简洁，满足当前需求
+
+#### 4.2 AgentRunManager
+
+**位置**: `caelix-runtime/src/agent_run_manager.rs`
+
+**职责**:
+- 追踪所有正在运行的 Agent（按 session_id 索引）
+- 提供注册、注销、紧急停止接口
+- 确保 session 级别只有一个运行中的 Agent（后注册的会替换前一个）
+
+**结构定义**:
+```rust
+pub struct AgentRunManager {
+    runs: DashMap<String, AgentRunInfo>,
+}
+
+struct AgentRunInfo {
+    abort_handle: AbortHandle,
+    cancel_token: CancellationToken,
+}
+```
+
+**关键方法**:
+```rust
+impl AgentRunManager {
+    pub fn new() -> Self;
+    
+    // 注册运行中的 Agent
+    pub fn register(
+        &self,
+        session_id: String,
+        abort_handle: AbortHandle,
+        cancel_token: CancellationToken,
+    );
+    
+    // 停止指定 session 的 Agent（返回是否成功停止）
+    pub async fn stop_agent(&self, session_id: &str) -> bool;
+    
+    // 注销（任务结束时自动调用）
+    pub fn unregister(&self, session_id: &str);
+    
+    // 检查 session 是否有运行中的 Agent
+    pub fn is_running(&self, session_id: &str) -> bool;
+}
+```
+
+**实现细节**:
+- 使用 `DashMap` 实现并发安全的 HashMap
+- `register` 时如果 session_id 已存在，会先取消旧的再替换
+- `stop_agent` 同时触发 `cancel()` 和 `abort()` 双保险
+- `stop_agent` 返回 `bool`：true 表示成功停止，false 表示没有在运行
+
+**使用流程**:
+```rust
+// 1. 创建取消令牌
+let cancel_token = CancellationToken::new();
+
+// 2. 生成子上下文（带 cancel token）
+let ctx = runtime_context.with_cancellation_token(cancel_token.clone());
+
+// 3. 启动任务
+let handle = tokio::spawn(async move {
+    // ... Agent 执行逻辑 ...
+});
+
+// 4. 注册到 AgentRunManager
+agent_run_manager.register(
+    session_id.clone(),
+    handle.abort_handle(),
+    cancel_token,
+);
+
+// 5. 等待任务完成
+let result = handle.await;
+
+// 6. 注销
+agent_run_manager.unregister(&session_id);
+```
+
+**外部停止**:
+```rust
+// 调用 stop_agent 即可停止
+let stopped = agent_run_manager.stop_agent(&session_id).await;
+if stopped {
+    println!("Agent 已停止");
+} else {
+    println!("没有运行中的 Agent");
+}
+```
+
+#### 4.3 取消传播机制
+
+**RuntimeContext 传递**:
+- CancellationToken 存储在 RuntimeContext 中
+- 通过 task-local 或参数传递贯穿整个调用链
+- Agent 执行的每一层都可以检查取消状态
+
+**LLM 流中断**:
+```rust
+// 在 call_llm_static 中使用 tokio::select!
+loop {
+    tokio::select! {
+        biased;
+        _ = async {
+            if let Some(ctx) = RuntimeContext::try_current() {
+                ctx.cancellation_token().cancelled().await
+            } else {
+                std::future::pending::<()>().await
+            }
+        } => {
+            // 检测到取消，立即产出 Stopped 并退出
+            yield Ok(AgentOutputChunk::Stopped {
+                reason: "cancelled_by_user".into(),
+            });
+            return;
+        }
+        next = stream.next() => {
+            // 正常处理 LLM 流
+        }
+    }
+}
+```
+
+**关键设计**:
+- `biased` 模式确保取消检查优先
+- 检测到取消后立即 break，HTTP 连接因 stream 被 drop 而断开
+- 产出 `Stopped` chunk 通知上层，不产生任何部分内容
+
+### 5. ID 生成器
 
 **Snowflake 算法**:
 ```rust
@@ -329,6 +520,8 @@ pub fn generate_trace_id() -> String {
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | **RuntimeContext** | `caelix-runtime/src/context/runtime_context.rs` | 运行时上下文实现 |
+| **AgentRunManager** | `caelix-runtime/src/agent_run_manager.rs` | 运行中 Agent 管理（紧急停止） |
+| **CancellationToken** | `caelix-api/src/cancel.rs` | 取消令牌（定义在 API 层） |
 | **HookRegistry** | `caelix-runtime/src/hooks/mod.rs` | Hook 注册和管理 |
 | **SkillHook** | `caelix-runtime/src/hooks/skill_hook.rs` | 技能加载 Hook |
 | **MessageBusHook** | `caelix-runtime/src/hooks/message_bus_hook.rs` | 消息记录 Hook |
@@ -639,5 +832,5 @@ async fn test_hook_execution_order() {
 
 ---
 
-**最后更新**: 2026-05-22  
+**最后更新**: 2026-07-02  
 **维护者**: Caelix 开发团队

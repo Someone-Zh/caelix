@@ -3,7 +3,8 @@ use std::{pin::Pin, sync::Arc};
 use async_stream::stream;
 use async_trait::async_trait;
 use caelix_api::{
-    Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage, LlmConfig, LlmProvider, ToolCall,
+    context::RuntimeContext, Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage,
+    LlmConfig, LlmProvider, ToolCall,
 };
 use futures::{Stream, StreamExt};
 
@@ -95,6 +96,15 @@ impl Agent for LoopAgent {
                 }
 
             loop {
+                if let Some(ctx) = RuntimeContext::try_current()
+                    && ctx.cancellation_token().is_cancelled()
+                {
+                    yield Ok(AgentOutputChunk::Stopped {
+                        reason: "cancelled_by_user".into(),
+                    });
+                    return;
+                }
+
                 let llm_stream = call_llm_static(&def, &messages, &llm, &cfg);
 
                 tokio::pin!(llm_stream);
@@ -103,6 +113,10 @@ impl Agent for LoopAgent {
 
                 while let Some(item) = llm_stream.next().await {
                     match item {
+                        Ok(AgentOutputChunk::Stopped { reason }) => {
+                            yield Ok(AgentOutputChunk::Stopped { reason });
+                            return;
+                        }
                         Ok(AgentOutputChunk::Content { content }) => {
                             full_content.push_str(&content);
                             yield Ok(AgentOutputChunk::Content { content });
@@ -251,50 +265,72 @@ fn call_llm_static(
         let mut tool_buffers: Vec<(usize, String, String, String)> = Vec::new();
         let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
-        while let Some(result) = stream.next().await {
-            let chunk = match result {
-                Ok(c) => c,
-                Err(e) => {
-                    yield Err(e);
+        loop {
+            tokio::select! {
+                biased;
+                _ = async {
+                    if let Some(ctx) = RuntimeContext::try_current() {
+                        ctx.cancellation_token().cancelled().await
+                    } else {
+                        std::future::pending::<()>().await
+                    }
+                } => {
+                    yield Ok(AgentOutputChunk::Stopped {
+                        reason: "cancelled_by_user".into(),
+                    });
                     return;
                 }
-            };
+                next = stream.next() => {
+                    match next {
+                        Some(result) => {
+                            let chunk = match result {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
+                                }
+                            };
 
-            if let Some(u) = &chunk.usage {
-                cumulative_usage.add(u);
-            }
+                            if let Some(u) = &chunk.usage {
+                                cumulative_usage.add(u);
+                            }
 
-            if let Some(r) = &chunk.reasoning_content
-                && !r.is_empty()
-            {
-                yield Ok(AgentOutputChunk::Reasoning {
-                    content: r.clone(),
-                });
-            }
+                            if let Some(r) = &chunk.reasoning_content
+                                && !r.is_empty()
+                            {
+                                yield Ok(AgentOutputChunk::Reasoning {
+                                    content: r.clone(),
+                                });
+                            }
 
-            if let Some(c) = &chunk.content {
-                yield Ok(AgentOutputChunk::Content {
-                    content: c.clone(),
-                });
-            }
+                            if let Some(c) = &chunk.content {
+                                yield Ok(AgentOutputChunk::Content {
+                                    content: c.clone(),
+                                });
+                            }
 
-            if let Some(tcs) = &chunk.tool_calls {
-                for tc in tcs {
-                    let idx = tc.index as usize;
-                    if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
-                        args.push_str(tc.arguments.as_str().unwrap_or(""));
-                    } else {
-                        let id = if tc.id.is_empty() {
-                            format!("call_{idx}")
-                        } else {
-                            tc.id.clone()
-                        };
-                        tool_buffers.push((
-                            idx,
-                            id,
-                            tc.name.clone(),
-                            tc.arguments.as_str().unwrap_or("").to_string(),
-                        ));
+                            if let Some(tcs) = &chunk.tool_calls {
+                                for tc in tcs {
+                                    let idx = tc.index as usize;
+                                    if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
+                                        args.push_str(tc.arguments.as_str().unwrap_or(""));
+                                    } else {
+                                        let id = if tc.id.is_empty() {
+                                            format!("call_{idx}")
+                                        } else {
+                                            tc.id.clone()
+                                        };
+                                        tool_buffers.push((
+                                            idx,
+                                            id,
+                                            tc.name.clone(),
+                                            tc.arguments.as_str().unwrap_or("").to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        None => break,
                     }
                 }
             }

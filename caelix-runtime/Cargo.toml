@@ -25,4 +25,5 @@ async-trait.workspace = true
 chrono.workspace = true
 futures.workspace = true
 inventory.workspace = true
+dashmap.workspace = true
 tracing-subscriber = { workspace = true, optional = true }

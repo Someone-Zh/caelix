@@ -404,6 +404,7 @@ dependencies = [
  "caelix-security",
  "caelix-task",
  "chrono",
+ "dashmap",
  "futures",
  "inventory",
  "once_cell",

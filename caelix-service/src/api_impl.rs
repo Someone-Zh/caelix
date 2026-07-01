@@ -352,7 +352,16 @@ impl CaelixApi for CaelixApiImpl {
 
         // 5. 在后台启动任务，绑定 RuntimeContext
         let debug_enabled = ctx_clone.env_config().debug_enabled();
-        tokio::spawn(async move {
+        let session_id_for_register = request_clone.session_id.clone();
+        let agent_run_manager = ctx_clone.agent_run_manager.clone();
+        let arm_for_spawn = agent_run_manager.clone();
+        let cancel_token = caelix_api::cancel::CancellationToken::new();
+        let cancel_token_clone = cancel_token.clone();
+
+        let handle = tokio::spawn(async move {
+            let session_id_for_unregister = request_clone.session_id.clone();
+            let arm_clone = arm_for_spawn.clone();
+
             // 创建 RuntimeContext 并绑定到 task_local 作用域
             // 所有子异步（agent、message_bus_hook 等）都能通过 try_current() 访问
             let runtime_ctx = Arc::new(caelix_api::context::RuntimeContext::new(
@@ -362,6 +371,7 @@ impl CaelixApi for CaelixApiImpl {
                 provider_name.clone(),
                 model_name.clone(),
                 debug_enabled,
+                cancel_token_clone,
             ));
 
             // 先克隆一份给 scope 使用，再把 runtime_ctx move 进 async block
@@ -412,8 +422,16 @@ impl CaelixApi for CaelixApiImpl {
                 Ok::<_, ApiError>(())
             };
 
-            fut.with_runtime_ctx(ctx_for_scope).await
+            let result = fut.with_runtime_ctx(ctx_for_scope).await;
+
+            // 任务结束，从 AgentRunManager 中注销
+            arm_clone.unregister(&session_id_for_unregister);
+
+            result
         });
+
+        // 注册到 AgentRunManager
+        agent_run_manager.register(session_id_for_register, handle.abort_handle(), cancel_token);
 
         // 6. 立即返回完整信息
         Ok(ChatAsyncResult {
@@ -724,5 +742,13 @@ impl CaelixApi for CaelixApiImpl {
             .usage_tracker()
             .ok_or_else(|| ApiError::InternalError("UsageTracker 未初始化".to_string()))?;
         Ok(tracker.snapshot_global().await)
+    }
+
+    async fn stop_agent(&self, session_id: &str) -> Result<bool, ApiError> {
+        let arm = self
+            .context
+            .agent_run_manager()
+            .ok_or_else(|| ApiError::InternalError("AgentRunManager 未初始化".to_string()))?;
+        Ok(arm.stop_agent(session_id).await)
     }
 }

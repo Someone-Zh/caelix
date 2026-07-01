@@ -154,6 +154,10 @@ pub async fn run_agent(
                         }
                         Some((AgentMessageType::Event, None))
                     }
+                    AgentOutputChunk::Stopped { reason } => Some((
+                        AgentMessageType::Event,
+                        Some(format!("[已停止] {}", reason)),
+                    )),
                 };
 
                 if let Some((msg_type, payload)) = msg_type {
@@ -194,11 +198,33 @@ pub async fn run_agent(
                     };
                     let _ = bus_ctx.message_bus().send_agent(end_msg);
                 }
+
+                // 遇到 Stopped 时也发送 ChunkEnd 并中断
+                if let AgentOutputChunk::Stopped { .. } = &chunk {
+                    let end_msg = AgentMessage {
+                        session_id: session_id.clone(),
+                        request_id: request_id.clone(),
+                        span_id: span_id.clone(),
+                        trace_id: trace_id.clone(),
+                        r#type: AgentMessageType::ChunkEnd,
+                        timestamp: chrono::Utc::now(),
+                        content: String::new(),
+                        agent_name: agent_name.clone(),
+                        usage: None,
+                    };
+                    let _ = bus_ctx.message_bus().send_agent(end_msg);
+                }
             }
 
             // 累积最终文本内容（仅 Content 类型的分片）
             if let AgentOutputChunk::Content { content } = &chunk {
                 result_content.push_str(content);
+            }
+
+            // 遇到 Stopped 直接中断
+            if let AgentOutputChunk::Stopped { reason } = &chunk {
+                tracing::info!(reason = reason.as_str(), "run_agent stopped by user");
+                return Ok(result_content);
             }
         }
 

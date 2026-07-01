@@ -1,5 +1,6 @@
 use caelix_api::context::{
-    ContextProvider, EnvConfigTrait, SecurityCheckerTrait, UsageTrackerTrait, set_caelix_context,
+    AgentRunManagerTrait, ContextProvider, EnvConfigTrait, SecurityCheckerTrait,
+    UsageTrackerTrait, set_caelix_context,
 };
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
@@ -14,7 +15,7 @@ use caelix_task::{FilePersistence, RunnableFactory, TaskManager};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::{HookRegistry, UsageTracker};
+use crate::{AgentRunManager, HookRegistry, UsageTracker};
 
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、ProviderManager 和 SessionManager 实例
@@ -46,6 +47,8 @@ pub struct CaelixContext {
     pub security_checker: Arc<SecurityChecker>,
     /// Token 用量追踪器
     pub usage_tracker: Arc<UsageTracker>,
+    /// Agent 运行管理器（支持紧急停止）
+    pub agent_run_manager: Arc<AgentRunManager>,
 }
 
 impl std::fmt::Debug for CaelixContext {
@@ -64,6 +67,7 @@ impl std::fmt::Debug for CaelixContext {
             .field("task_manager", &self.task_manager)
             .field("security_checker", &self.security_checker)
             .field("usage_tracker", &"UsageTracker")
+            .field("agent_run_manager", &"AgentRunManager")
             .finish()
     }
 }
@@ -90,6 +94,9 @@ impl CaelixContext {
         // 初始化 Token 用量追踪器（基于 caelix_home 目录）
         let usage_tracker = Arc::new(UsageTracker::new(&env_config.caelix_home));
 
+        // 初始化 Agent 运行管理器
+        let agent_run_manager = Arc::new(AgentRunManager::new());
+
         Self {
             env_config,
             agent_manager: Arc::new(AgentManager::new()),
@@ -106,6 +113,7 @@ impl CaelixContext {
                 caelix_security::SecurityConfig::default(),
             )),
             usage_tracker,
+            agent_run_manager,
         }
     }
 
@@ -259,6 +267,10 @@ impl ContextProvider for CaelixContext {
 
     fn usage_tracker(&self) -> Option<Arc<dyn UsageTrackerTrait>> {
         Some(self.usage_tracker.clone())
+    }
+
+    fn agent_run_manager(&self) -> Option<Arc<dyn AgentRunManagerTrait>> {
+        Some(self.agent_run_manager.clone())
     }
 }
 

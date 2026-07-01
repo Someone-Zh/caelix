@@ -56,6 +56,10 @@ pub enum AgentOutputChunk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<TokenUsage>,
     },
+    /// 紧急停止：Agent 执行被外部主动中断
+    Stopped {
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for AgentOutputChunk {
@@ -72,6 +76,7 @@ impl std::fmt::Display for AgentOutputChunk {
             }
             AgentOutputChunk::MessageUpdate { .. } => write!(f, ""),
             AgentOutputChunk::Finish { .. } => write!(f, ""),
+            AgentOutputChunk::Stopped { reason } => write!(f, "[已停止: {}]", reason),
         }
     }
 }

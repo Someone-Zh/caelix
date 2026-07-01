@@ -108,6 +108,20 @@ pub trait UsageTrackerTrait: Send + Sync {
     async fn snapshot_global(&self) -> crate::provider::GlobalUsageView;
 }
 
+// ==================== AgentRunManagerTrait ====================
+
+/// Agent 运行管理器 Trait
+///
+/// 管理正在运行的 Agent 任务，支持紧急停止。
+/// 具体实现位于 `caelix-runtime` 包中。
+#[async_trait]
+pub trait AgentRunManagerTrait: Send + Sync {
+    /// 停止指定 session 中正在运行的 Agent
+    ///
+    /// 返回 true 表示成功找到并触发停止，false 表示该 session 没有正在运行的 agent
+    async fn stop_agent(&self, session_id: &str) -> bool;
+}
+
 // ==================== ContextProvider Trait ====================
 
 /// 统一的上下文入口 Trait
@@ -132,6 +146,8 @@ pub trait ContextProvider: Send + Sync {
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait>;
     /// 获取用量追踪器（若已初始化）
     fn usage_tracker(&self) -> Option<Arc<dyn UsageTrackerTrait>>;
+    /// 获取 Agent 运行管理器（若已初始化）
+    fn agent_run_manager(&self) -> Option<Arc<dyn AgentRunManagerTrait>>;
 }
 
 impl std::fmt::Debug for dyn ContextProvider {
@@ -193,6 +209,9 @@ pub struct RuntimeContext {
 
     /// Debug 模式是否启用（协程内可覆盖全局设置）
     debug_enabled: bool,
+
+    /// 取消令牌：用于紧急停止当前 Agent 执行
+    cancellation_token: crate::cancel::CancellationToken,
 }
 
 impl std::fmt::Debug for RuntimeContext {
@@ -206,6 +225,7 @@ impl std::fmt::Debug for RuntimeContext {
             .field("provider", &self.provider)
             .field("model", &self.model)
             .field("debug_enabled", &self.debug_enabled)
+            .field("cancellation_token", &"CancellationToken")
             .field("context_provider", &"ContextProvider")
             .finish()
     }
@@ -222,6 +242,7 @@ impl Clone for RuntimeContext {
             provider: self.provider.clone(),
             model: self.model.clone(),
             debug_enabled: self.debug_enabled,
+            cancellation_token: self.cancellation_token.clone(),
         }
     }
 }
@@ -236,7 +257,7 @@ impl RuntimeContext {
     /// * `provider` - Provider 名称（必填）
     /// * `model` - Model 名称（必填）
     /// * `debug_enabled` - Debug 模式是否启用
-    /// * `context_provider` - 可选的上下文提供者
+    /// * `cancellation_token` - 取消令牌，用于紧急停止
     pub fn new(
         session_id: Option<String>,
         request_id: Option<String>,
@@ -244,6 +265,7 @@ impl RuntimeContext {
         provider: String,
         model: String,
         debug_enabled: bool,
+        cancellation_token: crate::cancel::CancellationToken,
     ) -> Self {
         let session_id = session_id.unwrap_or_else(generate_session_id);
         let request_id = request_id.unwrap_or_else(generate_request_id);
@@ -259,6 +281,7 @@ impl RuntimeContext {
             provider,
             model,
             debug_enabled,
+            cancellation_token,
         }
     }
 
@@ -325,6 +348,11 @@ impl RuntimeContext {
     /// 获取 Model 名称
     pub fn get_model(&self) -> &str {
         &self.model
+    }
+
+    /// 获取取消令牌
+    pub fn cancellation_token(&self) -> &crate::cancel::CancellationToken {
+        &self.cancellation_token
     }
 
     /// 创建一个绑定了 session/request/trace ID 等字段的 `tracing::Span`。

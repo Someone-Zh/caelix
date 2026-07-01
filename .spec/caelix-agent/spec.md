@@ -108,6 +108,7 @@ LLM 输出 tool_calls → ToolExecutor 解析 → 查找工具实例
 - `ToolCall`: 工具调用信息
 - `ToolResult`: 工具执行结果
 - `Finish`: 结束标记
+- `Stopped`: 紧急停止（被外部主动中断）
 
 **流式处理**:
 1. LLM 返回 `ChatResponseChunk` 流
@@ -142,6 +143,8 @@ hook_registry.register(HookType::AfterAgent, Box::new(message_bus_hook));
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | **LoopRunner** | `caelix-agent/src/loop_runner.rs` | Agent 推理-行动循环控制器 |
+| **LoopAgent** | `caelix-agent/src/loop_agent.rs` | LoopAgent 流式执行器（含取消支持） |
+| **AgentRunner** | `caelix-agent/src/agent_runner.rs` | Agent 运行器（消息总线集成） |
 | **ToolExecutor** | `caelix-agent/src/tool_executor.rs` | 工具调用和执行器 |
 | **Converter** | `caelix-agent/src/converter.rs` | 消息格式转换器 |
 
@@ -167,6 +170,7 @@ pub enum AgentOutputChunk {
     ToolCall { tool_call_id: String, name: String, arguments: String },
     ToolResult { tool_name: String, result: String },
     Finish { reason: String },
+    Stopped { reason: String },
 }
 ```
 
@@ -252,6 +256,80 @@ while let Some(chunk) = stream.next().await {
 }
 ```
 
+## 紧急停止机制
+
+### 概述
+
+紧急停止（Emergency Stop）允许外部在任何时刻立即中断 Agent 的执行，包括断开当前 LLM HTTP 连接并抛弃所有未完成的部分内容。Agent 引擎通过 CancellationToken 与运行时层协作实现此功能。
+
+### 取消检查点
+
+Agent 执行循环中有两个关键取消检查点：
+
+1. **循环开始时**：每轮推理开始前检查是否已取消
+2. **LLM 流迭代时**：每次从 LLM 流中读取下一个 chunk 前检查取消
+
+```rust
+// 检查点 1: 循环开始
+loop {
+    if let Some(ctx) = RuntimeContext::try_current()
+        && ctx.cancellation_token().is_cancelled()
+    {
+        yield Ok(AgentOutputChunk::Stopped {
+            reason: "cancelled_by_user".into(),
+        });
+        return;
+    }
+    // ... 构建消息、调用 LLM ...
+}
+
+// 检查点 2: LLM 流迭代中
+tokio::select! {
+    biased;
+    _ = cancellation_token.cancelled() => {
+        yield Ok(AgentOutputChunk::Stopped { reason: "cancelled_by_user".into() });
+        return;
+    }
+    next = stream.next() => {
+        // 处理正常的 LLM 响应 chunk
+    }
+}
+```
+
+### Stopped 输出语义
+
+`AgentOutputChunk::Stopped` 是一个终止性输出，具有以下特性：
+
+- **最终性**：Stopped 是最后一个输出，之后不会再有任何 chunk
+- **不可恢复**：产出 Stopped 后，Agent 执行完全终止，无法恢复
+- **内容丢弃**：Stopped 之前接收到的部分 LLM 内容会被完全抛弃，不持久化
+- **原因字段**：`reason` 字段说明停止原因（目前为 `"cancelled_by_user"`）
+
+### 与 AgentRunner 的协作
+
+AgentRunner（消息总线集成层）收到 Stopped 后的处理流程：
+
+1. 收到 `AgentOutputChunk::Stopped`
+2. 发送 `ChunkEnd` 消息到消息总线，标记流结束
+3. 提前返回，不再处理后续逻辑
+4. 不将部分内容写入持久化存储
+
+### 设计要点
+
+**为什么使用 tokio::select! 而不是简单轮询**:
+- `select!` 可以在等待 LLM 流的同时监听取消信号
+- 取消响应是即时的，不需要等待下一个 chunk 到达
+- stream 被 drop 时，HTTP 连接自动断开，资源立即释放
+
+**biased 模式的意义**:
+- 确保取消分支优先被检查
+- 在取消和流数据同时就绪时，优先处理取消
+- 保证即使流有数据也能立即停止
+
+**双保险机制**:
+- CancellationToken：优雅取消，让 Agent 有机会产出 Stopped chunk
+- AbortHandle：强制中止，防止 CancellationToken 未能及时响应的情况
+
 ## 性能优化
 
 ### 1. 并发控制
@@ -280,6 +358,7 @@ while let Some(chunk) = stream.next().await {
 | `MaxIterationsExceeded` | 超过最大迭代次数 | 强制终止并返回当前结果 |
 | `ContextLengthExceeded` | 消息超出上下文限制 | 截断历史消息 |
 | `AgentNotFound` | Agent 不存在 | 返回错误提示 |
+| `Cancelled` | 被外部紧急停止 | 产出 Stopped chunk，丢弃部分内容 |
 
 ### 错误恢复
 
@@ -337,5 +416,5 @@ match execute_agent_with_messaging(...).await {
 
 ---
 
-**最后更新**: 2026-05-22  
+**最后更新**: 2026-07-02  
 **维护者**: Caelix 开发团队

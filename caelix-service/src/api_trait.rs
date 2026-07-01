@@ -104,4 +104,9 @@ pub trait CaelixApi: Send + Sync {
 
     /// 获取全局 Token 用量（按 provider/model 维度汇总）
     async fn get_global_usage(&self) -> Result<GlobalUsageView, ApiError>;
+
+    /// 紧急停止指定 session 中正在运行的 Agent
+    ///
+    /// 返回 true 表示成功找到并触发停止，false 表示该 session 没有正在运行的 agent
+    async fn stop_agent(&self, session_id: &str) -> Result<bool, ApiError>;
 }

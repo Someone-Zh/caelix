@@ -3,6 +3,7 @@
 //! 包含所有 trait、类型、错误定义，供其他包和外部使用。
 
 pub mod agent;
+pub mod cancel;
 pub mod commands;
 pub mod context;
 pub mod error;
