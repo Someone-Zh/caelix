@@ -76,14 +76,7 @@ impl Plugin for DefaultServicePlugin {
                 .map_err(|e| anyhow!(e))?;
         Ok(skills
             .into_iter()
-            .map(|skill| {
-                SkillDef::new(
-                    skill.name,
-                    skill.namespace,
-                    skill.description,
-                    skill.content,
-                )
-            })
+            .map(SkillDef::from)
             .collect())
     }
 

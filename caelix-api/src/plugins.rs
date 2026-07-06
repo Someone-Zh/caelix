@@ -3,11 +3,13 @@
 use crate::agent::{Agent, AgentSpec};
 use crate::commands::Command;
 use crate::hooks::{AgentHook, Hook};
+use crate::managers::{InlineToolDef, Skill};
 use crate::provider::LlmProvider;
 use crate::tool::Tool;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use std::any::Any;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -15,12 +17,22 @@ pub type CommandSpec = Command;
 pub type PluginFactoryContext = Arc<dyn Any + Send + Sync>;
 pub type PluginFactory = fn(PluginFactoryContext) -> Arc<dyn Plugin>;
 
+/// 技能跨插件边界传输对象（与 `Skill` 字段对齐）
 #[derive(Debug, Clone)]
 pub struct SkillDef {
     pub name: String,
     pub namespace: String,
     pub description: String,
     pub content: String,
+    /// .skill 文件的绝对路径
+    pub file_path: PathBuf,
+    pub version: Option<String>,
+    pub author: Option<String>,
+    pub tags: Vec<String>,
+    /// 本技能希望 Agent 拥有的全局工具名
+    pub requires_tools: Vec<String>,
+    /// 本技能自带的本地脚本工具定义
+    pub inline_tools: Vec<InlineToolDef>,
 }
 
 impl SkillDef {
@@ -29,13 +41,65 @@ impl SkillDef {
         namespace: impl Into<String>,
         description: impl Into<String>,
         content: impl Into<String>,
+        file_path: PathBuf,
     ) -> Self {
         Self {
             name: name.into(),
             namespace: namespace.into(),
             description: description.into(),
             content: content.into(),
+            file_path,
+            version: None,
+            author: None,
+            tags: Vec::new(),
+            requires_tools: Vec::new(),
+            inline_tools: Vec::new(),
         }
+    }
+
+    /// 内部构建：全字段组装
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        name: String,
+        namespace: String,
+        description: String,
+        content: String,
+        file_path: PathBuf,
+        version: Option<String>,
+        author: Option<String>,
+        tags: Vec<String>,
+        requires_tools: Vec<String>,
+        inline_tools: Vec<InlineToolDef>,
+    ) -> Self {
+        Self {
+            name,
+            namespace,
+            description,
+            content,
+            file_path,
+            version,
+            author,
+            tags,
+            requires_tools,
+            inline_tools,
+        }
+    }
+}
+
+impl From<Skill> for SkillDef {
+    fn from(skill: Skill) -> Self {
+        Self::build(
+            skill.name,
+            skill.namespace,
+            skill.description,
+            skill.content,
+            skill.file_path,
+            skill.version,
+            skill.author,
+            skill.tags,
+            skill.requires_tools,
+            skill.inline_tools,
+        )
     }
 }
 

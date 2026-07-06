@@ -1,7 +1,7 @@
-use crate::managers::{Skill, SkillRegistryError};
+use crate::managers::{InlineToolDef, Skill, SkillRegistryError};
 use serde::Deserialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 通用的 YAML + Markdown 文件解析函数
 /// 处理 `---YAML---Markdown` 格式
@@ -36,9 +36,21 @@ pub fn parse_yaml_markdown_file<T: for<'de> Deserialize<'de>>(
 /// Skill 配置的 YAML 部分
 #[derive(Debug, Deserialize)]
 struct SkillConfig {
-    #[allow(dead_code)] // 从YAML解析，但当前未直接使用
+    #[allow(dead_code)] // 从YAML解析，但当前未直接使用（名字取自文件名）
     name: String,
     description: String,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    /// 本技能希望 Agent 拥有的全局工具名（从系统工具池中选取）
+    #[serde(default)]
+    requires_tools: Vec<String>,
+    /// 本技能自带的本地脚本工具定义
+    #[serde(default)]
+    inline_tools: Vec<InlineToolDef>,
 }
 
 /// 递归扫描目录并加载所有 .skill 文件
@@ -116,8 +128,22 @@ async fn load_single_skill(file_path: &Path, base_dir: &Path) -> Result<Skill, S
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| format!("Invalid file name: {:?}", file_path))?;
 
-    // 创建 Skill 对象
-    let skill = Skill::new(name, namespace, config.description, skill_content);
+    // 记录 skill 的绝对路径：优先 canonicalize，失败时退回原路径
+    let abs_file_path: PathBuf = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+
+    // 创建 Skill 对象（携带来源位置与 YAML 元数据）
+    let skill = Skill::with_metadata(
+        name,
+        namespace,
+        config.description,
+        skill_content,
+        abs_file_path,
+        config.version,
+        config.author,
+        config.tags,
+        config.requires_tools,
+        config.inline_tools,
+    );
 
     Ok(skill)
 }
@@ -138,4 +164,137 @@ pub async fn register_all_skills(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// 旧式 .skill 文件（仅 name + description）应正常加载，新元数据字段填默认值。
+    #[tokio::test]
+    async fn load_legacy_skill_file_without_metadata() {
+        let dir = tempdir().unwrap();
+        let skills_root = dir.path().join("skills");
+        fs::create_dir_all(&skills_root).unwrap();
+
+        let skill_file = skills_root.join("git.skill");
+        fs::write(
+            &skill_file,
+            "---\nname: git\ndescription: Git版本控制操作技能\n---\n\n# Git 操作\n",
+        )
+        .unwrap();
+
+        let skills = load_skills_from_directory(&skills_root.to_string_lossy()).await.unwrap();
+        assert_eq!(skills.len(), 1);
+
+        let s = &skills[0];
+        assert_eq!(s.name, "git");
+        assert_eq!(s.namespace, "");
+        assert_eq!(s.full_name, "git");
+        assert_eq!(s.description, "Git版本控制操作技能");
+        assert!(s.content.starts_with("# Git"));
+        // 位置字段已记录且为绝对路径
+        assert!(s.file_path.is_absolute());
+        assert_eq!(s.file_path, fs::canonicalize(&skill_file).unwrap());
+        // 新元数据字段填默认值
+        assert!(s.version.is_none());
+        assert!(s.author.is_none());
+        assert!(s.tags.is_empty());
+        assert!(s.requires_tools.is_empty());
+        assert!(s.inline_tools.is_empty());
+    }
+
+    /// 含全部新字段的 .skill 文件应被完整解析。
+    #[tokio::test]
+    async fn load_skill_file_with_full_metadata() {
+        let dir = tempdir().unwrap();
+        // 带子目录以验证命名空间推导
+        let coding_dir = dir.path().join("skills").join("coding");
+        fs::create_dir_all(&coding_dir).unwrap();
+
+        let skill_file = coding_dir.join("rust_coding.skill");
+        fs::write(
+            &skill_file,
+            "---\n\
+             name: rust_coding\n\
+             description: Rust 编程与工具链操作\n\
+             version: \"1.0\"\n\
+             author: \"team\"\n\
+             tags:\n  - rust\n  - cargo\n\
+             requires_tools:\n  - read_file\n  - write_file\n\
+             inline_tools:\n\
+             \x20 - name: cargo_check\n\
+             \x20   description: \"运行 cargo check\"\n\
+             \x20   script: \"cargo check --message-format=short\"\n\
+             \x20   timeout_secs: 60\n\
+             ---\n\n# Rust 编码指南\n",
+        )
+        .unwrap();
+
+        let skills = load_skills_from_directory(&dir.path().join("skills").to_string_lossy())
+            .await
+            .unwrap();
+        assert_eq!(skills.len(), 1);
+
+        let s = &skills[0];
+        assert_eq!(s.name, "rust_coding");
+        assert_eq!(s.namespace, "coding");
+        assert_eq!(s.full_name, "coding::rust_coding");
+        assert_eq!(s.version.as_deref(), Some("1.0"));
+        assert_eq!(s.author.as_deref(), Some("team"));
+        assert_eq!(s.tags, vec!["rust".to_string(), "cargo".to_string()]);
+        assert_eq!(
+            s.requires_tools,
+            vec!["read_file".to_string(), "write_file".to_string()]
+        );
+        assert_eq!(s.inline_tools.len(), 1);
+        let it = &s.inline_tools[0];
+        assert_eq!(it.name, "cargo_check");
+        assert_eq!(it.description, "运行 cargo check");
+        assert_eq!(it.script, "cargo check --message-format=short");
+        assert_eq!(it.timeout_secs, Some(60));
+        // 位置字段为绝对路径
+        assert!(s.file_path.is_absolute());
+        assert_eq!(s.file_path, fs::canonicalize(&skill_file).unwrap());
+    }
+
+    /// Skill ↔ SkillDef 往返应保持全部字段一致（验证 From 实现无字段遗漏）。
+    #[test]
+    fn skill_skilldef_roundtrip_preserves_all_fields() {
+        let inline = vec![InlineToolDef {
+            name: "t".into(),
+            description: "d".into(),
+            script: "echo hi".into(),
+            timeout_secs: Some(5),
+        }];
+        let original = Skill::with_metadata(
+            "git".into(),
+            "coding".into(),
+            "desc".into(),
+            "content".into(),
+            PathBuf::from("/tmp/skills/coding/git.skill"),
+            Some("1.2".into()),
+            Some("me".into()),
+            vec!["a".into(), "b".into()],
+            vec!["read_file".into()],
+            inline.clone(),
+        );
+
+        let def: caelix_api::plugins::SkillDef = original.clone().into();
+        let back: Skill = def.into();
+
+        assert_eq!(back.name, original.name);
+        assert_eq!(back.namespace, original.namespace);
+        assert_eq!(back.full_name, original.full_name);
+        assert_eq!(back.description, original.description);
+        assert_eq!(back.content, original.content);
+        assert_eq!(back.file_path, original.file_path);
+        assert_eq!(back.version, original.version);
+        assert_eq!(back.author, original.author);
+        assert_eq!(back.tags, original.tags);
+        assert_eq!(back.requires_tools, original.requires_tools);
+        assert_eq!(back.inline_tools, original.inline_tools);
+    }
 }

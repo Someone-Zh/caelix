@@ -337,12 +337,7 @@ impl CaelixContext {
         // 4. 插件 → 技能管理器（必须在钩子之前加载，因为钩子会依赖技能）
         for plugin in self.plugin_registry.skill_plugins().await {
             for skill_def in plugin.skills().await? {
-                let skill = Skill::new(
-                    skill_def.name,
-                    skill_def.namespace,
-                    skill_def.description,
-                    skill_def.content,
-                );
+                let skill = Skill::from(skill_def);
                 if let Err(e) = self.skill_manager.register(skill).await {
                     tracing::warn!(error = %e, "注册技能失败");
                 }

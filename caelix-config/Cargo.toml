@@ -21,3 +21,6 @@ walkdir.workspace = true
 thiserror.workspace = true
 rust-embed.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
