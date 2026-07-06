@@ -104,6 +104,11 @@ impl CaelixApi for CaelixApiImpl {
 
     async fn create_session_with_id(&self, session_id: String) {
         // 使用指定的 session_id 创建会话配置
+        // 安全校验：拒绝路径穿越字符，防止构造 session/../../.. 的路径
+        if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+            eprintln!("⚠️  创建会话配置失败: session_id 包含非法字符");
+            return;
+        }
         if let Err(e) = self
             .context
             .session_manager
@@ -351,16 +356,26 @@ impl CaelixApi for CaelixApiImpl {
             .join(request_clone.session_id.clone());
 
         // 5. 在后台启动任务，绑定 RuntimeContext
+        // 顺序很重要：先 register cancel_token 占位，再 spawn，spawn 后回填 handle。
+        // 这样消除 spawn→register 的竞态窗口——任何在 spawn 之前调用的 stop_agent
+        // 都能通过 cancel_token 通知任务（任务 spawn 后首个检查点即退出）。
         let debug_enabled = ctx_clone.env_config().debug_enabled();
-        let session_id_for_register = request_clone.session_id.clone();
         let agent_run_manager = ctx_clone.agent_run_manager.clone();
         let arm_for_spawn = agent_run_manager.clone();
         let cancel_token = caelix_api::cancel::CancellationToken::new();
         let cancel_token_clone = cancel_token.clone();
+        let run_id = agent_run_manager.register(
+            request_clone.session_id.clone(),
+            cancel_token,
+        );
 
-        let handle = tokio::spawn(async move {
-            let session_id_for_unregister = request_clone.session_id.clone();
-            let arm_clone = arm_for_spawn.clone();
+        let join_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
+            // RunGuard 确保任务退出时（正常、panic、abort）从 AgentRunManager 注销
+            let _guard = caelix_runtime::agent_run_manager::RunGuard::new(
+                arm_for_spawn.clone(),
+                request_clone.session_id.clone(),
+                run_id,
+            );
 
             // 创建 RuntimeContext 并绑定到 task_local 作用域
             // 所有子异步（agent、message_bus_hook 等）都能通过 try_current() 访问
@@ -415,23 +430,22 @@ impl CaelixApi for CaelixApiImpl {
                 }
 
                 // 使用 caelix_agent::run_agent（内部通过 RuntimeContext + ContextProvider 获取 message_bus）
-                let _result = execute_agent_with_messaging(agent_spec, messages, provider, &config)
-                    .await
-                    .map_err(|e| ApiError::InternalError(e.to_string()));
-
-                Ok::<_, ApiError>(())
+                let _ = execute_agent_with_messaging(agent_spec, messages, provider, &config).await
+                    .inspect_err(|e| {
+                        tracing::error!(
+                            session_id = %request_clone.session_id,
+                            error = %e,
+                            "Agent execution failed"
+                        );
+                    });
             };
 
-            let result = fut.with_runtime_ctx(ctx_for_scope).await;
-
-            // 任务结束，从 AgentRunManager 中注销
-            arm_clone.unregister(&session_id_for_unregister);
-
-            result
+            let _ = fut.with_runtime_ctx(ctx_for_scope).await;
+            // _guard 在此 drop，自动调用 unregister(session_id, run_id)
         });
 
-        // 注册到 AgentRunManager
-        agent_run_manager.register(session_id_for_register, handle.abort_handle(), cancel_token);
+        // 回填 join_handle 与 abort_handle，使 stop_agent 可以等待/强制中止
+        agent_run_manager.set_handles(&request.session_id, run_id, join_handle);
 
         // 6. 立即返回完整信息
         Ok(ChatAsyncResult {
@@ -447,6 +461,11 @@ impl CaelixApi for CaelixApiImpl {
         tool_call_id: &str,
         approved: bool,
     ) -> Result<(), ApiError> {
+        // 安全校验：拒绝路径穿越字符，防止构造 session/../../.. 的路径
+        if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+            return Err(ApiError::InternalError("session_id 包含非法字符".into()));
+        }
+
         // 1. 先从历史中找到 ChatMessage 以及 tool_call 的位置
         let history_messages = self
             .context
@@ -745,6 +764,7 @@ impl CaelixApi for CaelixApiImpl {
     }
 
     async fn stop_agent(&self, session_id: &str) -> Result<bool, ApiError> {
+        // agent_run_manager 在 CaelixContext 中始终初始化；None 分支为 trait 通用性保留
         let arm = self
             .context
             .agent_run_manager()

@@ -111,48 +111,70 @@ impl Agent for LoopAgent {
                 let mut full_content = String::new();
                 let mut final_tool_calls = Vec::new();
 
-                while let Some(item) = llm_stream.next().await {
-                    match item {
-                        Ok(AgentOutputChunk::Stopped { reason }) => {
-                            yield Ok(AgentOutputChunk::Stopped { reason });
+                // 在 LLM 流迭代期间监听取消信号：cancel future 只构造一次并 pin，
+                // select! 每轮通过 `&mut` 复用，避免每个 chunk 都重建 future 与 waiter。
+                let cancel_fut = async {
+                    match RuntimeContext::try_current() {
+                        Some(ctx) => ctx.cancellation_token().cancelled().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                };
+                tokio::pin!(cancel_fut);
+
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = &mut cancel_fut => {
+                            yield Ok(AgentOutputChunk::Stopped {
+                                reason: "cancelled_by_user".into(),
+                            });
                             return;
                         }
-                        Ok(AgentOutputChunk::Content { content }) => {
-                            full_content.push_str(&content);
-                            yield Ok(AgentOutputChunk::Content { content });
-                        }
+                        next = llm_stream.next() => {
+                            let Some(item) = next else { break };
+                            match item {
+                                Ok(AgentOutputChunk::Stopped { reason }) => {
+                                    yield Ok(AgentOutputChunk::Stopped { reason });
+                                    return;
+                                }
+                                Ok(AgentOutputChunk::Content { content }) => {
+                                    full_content.push_str(&content);
+                                    yield Ok(AgentOutputChunk::Content { content });
+                                }
 
-                        Ok(AgentOutputChunk::ToolCall { tool_call_id, name, arguments }) => {
-                            let id = tool_call_id.clone();
-                            let name2 = name.clone();
-                            let arg2 = arguments.clone();
+                                Ok(AgentOutputChunk::ToolCall { tool_call_id, name, arguments }) => {
+                                    let id = tool_call_id.clone();
+                                    let name2 = name.clone();
+                                    let arg2 = arguments.clone();
 
-                            final_tool_calls.push(ToolCall {
-                                id: tool_call_id,
-                                index: final_tool_calls.len() as u32,
-                                name,
-                                arguments: serde_json::Value::String(arguments),
-                                approval_state: None,
-                            });
+                                    final_tool_calls.push(ToolCall {
+                                        id: tool_call_id,
+                                        index: final_tool_calls.len() as u32,
+                                        name,
+                                        arguments: serde_json::Value::String(arguments),
+                                        approval_state: None,
+                                    });
 
-                            yield Ok(AgentOutputChunk::ToolCall {
-                                tool_call_id: id,
-                                name: name2,
-                                arguments: arg2,
-                            });
-                        }
+                                    yield Ok(AgentOutputChunk::ToolCall {
+                                        tool_call_id: id,
+                                        name: name2,
+                                        arguments: arg2,
+                                    });
+                                }
 
-                        Ok(AgentOutputChunk::Finish { usage, .. }) => {
-                            // 拦截来自 call_llm_static 的内部 Finish，累加 usage（不会转发）
-                            if let Some(u) = usage {
-                                cumulative_usage.add(&u);
+                                Ok(AgentOutputChunk::Finish { usage, .. }) => {
+                                    // 拦截来自 call_llm_static 的内部 Finish，累加 usage（不会转发）
+                                    if let Some(u) = usage {
+                                        cumulative_usage.add(&u);
+                                    }
+                                }
+
+                                Ok(other) => yield Ok(other),
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
+                                }
                             }
-                        }
-
-                        Ok(other) => yield Ok(other),
-                        Err(e) => {
-                            yield Err(e);
-                            return;
                         }
                     }
                 }
@@ -265,72 +287,71 @@ fn call_llm_static(
         let mut tool_buffers: Vec<(usize, String, String, String)> = Vec::new();
         let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
+        // cancel future 只构造一次并 pin，select! 每轮通过 `&mut` 复用。
+        let cancel_fut = async {
+            match RuntimeContext::try_current() {
+                Some(ctx) => ctx.cancellation_token().cancelled().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(cancel_fut);
+
         loop {
             tokio::select! {
                 biased;
-                _ = async {
-                    if let Some(ctx) = RuntimeContext::try_current() {
-                        ctx.cancellation_token().cancelled().await
-                    } else {
-                        std::future::pending::<()>().await
-                    }
-                } => {
+                _ = &mut cancel_fut => {
                     yield Ok(AgentOutputChunk::Stopped {
                         reason: "cancelled_by_user".into(),
                     });
                     return;
                 }
                 next = stream.next() => {
-                    match next {
-                        Some(result) => {
-                            let chunk = match result {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    yield Err(e);
-                                    return;
-                                }
-                            };
+                    let Some(result) = next else { break };
+                    let chunk = match result {
+                        Ok(c) => c,
+                        Err(e) => {
+                            yield Err(e);
+                            return;
+                        }
+                    };
 
-                            if let Some(u) = &chunk.usage {
-                                cumulative_usage.add(u);
-                            }
+                    if let Some(u) = &chunk.usage {
+                        cumulative_usage.add(u);
+                    }
 
-                            if let Some(r) = &chunk.reasoning_content
-                                && !r.is_empty()
-                            {
-                                yield Ok(AgentOutputChunk::Reasoning {
-                                    content: r.clone(),
-                                });
-                            }
+                    if let Some(r) = &chunk.reasoning_content
+                        && !r.is_empty()
+                    {
+                        yield Ok(AgentOutputChunk::Reasoning {
+                            content: r.clone(),
+                        });
+                    }
 
-                            if let Some(c) = &chunk.content {
-                                yield Ok(AgentOutputChunk::Content {
-                                    content: c.clone(),
-                                });
-                            }
+                    if let Some(c) = &chunk.content {
+                        yield Ok(AgentOutputChunk::Content {
+                            content: c.clone(),
+                        });
+                    }
 
-                            if let Some(tcs) = &chunk.tool_calls {
-                                for tc in tcs {
-                                    let idx = tc.index as usize;
-                                    if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
-                                        args.push_str(tc.arguments.as_str().unwrap_or(""));
-                                    } else {
-                                        let id = if tc.id.is_empty() {
-                                            format!("call_{idx}")
-                                        } else {
-                                            tc.id.clone()
-                                        };
-                                        tool_buffers.push((
-                                            idx,
-                                            id,
-                                            tc.name.clone(),
-                                            tc.arguments.as_str().unwrap_or("").to_string(),
-                                        ));
-                                    }
-                                }
+                    if let Some(tcs) = &chunk.tool_calls {
+                        for tc in tcs {
+                            let idx = tc.index as usize;
+                            if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
+                                args.push_str(tc.arguments.as_str().unwrap_or(""));
+                            } else {
+                                let id = if tc.id.is_empty() {
+                                    format!("call_{idx}")
+                                } else {
+                                    tc.id.clone()
+                                };
+                                tool_buffers.push((
+                                    idx,
+                                    id,
+                                    tc.name.clone(),
+                                    tc.arguments.as_str().unwrap_or("").to_string(),
+                                ));
                             }
                         }
-                        None => break,
                     }
                 }
             }

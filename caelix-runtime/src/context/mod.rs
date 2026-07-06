@@ -270,8 +270,8 @@ impl ContextProvider for CaelixContext {
     }
 
     fn agent_run_manager(&self) -> Option<Arc<dyn AgentRunManagerTrait>> {
-        Some(self.agent_run_manager.clone())
-    }
+    Some(self.agent_run_manager.clone())
+}
 }
 
 impl Default for CaelixContext {
