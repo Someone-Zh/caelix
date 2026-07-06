@@ -99,84 +99,6 @@ fn context_manager(&self) -> &ContextManager;
 
 ---
 
-## 3. 项目级配置融合
-
-## 4. 技能包支持（技能与工具的列表以及技能内脚本）
-
-### 4.1 现状分析
-
-- `SkillManager`（`caelix-api/src/managers/skill.rs`）仅保存 `Skill { name, namespace, description, content }`。
-- `skills_loader.rs`（`caelix-config`）递归扫描 `.skill` 文件并注册到 `SkillManager`。
-- `SkillHook`（`caelix-runtime/src/hooks/skill_hook.rs`）**目前是空实现**（`// TODO: 恢复技能钩子逻辑，由于循环依赖暂不使用`）。
-- 技能内容是 Markdown 文本，**无法携带工具定义与可执行脚本**，也无法与具体 Agent 的 `tools` 列表绑定。
-- `GetSkillDetailTool` 缺失：Agent 无法按需查询技能内容。
-
-### 4.2 设计方案
-
-#### 4.2.1 扩展 Skill 格式
-
-`.skill` 文件为 YAML 头 + Markdown 内容格式。扩展 YAML 头新增元数据：
-
-```yaml
----
-name: rust_coding
-description: Rust 编程与工具链操作
-version: "1.0"
-author: "team"
-tags: ["rust", "cargo"]
-# 声明本技能希望 Agent 拥有的工具（从系统工具池中选择）
-requires_tools: ["read_file", "write_file", "exec_command"]
-# 声明本技能自带的"本地工具脚本"
-inline_tools:
-  - name: cargo_check
-    description: "运行 cargo check"
-    script: "cargo check --message-format=short"
-    # 脚本运行时的安全参数
-    timeout_secs: 60
----
-
-# Rust 编码指南
-...
-```
-
-#### 4.2.2 新工具 `InlineScriptTool`
-
-**文件**：`caelix-tools/src/inline_script_tool.rs`（新文件）
-
-- 实现 `Tool` trait。
-- 接收技能 YAML 中 `inline_tools` 一条定义，当被 Agent 调用时执行其 `script`（通过 `CommandExecTool` 同样的安全检查管线）。
-- 每次执行前都经过 `SecurityCheckerTrait::check_command` 与 `check_path`。
-
-#### 4.2.3 恢复 `SkillHook` 逻辑
-
-**文件**：`caelix-runtime/src/hooks/skill_hook.rs`
-
-- 去掉 `Arc<SkillManager>` 的字段声明上的 `#[allow(dead_code)]`。
-- `on_init()` 实现：
-  1. 读取所有 skill，把 `requires_tools` 从 `ToolManager` 取出并注入到 `agent_spec.tools`（去重）。
-  2. 把 `inline_tools` 实例化为 `InlineScriptTool`，注入 `agent_spec.tools`。
-  3. 把 `name + description` 合并成"可用技能列表"附加到 `agent_spec.system_prompt` 末尾。
-  4. 注入 `get_skill_detail(skill_name)` 工具（见下）。
-
-#### 4.2.4 `GetSkillDetailTool`
-
-**文件**：`caelix-tools/src/get_skill_detail.rs`（新文件）
-
-- `name = "get_skill_detail"`
-- `parameters = { "skill_name": string, "namespace": string (可选) }`
-- 执行时从 `SkillManager` 读取对应 skill，返回 `content`。
-- 依赖 `SkillManager` 通过 `CaelixContext` 注入，避免 `skill_hook.rs` 中之前遇到的循环依赖问题。
-
-#### 4.2.5 技能清单 API 与 CLI
-
-- `caelix-cli` 增加命令：
-  - `caelix skills list`：列出所有技能（含命名空间、tags、requires_tools）。
-  - `caelix skills show <skill_name>`：打印完整技能内容。
-  - `caelix skills reload`：重新扫描 `~/.caelix/skills` 与 `$PROJECT/.caelix/skills`。
-- `caelix-http` 增加：`GET /api/skills`、`GET /api/skills/:name`。
-
----
-
 ## 5. AST 能力（tree-sitter）
 
 ### 5.1 现状分析
@@ -256,8 +178,6 @@ ast-c = ["tree-sitter-c"]
 - `caelix ast show <file> <symbol>`：打印指定符号的源码。
 
 ---
-
-## 6. 记忆卸载工具
 
 
 
