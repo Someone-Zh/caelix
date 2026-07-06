@@ -1,18 +1,21 @@
 use crate::api_trait::CaelixApi;
 use crate::types::{ChatAsyncResult, ChatRequest, ProviderInfo, SessionSummary};
 use async_trait::async_trait;
-use caelix_api::agent::AgentOutputChunk;
+use caelix_api::agent::{Agent, AgentOutputChunk};
 use caelix_api::context::{ContextFutureExt, ContextProvider};
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
 use caelix_api::provider::{ChatMessage, LlmConfig, SessionUsageView, GlobalUsageView};
 use caelix_api::task::TaskMeta;
+use caelix_agent::loop_agent::LoopAgent;
 use caelix_runtime::context::CaelixContext;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// 执行 Agent 并发送结果到消息总线
 ///
@@ -34,11 +37,17 @@ async fn execute_agent_with_messaging(
 /// API 核心实现
 pub struct CaelixApiImpl {
     context: Arc<CaelixContext>,
+    /// 项目级 Agent 实例缓存：agent_name → LoopAgent
+    /// 避免每次请求都重新包装 AgentSpec
+    project_agent_cache: Arc<RwLock<HashMap<String, Arc<dyn Agent>>>>,
 }
 
 impl CaelixApiImpl {
     pub fn new(context: Arc<CaelixContext>) -> Self {
-        Self { context }
+        Self {
+            context,
+            project_agent_cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     /// 获取消息总线引用
@@ -315,14 +324,40 @@ impl CaelixApi for CaelixApiImpl {
         let request_clone = request.clone();
         let request_id_clone = request_id.clone();
 
-        // 5.2 在 RuntimeContext scope 中执行
-        // 获取 agent (Arc<dyn Agent>)
+        // 5.1 确保项目配置已加载（基于 work_dir，懒加载）
+        let work_dir_for_config = ctx_clone
+            .env_config()
+            .caelix_home()
+            .join("sessions")
+            .join(request_clone.session_id.clone());
+        let overlay = ctx_clone.config_overlay();
+        if let Err(e) = overlay.ensure_project_config_loaded(&work_dir_for_config).await {
+            tracing::warn!("Failed to load project config: {}", e);
+        }
+
+        // 5.2 获取 agent_spec（通过 ConfigOverlay 优先获取项目级配置）
+        // 然后包装为 LoopAgent 并缓存
         let agent_name = request_clone.agent.as_deref().unwrap_or("default");
-        let agent = ctx_clone
-            .agent_manager
-            .get(agent_name)
+        let agent_spec = overlay
+            .get_agent_spec(agent_name)
             .await
             .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+
+        // 检查项目级 agent 缓存，避免重复包装
+        let agent: Arc<dyn Agent> = {
+            let cache = self.project_agent_cache.read().await;
+            if let Some(cached) = cache.get(agent_name) {
+                cached.clone()
+            } else {
+                drop(cache);
+                let agent: Arc<dyn Agent> = Arc::new(LoopAgent::new(agent_spec.clone()));
+                self.project_agent_cache
+                    .write()
+                    .await
+                    .insert(agent_name.to_string(), agent.clone());
+                agent
+            }
+        };
 
         // 获取 agent_spec 用于日志和消息传递
         let agent_spec = agent.get_spec();

@@ -2,8 +2,10 @@
 //!
 //! 定义轻量级的接口 trait，允许运行时层通过统一接口访问配置层的组件，
 //! 避免 caelix-runtime 直接依赖 caelix-config
+use crate::agent::AgentSpec;
+use crate::commands::Command;
 use crate::hooks::HookRegistry;
-use crate::managers::{AgentManager, CommandManager, ProviderManager, SkillManager, ToolManager};
+use crate::managers::{AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager};
 use crate::message::{MessageBusTrait, SessionManagerTrait};
 use crate::plugins::PluginManager;
 use crate::provider::{SessionUsageView, UsageRecord};
@@ -15,6 +17,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
+
+#[async_trait]
+pub trait ConfigOverlayTrait: Send + Sync {
+    /// 确保指定工作目录的项目配置已加载（懒加载，仅首次或目录变更时加载）
+    async fn ensure_project_config_loaded(&self, work_dir: &Path) -> Result<(), String>;
+    /// 获取技能（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_skill(&self, name: &str) -> Option<Arc<Skill>>;
+    /// 获取命令（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_command(&self, name: &str) -> Option<Command>;
+    /// 获取 AgentSpec（项目优先，需先调用 ensure_project_config_loaded；上层负责包装为 dyn Agent）
+    async fn get_agent_spec(&self, name: &str) -> Option<Arc<AgentSpec>>;
+}
 
 // ==================== 全局唯一 CaelixContext 存储 ====================
 
@@ -148,6 +162,8 @@ pub trait ContextProvider: Send + Sync {
     fn usage_tracker(&self) -> Option<Arc<dyn UsageTrackerTrait>>;
     /// 获取 Agent 运行管理器（若已初始化）
     fn agent_run_manager(&self) -> Option<Arc<dyn AgentRunManagerTrait>>;
+    /// 获取配置覆盖层（支持项目级配置覆盖全局配置）
+    fn config_overlay(&self) -> Arc<dyn ConfigOverlayTrait>;
 }
 
 impl std::fmt::Debug for dyn ContextProvider {

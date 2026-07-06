@@ -1,5 +1,8 @@
+use async_trait::async_trait;
+use caelix_api::agent::AgentSpec;
+use caelix_api::commands::Command;
 use caelix_api::context::{
-    AgentRunManagerTrait, ContextProvider, EnvConfigTrait, SecurityCheckerTrait,
+    AgentRunManagerTrait, ConfigOverlayTrait, ContextProvider, EnvConfigTrait, SecurityCheckerTrait,
     UsageTrackerTrait, set_caelix_context,
 };
 use caelix_api::managers::{
@@ -8,14 +11,173 @@ use caelix_api::managers::{
 use caelix_api::message::{MessageBusTrait, SessionManagerTrait};
 use caelix_api::plugins::{PluginManager, PluginRegistry};
 use caelix_api::task::TaskManagerTrait;
-use caelix_config::EnvConfig;
+use caelix_config::{EnvConfig, SKILLS_DIR, COMMANDS_DIR, AGENTS_DIR};
+use caelix_config::skills_loader::load_skills_from_directory;
+use caelix_config::commands_loader::load_commands_from_directory;
+use caelix_config::agents_loader::load_agents_from_directory;
 use caelix_message::{FileStorage, MessageBus, SessionManager};
 use caelix_security::SecurityChecker;
 use caelix_task::{FilePersistence, RunnableFactory, TaskManager};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::{AgentRunManager, HookRegistry, UsageTracker};
+
+/// 单个工作目录的项目配置快照
+#[derive(Default)]
+struct ProjectConfig {
+    skills: HashMap<String, Arc<Skill>>,
+    commands: Vec<Command>,
+    agents: HashMap<String, Arc<AgentSpec>>,
+}
+
+/// 配置覆盖层 - 支持项目级配置覆盖全局配置
+///
+/// 支持同时缓存多个工作目录的配置，按请求的 work_dir 懒加载。
+#[derive(Clone)]
+pub struct ConfigOverlay {
+    global_skill_manager: Arc<SkillManager>,
+    global_command_manager: Arc<CommandManager>,
+    global_agent_manager: Arc<AgentManager>,
+    global_tool_manager: Arc<ToolManager>,
+    /// 多工作目录缓存：work_dir → 项目配置
+    project_configs: Arc<RwLock<HashMap<PathBuf, ProjectConfig>>>,
+}
+
+impl ConfigOverlay {
+    pub fn new(
+        skill_manager: Arc<SkillManager>,
+        command_manager: Arc<CommandManager>,
+        agent_manager: Arc<AgentManager>,
+        tool_manager: Arc<ToolManager>,
+    ) -> Self {
+        Self {
+            global_skill_manager: skill_manager,
+            global_command_manager: command_manager,
+            global_agent_manager: agent_manager,
+            global_tool_manager: tool_manager,
+            project_configs: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// 懒加载：仅当指定 work_dir 下存在配置目录且尚未缓存时才加载
+    async fn ensure_loaded(&self, work_dir: &Path) {
+        // 快速路径：已缓存则跳过
+        {
+            let configs = self.project_configs.read().await;
+            if configs.contains_key(work_dir) {
+                return;
+            }
+        }
+
+        // 检查工作目录下是否有任何配置目录
+        let has_config = [SKILLS_DIR, COMMANDS_DIR, AGENTS_DIR]
+            .iter()
+            .any(|dir| work_dir.join(dir).exists());
+
+        if !has_config {
+            // 标记为已检查（空配置），避免反复检测目录
+            self.project_configs
+                .write()
+                .await
+                .insert(work_dir.to_path_buf(), ProjectConfig::default());
+            return;
+        }
+
+        let mut config = ProjectConfig::default();
+
+        let skills_path = work_dir.join(SKILLS_DIR);
+        if skills_path.exists() {
+            match load_skills_from_directory(skills_path.to_str().unwrap_or("")).await {
+                Ok(skills) => {
+                    for skill in skills {
+                        config.skills.insert(skill.full_name.clone(), Arc::new(skill));
+                    }
+                }
+                Err(e) => tracing::warn!(path = %skills_path.display(), error = %e, "Failed to load project skills"),
+            }
+        }
+
+        let commands_path = work_dir.join(COMMANDS_DIR);
+        if commands_path.exists() {
+            match load_commands_from_directory(commands_path.to_str().unwrap_or("")).await {
+                Ok(commands) => config.commands = commands,
+                Err(e) => tracing::warn!(path = %commands_path.display(), error = %e, "Failed to load project commands"),
+            }
+        }
+
+        let agents_path = work_dir.join(AGENTS_DIR);
+        if agents_path.exists() {
+            match load_agents_from_directory(agents_path.to_str().unwrap_or(""), &self.global_tool_manager).await {
+                Ok(agent_specs) => {
+                    for spec in agent_specs {
+                        config.agents.insert(spec.name.clone(), Arc::new(spec));
+                    }
+                }
+                Err(e) => tracing::warn!(path = %agents_path.display(), error = %e, "Failed to load project agents"),
+            }
+        }
+
+        tracing::info!(
+            project_dir = %work_dir.display(),
+            skills_count = config.skills.len(),
+            commands_count = config.commands.len(),
+            agents_count = config.agents.len(),
+            "Project config loaded"
+        );
+
+        self.project_configs
+            .write()
+            .await
+            .insert(work_dir.to_path_buf(), config);
+    }
+}
+
+#[async_trait]
+impl ConfigOverlayTrait for ConfigOverlay {
+    async fn ensure_project_config_loaded(&self, work_dir: &Path) -> Result<(), String> {
+        self.ensure_loaded(work_dir).await;
+        Ok(())
+    }
+
+    async fn get_skill(&self, name: &str) -> Option<Arc<Skill>> {
+        // 遍历所有已缓存的项目配置查找（项目配置优先于全局）
+        let configs = self.project_configs.read().await;
+        for config in configs.values() {
+            if let Some(skill) = config.skills.get(name) {
+                return Some(skill.clone());
+            }
+        }
+        drop(configs);
+        self.global_skill_manager.get(name).await
+    }
+
+    async fn get_command(&self, name: &str) -> Option<Command> {
+        let configs = self.project_configs.read().await;
+        for config in configs.values() {
+            if let Some(cmd) = config.commands.iter().find(|c| c.name == name) {
+                return Some(cmd.clone());
+            }
+        }
+        drop(configs);
+        self.global_command_manager.get_by_name(name).await
+    }
+
+    async fn get_agent_spec(&self, name: &str) -> Option<Arc<AgentSpec>> {
+        let configs = self.project_configs.read().await;
+        for config in configs.values() {
+            if let Some(spec) = config.agents.get(name) {
+                return Some(spec.clone());
+            }
+        }
+        drop(configs);
+        // 全局层：AgentManager 存的是 dyn Agent，取其 spec
+        let agent = self.global_agent_manager.get(name).await?;
+        Some(agent.get_spec())
+    }
+}
 
 /// 项目上下文对象
 /// 统一管理 AgentManager、ToolManager、ProviderManager 和 SessionManager 实例
@@ -49,6 +211,8 @@ pub struct CaelixContext {
     pub usage_tracker: Arc<UsageTracker>,
     /// Agent 运行管理器（支持紧急停止）
     pub agent_run_manager: Arc<AgentRunManager>,
+    /// 配置覆盖层（支持项目级配置覆盖全局配置）
+    pub config_overlay: Arc<ConfigOverlay>,
 }
 
 impl std::fmt::Debug for CaelixContext {
@@ -68,6 +232,7 @@ impl std::fmt::Debug for CaelixContext {
             .field("security_checker", &self.security_checker)
             .field("usage_tracker", &"UsageTracker")
             .field("agent_run_manager", &"AgentRunManager")
+            .field("config_overlay", &"ConfigOverlay")
             .finish()
     }
 }
@@ -97,14 +262,28 @@ impl CaelixContext {
         // 初始化 Agent 运行管理器
         let agent_run_manager = Arc::new(AgentRunManager::new());
 
+        // 初始化管理器
+        let skill_manager = Arc::new(SkillManager::new());
+        let command_manager = Arc::new(CommandManager::new());
+        let agent_manager = Arc::new(AgentManager::new());
+        let tool_manager = Arc::new(ToolManager::new());
+
+        // 初始化配置覆盖层
+        let config_overlay = Arc::new(ConfigOverlay::new(
+            skill_manager.clone(),
+            command_manager.clone(),
+            agent_manager.clone(),
+            tool_manager.clone(),
+        ));
+
         Self {
             env_config,
-            agent_manager: Arc::new(AgentManager::new()),
-            tool_manager: Arc::new(ToolManager::new()),
+            agent_manager,
+            tool_manager,
             llm_provider_manager: Arc::new(RwLock::new(ProviderManager::new())),
             session_manager,
-            skill_manager: Arc::new(SkillManager::new()),
-            command_manager: Arc::new(CommandManager::new()),
+            skill_manager,
+            command_manager,
             hook_registry: Arc::new(HookRegistry::new()),
             plugin_registry: Arc::new(PluginRegistry::new()),
             message_bus: Arc::new(bus),
@@ -114,6 +293,7 @@ impl CaelixContext {
             )),
             usage_tracker,
             agent_run_manager,
+            config_overlay,
         }
     }
 
@@ -270,8 +450,12 @@ impl ContextProvider for CaelixContext {
     }
 
     fn agent_run_manager(&self) -> Option<Arc<dyn AgentRunManagerTrait>> {
-    Some(self.agent_run_manager.clone())
-}
+        Some(self.agent_run_manager.clone())
+    }
+
+    fn config_overlay(&self) -> Arc<dyn ConfigOverlayTrait> {
+        self.config_overlay.clone()
+    }
 }
 
 impl Default for CaelixContext {

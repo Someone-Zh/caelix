@@ -16,6 +16,14 @@ pub mod tools_loader;
 
 pub use managers::*;
 
+/// 项目配置目录名称常量（与 CAELIX_HOME 下一致）
+pub const SKILLS_DIR: &str = "skills";
+pub const COMMANDS_DIR: &str = "commands";
+pub const AGENTS_DIR: &str = "agents";
+
+/// 项目配置路径常量（相对于项目根目录）
+pub const PROJECT_CONFIG_PATHS: [&str; 3] = [SKILLS_DIR, COMMANDS_DIR, AGENTS_DIR];
+
 /// 完整的根配置（可从 JSON 反序列化）
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct RootConfig {
