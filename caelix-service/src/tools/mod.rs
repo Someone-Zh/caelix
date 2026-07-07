@@ -9,18 +9,22 @@ use std::sync::Arc;
 
 /// 创建所有内置工具实例（统一管理所有工具的实例化）
 pub fn create_all_builtin_tools() -> Vec<Arc<dyn Tool>> {
-    vec![
-        // 文件编辑工具
+    let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(caelix_tools::DiffEditTool),
-        // 目录树工具
         Arc::new(caelix_tools::DirectoryTreeTool),
-        // 文件搜索工具
         Arc::new(caelix_tools::SmartSearchTool),
-        // 文件读取工具
         Arc::new(caelix_tools::ReadFileTool),
-        // 字符串替换工具
         Arc::new(caelix_tools::StringReplaceTool),
-        // 命令行执行工具
         Arc::new(caelix_tools::CommandExecTool),
-    ]
+    ];
+
+    #[cfg(feature = "ast")]
+    {
+        let mut tools = tools;
+        tools.push(Arc::new(caelix_tools::ListSymbolsTool));
+        tools.push(Arc::new(caelix_tools::GetSymbolDefinitionTool));
+        tools
+    }
+    #[cfg(not(feature = "ast"))]
+    tools
 }

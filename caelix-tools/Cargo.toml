@@ -11,6 +11,22 @@ tokio.workspace = true
 walkdir.workspace = true
 anyhow.workspace = true
 regex = { version = "1", optional = true }
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-rust = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-javascript = { workspace = true, optional = true }
+tree-sitter-typescript = { workspace = true, optional = true }
+tree-sitter-go = { workspace = true, optional = true }
+tree-sitter-c = { workspace = true, optional = true }
 
 [features]
 default = ["regex"]
+regex = ["dep:regex"]
+
+ast = ["ast-rust", "ast-python", "ast-ts", "ast-go", "ast-c"]
+
+ast-rust = ["dep:tree-sitter", "dep:tree-sitter-rust"]
+ast-python = ["dep:tree-sitter", "dep:tree-sitter-python"]
+ast-ts = ["dep:tree-sitter", "dep:tree-sitter-javascript", "dep:tree-sitter-typescript"]
+ast-go = ["dep:tree-sitter", "dep:tree-sitter-go"]
+ast-c = ["dep:tree-sitter", "dep:tree-sitter-c"]

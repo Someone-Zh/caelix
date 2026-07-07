@@ -23,3 +23,12 @@ anyhow.workspace = true
 tracing.workspace = true
 inventory.workspace = true
 regex = "1.10"
+
+[features]
+default = []
+ast = ["caelix-tools/ast"]
+ast-rust = ["caelix-tools/ast-rust"]
+ast-python = ["caelix-tools/ast-python"]
+ast-ts = ["caelix-tools/ast-ts"]
+ast-go = ["caelix-tools/ast-go"]
+ast-c = ["caelix-tools/ast-c"]

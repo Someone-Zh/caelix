@@ -9,10 +9,15 @@ pub mod file_search;
 pub mod string_replace;
 pub mod tree;
 
-// 重新导出常用工具
+#[cfg(feature = "ast")]
+pub mod ast_tool;
+
 pub use command_exec::CommandExecTool;
 pub use file_edit::DiffEditTool;
 pub use file_read::ReadFileTool;
 pub use file_search::SmartSearchTool;
 pub use string_replace::StringReplaceTool;
 pub use tree::DirectoryTreeTool;
+
+#[cfg(feature = "ast")]
+pub use ast_tool::{GetSymbolDefinitionTool, ListSymbolsTool};
