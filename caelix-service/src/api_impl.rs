@@ -14,7 +14,6 @@ use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::HashMap;
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
