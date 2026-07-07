@@ -122,6 +122,33 @@ caelix/                              # Workspace 根目录
 │   └── Cargo.toml
 │   依赖: caelix-api, caelix-llm, caelix-tools, caelix-agent, caelix-runtime, caelix-message, caelix-task
 │
+├── caelix-memory/                   # 【记忆系统】三层架构记忆 + 双向链接
+│   ├── src/
+│   │   ├── lib.rs                   # 模块入口
+│   │   ├── schema.rs                # 数据结构定义
+│   │   ├── vault.rs                 # MemoryVault 核心实现
+│   │   ├── raw.rs                   # Raw 层（按天归档）
+│   │   ├── wiki/                    # Wiki 层
+│   │   │   ├── entity.rs            # Wiki 实体
+│   │   │   └── event.rs             # Wiki 事件
+│   │   ├── axiom.rs                 # Axiom 公理层
+│   │   ├── link.rs                  # 双向链接解析
+│   │   ├── index.rs                 # 反向索引
+│   │   ├── alias.rs                 # 别名管理
+│   │   ├── conflict.rs              # 冲突与候选管理
+│   │   ├── budget.rs                # LLM 预算管理
+│   │   ├── promote.rs               # 晋升引擎
+│   │   ├── promote_worker.rs        # 晋升后台 Worker
+│   │   ├── compactor_hook.rs        # 记忆压缩 Hook
+│   │   └── tools/                   # Memory 系列工具
+│   │       ├── write.rs             # 记忆写入工具
+│   │       ├── recall.rs            # 记忆检索工具
+│   │       ├── promote.rs           # 记忆晋升工具
+│   │       ├── rename.rs            # 重命名工具
+│   │       └── flag.rs              # 冲突标记工具
+│   └── Cargo.toml
+│   依赖: caelix-api, caelix-task
+│
 ├── caelix-service/                  # 【服务层】API 实现
 │   ├── src/
 │   │   ├── lib.rs                   # 模块入口
@@ -179,6 +206,7 @@ caelix/                              # Workspace 根目录
 | **caelix-runtime** | 实现运行时功能，包括 RuntimeContext、HookRegistry、ID 生成器。提供 Agent 执行时的上下文环境和扩展点。 |
 | **caelix-agent** | 实现 Agent 执行引擎，包括循环运行器、工具执行器、消息转换器。负责执行 Agent 的推理和行动循环。 |
 | **caelix-config** | 实现配置中心和资源管理器。从配置文件动态加载 Agent、Tool、Provider、Skill、Command，并通过 Manager 统一管理。 |
+| **caelix-memory** | 实现三层架构记忆系统（Raw → Wiki → Axiom）。支持双向链接、物理反向索引、加权检索、自动晋升引擎、冲突检测与人工裁决、LLM 预算控制。提供 Memory 系列工具供 Agent 调用。 |
 | **caelix-service** | 实现统一的 API 接口（CaelixApi trait），提供会话管理、聊天、任务查询等服务。是业务逻辑的核心实现层。 |
 | **caelix-cli** | 实现命令行交互界面。处理用户输入、显示输出、执行 CLI 命令。是默认的交互方式。 |
 | **caelix-http** | 实现 HTTP REST API 服务器。将 CaelixApi 暴露为 HTTP 端点，支持远程调用。可选 feature。 |
@@ -491,6 +519,7 @@ Level 0: caelix-api (无内部依赖，所有包的基础)
 | **任务调度** | [caelix-task/spec.md](file://caelix-task/spec.md) | 异步任务队列系统，支持任务创建、调度、执行、持久化。TaskManager 管理任务状态，TaskScheduler 支持定时任务（cron）。支持任务委派（delegate_task），实现 Agent 间协作。核心特性：任务返回值 Result<String, AgentError>、RuntimeContext 完整传递、任务结果保存到 session 级别目录、Todo 待办任务类型（外部触发状态变更）。 |
 | **Hook 系统** | [caelix-runtime/spec.md](file://caelix-runtime/spec.md) | 运行时扩展机制，支持在 Agent 执行前后注入自定义逻辑。内置技能加载、消息记录、工具结果检查等 Hook。通过 HookRegistry 统一管理，支持优先级和条件匹配。 |
 | **配置管理** | [caelix-config/spec.md](file://caelix-config/spec.md) | 动态配置加载和资源管理系统。从文件系统加载 Agent、Provider、Tool、Skill、Command 配置。通过 Manager 模式统一管理各类资源，支持热重载。 |
+| **记忆系统** | [caelix-memory/spec.md](file://caelix-memory/spec.md) | 三层架构记忆系统（Raw → Wiki → Axiom），实现渐进式知识沉淀。支持双向链接（[[Entity]]、[[Event:Name]]、[[Axiom:Name]]）、物理反向索引与加权检索（Axiom 1.0 / Wiki 0.7 / Raw 0.3）、自动晋升引擎、冲突检测与人工裁决、LLM 预算控制。提供 memory_write / memory_recall / memory_promote 等工具。 |
 | **CLI 界面** | [caelix-cli/spec.md](file://caelix-cli/spec.md) | 命令行交互界面，默认启动模式。支持会话管理、Agent 切换、模型选择、任务查询等命令。流式输出实时显示，支持历史记录和命令补全。 |
 | **HTTP API** | [caelix-http/spec.md](file://caelix-http/spec.md) | RESTful API 服务，可选 feature。将 CaelixApi 暴露为 HTTP 端点，支持远程调用。使用 axum 框架，支持 CORS、错误处理、流式响应。适合集成到其他系统。 |
 | **TUI 界面** | [caelix-tui/spec.md](file://caelix-tui/spec.md) | 终端用户图形界面，可选 feature。使用 Ratatui 构建交互式 UI，提供更友好的视觉体验。支持分屏显示、消息历史、任务列表、实时日志等。 |

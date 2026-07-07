@@ -37,6 +37,9 @@
 ├── caelix-tui/                  # TUI 界面规范
 │   └── spec.md
 │
+├── caelix-memory/               # 记忆系统规范
+│   └── spec.md
+│
 └── caelix-llm/                  # LLM Provider 规范
     └── spec.md
 ```
@@ -107,6 +110,7 @@
 | **CLI 界面** | `caelix-cli/spec.md` | 命令行交互、命令处理、流式输出 |
 | **HTTP API** | `caelix-http/spec.md` | RESTful API、SSE、CORS、错误处理 |
 | **TUI 界面** | `caelix-tui/spec.md` | 终端图形界面、视图渲染、事件处理 |
+| **记忆系统** | `caelix-memory/spec.md` | 三层架构记忆（Raw/Wiki/Axiom）、双向链接、反向索引、晋升引擎 |
 | **LLM Provider** | `caelix-llm/spec.md` | LLM API 集成、流式响应、工具调用 |
 
 ## 使用指南
