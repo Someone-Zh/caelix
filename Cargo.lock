@@ -300,10 +300,12 @@ dependencies = [
  "caelix-cli",
  "caelix-config",
  "caelix-http",
+ "caelix-memory",
  "caelix-message",
  "caelix-runtime",
  "caelix-service",
  "caelix-tui",
+ "chrono",
  "inventory",
  "serde_json",
  "tokio",
@@ -372,6 +374,30 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "caelix-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "caelix-api",
+ "caelix-config",
+ "caelix-message",
+ "caelix-task",
+ "chrono",
+ "dashmap",
+ "dirs",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]

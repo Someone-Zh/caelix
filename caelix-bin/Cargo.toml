@@ -14,7 +14,9 @@ caelix-config = { path = "../caelix-config" }
 caelix-message = { path = "../caelix-message" }
 caelix-runtime = { path = "../caelix-runtime" }
 caelix-cli = { path = "../caelix-cli" }
+caelix-memory = { path = "../caelix-memory" }
 caelix-http = { path = "../caelix-http", optional = true }
+chrono = { version = "0.4.38", features = ["serde"] }
 caelix-tui = { path = "../caelix-tui", optional = true }
 tokio.workspace = true
 tracing.workspace = true

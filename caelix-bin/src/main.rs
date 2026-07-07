@@ -5,30 +5,31 @@ use tokio::signal;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 初始化配置 & 日志
     let env_config = caelix_config::EnvConfig::new();
 
-    // 先以日志初始化（必须在任何 tracing 事件之前调用）
     if let Err(e) = caelix_api::logging::init_logging(&env_config.log) {
         eprintln!("[main] init logging failed: {}", e);
     }
 
-    // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
 
-    // 检查是否请求帮助
     if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
         print_usage();
         return Ok(());
     }
 
-    // ---------- logs 子命令：查看日志 ----------
     if args.len() > 1 && args[1] == "logs" {
         run_logs_command(&env_config.log, &args[2..]).await;
         return Ok(());
     }
 
-    // 使用 CaelixContext 初始化
+    if args.len() > 1 && args[1] == "memory" {
+        let context = CaelixContext::new();
+        let caelix_ctx = Arc::new(context);
+        run_memory_command(caelix_ctx, &args[2..]).await;
+        return Ok(());
+    }
+
     println!("🔧 初始化 Caelix 上下文...");
     let mut context = CaelixContext::new();
     let plugins = caelix_api::plugins::inventory_plugins(Arc::new(context.clone()));
@@ -36,16 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     context.init().await.expect("Failed to initialize context");
     let caelix_ctx = Arc::new(context);
 
-    // 创建 API 实现
     let api = Arc::new(CaelixApiImpl::new(caelix_ctx.clone()));
 
-    // 启动信号监听任务
     let session_manager_clone = caelix_ctx.session_manager.clone();
     tokio::spawn(async move {
         signal_ctrl_c(session_manager_clone).await;
     });
 
-    // 根据 features 和参数启动相应的后端
     if args.len() > 1 {
         match args[1].as_str() {
             "cli" => {
@@ -67,7 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("🖥️  启动 TUI 后端...");
                 caelix_tui::run_tui(api).await?;
             }
-            // 如果第一个参数是选项（以-开头），则默认启动CLI后端并传递所有参数
             arg if arg.starts_with('-') => {
                 println!("💻 启动 CLI 后端...");
                 caelix_cli::run_cli(api).await?;
@@ -79,7 +76,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        // 没有指定参数，默认启动 CLI 后端
         println!("💻 启动 CLI 后端...");
         caelix_cli::run_cli(api).await?;
     }
@@ -87,7 +83,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 打印使用说明
 fn print_usage() {
     println!("\n用法:");
     println!("  caelix [options]       - 启动 CLI 界面 (默认)");
@@ -97,11 +92,7 @@ fn print_usage() {
     #[cfg(feature = "tui")]
     println!("  caelix tui             - 启动 TUI 界面");
     println!("  caelix logs [sub]      - 日志管理");
-    println!("    logs ls               列出所有日志文件");
-    println!("    logs show [tail N]    显示当前日志 (默认 50 行，-n <数字> 指定行数)");
-    println!("    logs follow           实时跟随当前日志 (tail -f)");
-    println!("    logs clean            删除所有日志文件");
-    println!("    logs dir              显示日志目录");
+    println!("  caelix memory [sub]    - 记忆系统");
     println!("\nCLI 选项:");
     println!("  -s, --session <ID>     - 指定会话 ID");
     println!("  -a, --agent <NAME>     - 指定使用的 Agent");
@@ -114,7 +105,6 @@ fn print_usage() {
     println!("  - tui");
 }
 
-/// Ctrl+C 信号处理器
 async fn signal_ctrl_c(session_manager: Arc<caelix_message::SessionManager>) {
     match signal::ctrl_c().await {
         Ok(()) => {
@@ -129,7 +119,6 @@ async fn signal_ctrl_c(session_manager: Arc<caelix_message::SessionManager>) {
     }
 }
 
-/// Flush 待持久化的消息
 async fn flush_pending_messages(session_manager: Arc<caelix_message::SessionManager>) {
     use caelix_api::message::AgentMessageType;
 
@@ -148,9 +137,283 @@ async fn flush_pending_messages(session_manager: Arc<caelix_message::SessionMana
     }
 }
 
-// ---------- 日志管理命令 ----------
+async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
 
-/// 主入口：logs 子命令
+    let config = caelix_memory::schema::MemoryVaultConfig::default();
+    let vault = caelix_memory::MemoryVault::new(config);
+    if let Err(e) = vault.init().await {
+        eprintln!("❌ 初始化 MemoryVault 失败: {}", e);
+        return;
+    }
+
+    match sub {
+        "recall" => {
+            if args.len() < 2 {
+                eprintln!("❌ 用法: caelix memory recall <query> [--top-k N]");
+                return;
+            }
+            let query = args[1].as_str();
+            let mut top_k = 5;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--top-k" | "-k" => {
+                        if i + 1 < args.len() {
+                            top_k = args[i + 1].parse().unwrap_or(5);
+                        }
+                        i += 2;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            match vault.recall(query, top_k).await {
+                Ok(results) => {
+                    if results.is_empty() {
+                        println!("(未找到相关记忆)");
+                        return;
+                    }
+                    println!("==================================");
+                    println!("  📚 记忆检索结果 ({} 条)", results.len());
+                    println!("==================================");
+                    for (i, result) in results.iter().enumerate() {
+                        let layer_color = match result.layer.as_str() {
+                            "Axiom" => "🔮",
+                            "Wiki" => "📖",
+                            "Raw" => "📝",
+                            _ => "📄",
+                        };
+                        let conf = result.confidence.map(|c| format!(" ({:.0}%)", c * 100.0)).unwrap_or_default();
+                        println!("\n  [{i}] {layer_color} [{}]{conf}", result.layer);
+                        println!("     文件: {}", result.file);
+                        println!("     标题: {}", result.heading);
+                        println!("     预览: {}", result.preview);
+                    }
+                    println!("\n==================================");
+                }
+                Err(e) => eprintln!("❌ 检索失败: {}", e),
+            }
+        }
+        "write" => {
+            if args.len() < 2 {
+                eprintln!("❌ 用法: caelix memory write <content> [--source chat|meeting|tweet|paper|note] [--tag TAG...]");
+                return;
+            }
+            let content = args[1].as_str();
+            
+            let mut source_str = "chat";
+            let mut tags = Vec::new();
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--source" | "-s" => {
+                        if i + 1 < args.len() {
+                            source_str = args[i + 1].as_str();
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    "--tag" | "-t" => {
+                        if i + 1 < args.len() {
+                            tags.push(args[i + 1].clone());
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            let source = match source_str {
+                "meeting" => caelix_memory::schema::RawSource::Meeting,
+                "tweet" => caelix_memory::schema::RawSource::Tweet,
+                "paper" => caelix_memory::schema::RawSource::Paper,
+                "note" => caelix_memory::schema::RawSource::Note,
+                _ => caelix_memory::schema::RawSource::Chat,
+            };
+
+            let today = chrono::Utc::now().date_naive();
+            let heading = chrono::Utc::now().format("%H:%M").to_string();
+
+            match vault.write_raw(today, source, tags, &heading, content).await {
+                Ok(_) => println!("✅ 已写入 Raw 层"),
+                Err(e) => eprintln!("❌ 写入失败: {}", e),
+            }
+        }
+        "promote" => {
+            let mut i = 0;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--raw" => {
+                        if i + 1 < args.len() {
+                            let file = args[i + 1].as_str();
+                            println!("🔄 手动触发 Raw→Wiki 晋升: {}", file);
+                            println!("(P2 阶段实现，当前仅记录)");
+                        }
+                        i += 2;
+                    }
+                    "--wiki" => {
+                        if i + 1 < args.len() {
+                            let entity = args[i + 1].as_str();
+                            println!("🔄 手动触发 Wiki→Axiom 晋升: {}", entity);
+                            println!("(P2 阶段实现，当前仅记录)");
+                        }
+                        i += 2;
+                    }
+                    _ => i += 1,
+                }
+            }
+        }
+        "flags" => {
+            let all = args.contains(&"--all".to_string());
+
+            let conflicts = match vault.list_conflicts(all).await {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("❌ 获取冲突列表失败: {}", e);
+                    return;
+                }
+            };
+
+            let candidates = match vault.list_candidates(all).await {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("❌ 获取候选列表失败: {}", e);
+                    return;
+                }
+            };
+
+            println!("==================================");
+            println!("  ⚠️  冲突与候选列表");
+            println!("==================================");
+
+            if !conflicts.is_empty() {
+                println!("\n  🚫 冲突 ({})", conflicts.len());
+                println!("  ------------------------------");
+                for conflict in &conflicts {
+                    let status_icon = if conflict.status == "Pending" { "⏳" } else { "✅" };
+                    println!("  {} {} [{}] {} - {}", status_icon, conflict.id, conflict.r#type, conflict.entity, conflict.field.as_deref().unwrap_or(""));
+                    for value in &conflict.values {
+                        println!("       - {}", value);
+                    }
+                }
+            }
+
+            if !candidates.is_empty() {
+                println!("\n  📋 Axiom 候选 ({})", candidates.len());
+                println!("  ------------------------------");
+                for candidate in &candidates {
+                    let status_icon = match candidate.status.as_str() {
+                        "Pending" => "⏳",
+                        "Approved" => "✅",
+                        "Rejected" => "❌",
+                        _ => "📄",
+                    };
+                    println!("  {} {} (confidence: {:.0}%)", status_icon, candidate.id, candidate.confidence * 100.0);
+                    println!("       {}", candidate.preview);
+                }
+            }
+
+            if conflicts.is_empty() && candidates.is_empty() {
+                println!("(暂无冲突或候选)");
+            }
+            println!("\n==================================");
+        }
+        "rebuild-index" => {
+            println!("🔄 正在重建反向索引...");
+            match vault.rebuild_index().await {
+                Ok(_) => println!("✅ 索引重建完成"),
+                Err(e) => eprintln!("❌ 索引重建失败: {}", e),
+            }
+        }
+        "stats" => {
+            match vault.stats().await {
+                Ok(stats) => {
+                    println!("==================================");
+                    println!("  📊 Memory Vault 统计");
+                    println!("==================================");
+                    println!("  Raw 文件数        : {}", stats.raw_files);
+                    println!("  Wiki 实体数       : {}", stats.wiki_entities);
+                    println!("  Wiki 事件数       : {}", stats.wiki_events);
+                    println!("  Axiom 总数        : {} (活跃: {})", stats.axioms, stats.axioms_active);
+                    println!("  待处理冲突        : {}", stats.pending_conflicts);
+                    println!("  Axiom 候选        : {}", stats.pending_candidates);
+                    println!("  待创建链接        : {}", stats.pending_links);
+                    println!("  LLM 预算          : {}/{}", stats.llm_budget_used, stats.llm_budget_total);
+                    println!("==================================");
+                }
+                Err(e) => eprintln!("❌ 获取统计失败: {}", e),
+            }
+        }
+        "axioms" => {
+            let include_deprecated = args.contains(&"--include-deprecated".to_string());
+            
+            match vault.list_axioms(include_deprecated).await {
+                Ok(axioms) => {
+                    println!("==================================");
+                    println!("  🔮 Axiom 列表 ({} 条)", axioms.len());
+                    if include_deprecated {
+                        println!("  (包含已废弃)");
+                    }
+                    println!("==================================");
+                    for axiom in &axioms {
+                        let status_icon = if axiom.status == "Active" { "✅" } else { "❌" };
+                        println!("\n  {} {} [{}]", status_icon, axiom.name, axiom.category);
+                        println!("     置信度: {:.0}%", axiom.confidence * 100.0);
+                        println!("     创建于: {}", axiom.created_at.format("%Y-%m-%d %H:%M"));
+                        if let Some(reason) = &axiom.deprecated_reason {
+                            println!("     废弃原因: {}", reason);
+                        }
+                    }
+                    if axioms.is_empty() {
+                        println!("(暂无 Axiom)");
+                    }
+                    println!("\n==================================");
+                }
+                Err(e) => eprintln!("❌ 获取 Axiom 列表失败: {}", e),
+            }
+        }
+        "budget" => {
+            let info = vault.get_budget_info().await;
+            let status_icon = if info.exhausted { "⚠️" } else { "✅" };
+            println!("==================================");
+            println!("  💰 LLM 调用预算");
+            println!("==================================");
+            println!("  {} 今日已用: {}/{}", status_icon, info.used, info.budget);
+            println!("     剩余: {}", info.remaining);
+            if info.exhausted {
+                println!("     ⚠️  预算已耗尽，晋升任务将被延迟");
+            }
+            println!("==================================");
+        }
+        "--help" | "-h" | "" => {
+            print_memory_help();
+        }
+        other => {
+            eprintln!("❌ 未知的 memory 子命令: {}", other);
+            print_memory_help();
+        }
+    }
+}
+
+fn print_memory_help() {
+    println!("\n记忆系统子命令用法:");
+    println!("  caelix memory recall <query> [--top-k N]    检索记忆（默认返回 5 条）");
+    println!("  caelix memory write <content> [选项]          写入 Raw 层");
+    println!("    --source chat|meeting|tweet|paper|note    来源类型（默认 chat）");
+    println!("    --tag TAG                                 添加标签");
+    println!("  caelix memory promote --raw <file>          手动触发 Raw→Wiki 晋升");
+    println!("  caelix memory promote --wiki <entity>       手动触发 Wiki→Axiom 晋升");
+    println!("  caelix memory flags [--all]                 列出冲突和 Axiom 候选");
+    println!("  caelix memory rebuild-index                 重建反向索引");
+    println!("  caelix memory stats                         显示统计信息");
+    println!("  caelix memory axioms [--include-deprecated] 查看 Axiom 列表");
+    println!("  caelix memory budget                        查看 LLM 预算使用情况");
+}
+
 async fn run_logs_command(config: &caelix_api::logging::LogConfig, sub_args: &[String]) {
     let sub = sub_args.first().map(|s| s.as_str()).unwrap_or("ls");
 
@@ -162,7 +425,6 @@ async fn run_logs_command(config: &caelix_api::logging::LogConfig, sub_args: &[S
             list_logs(&config.dir);
         }
         "show" => {
-            // 解析 -n 参数
             let mut n: usize = 50;
             let mut i = 1;
             while i < sub_args.len() {
@@ -321,7 +583,6 @@ async fn follow_log(dir: &std::path::Path) {
     println!("{}", "=".repeat(60));
 
     let mut pos: u64 = 0;
-    // 先跳到文件末尾
     if let Ok(file) = fs::File::open(&current)
         && let Ok(meta) = file.metadata()
     {
@@ -337,7 +598,6 @@ async fn follow_log(dir: &std::path::Path) {
             if file.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
                 pos += buf.len() as u64;
                 for line in buf.lines() {
-                    // 同样尝试美化 JSON 输出
                     if line.trim_start().starts_with('{')
                         && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
                     {
