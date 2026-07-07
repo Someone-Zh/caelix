@@ -21,3 +21,4 @@ serde_json.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
 inventory.workspace = true
+regex = "1.10"

@@ -7,8 +7,10 @@ pub mod api_trait;
 pub mod plugins;
 pub mod tools;
 pub mod types;
+pub mod variable_replacer;
 
 pub use api_impl::CaelixApiImpl;
 pub use api_trait::CaelixApi;
 pub use tools::*;
 pub use types::*;
+pub use variable_replacer::*;

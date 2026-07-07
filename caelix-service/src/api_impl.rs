@@ -1,5 +1,6 @@
 use crate::api_trait::CaelixApi;
 use crate::types::{ChatAsyncResult, ChatRequest, ProviderInfo, SessionSummary};
+use crate::variable_replacer::VariableReplacer;
 use async_trait::async_trait;
 use caelix_api::agent::AgentOutputChunk;
 use caelix_api::error::ApiError;
@@ -10,6 +11,7 @@ use caelix_runtime::context::CaelixContext;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -123,6 +125,62 @@ impl CaelixApi for CaelixApiImpl {
     async fn list_agents(&self) -> Vec<String> {
         let agents = self.context.agent_manager.get_all().await;
         agents.iter().map(|a| a.get_spec().name.clone()).collect()
+    }
+
+    async fn set_variable(&self, key: &str, value: &str) -> Result<(), ApiError> {
+        self.context.variable_manager.set_global(key, value).await;
+        Ok(())
+    }
+
+    async fn get_variable(&self, key: &str) -> Result<Option<String>, ApiError> {
+        Ok(self.context.variable_manager.get_global(key).await)
+    }
+
+    async fn delete_variable(&self, key: &str) -> Result<(), ApiError> {
+        self.context.variable_manager.delete_global(key).await;
+        Ok(())
+    }
+
+    async fn list_variables(&self) -> Result<HashMap<String, String>, ApiError> {
+        Ok(self.context.variable_manager.list_globals().await)
+    }
+
+    async fn set_space_variable(
+        &self,
+        space: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ApiError> {
+        self.context
+            .variable_manager
+            .set_space_var(space, key, value)
+            .await;
+        Ok(())
+    }
+
+    async fn get_space_variable(&self, space: &str, key: &str) -> Result<Option<String>, ApiError> {
+        Ok(self
+            .context
+            .variable_manager
+            .get_space_var(space, key)
+            .await)
+    }
+
+    async fn delete_space_variable(&self, space: &str, key: &str) -> Result<(), ApiError> {
+        self.context
+            .variable_manager
+            .delete_space_var(space, key)
+            .await;
+        Ok(())
+    }
+
+    async fn list_space_variables(&self, space: &str) -> Result<HashMap<String, String>, ApiError> {
+        Ok(self.context.variable_manager.list_space_vars(space).await)
+    }
+
+    async fn replace_variables(&self, text: &str, space: Option<&str>) -> Result<String, ApiError> {
+        let replacer = VariableReplacer::new(self.context.variable_manager.clone());
+        Ok(replacer.replace_async(text, space).await)
     }
 
     async fn chat_stream(
@@ -364,6 +422,14 @@ impl CaelixApi for CaelixApiImpl {
 
             // 如果带用户消息则添加
             if let Some(user_message) = request_clone.message.clone() {
+                let space = std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned());
+                let replacer = VariableReplacer::new(ctx_clone.variable_manager.clone());
+                let user_message = replacer
+                    .replace_async(&user_message, space.as_deref())
+                    .await;
+
                 messages.push(ChatMessage::user(user_message.clone()));
 
                 // 发送用户消息到消息总线（只有带用户消息才发）

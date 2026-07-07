@@ -14,6 +14,7 @@ pub mod provider;
 pub mod task;
 pub mod tool;
 pub mod utils;
+pub mod variables;
 
 // 重新导出常用类型
 pub use agent::*;
@@ -28,6 +29,7 @@ pub use provider::*;
 pub use task::*;
 pub use tool::*;
 pub use utils::*;
+pub use variables::*;
 
 // 重新导出 ChatMessage 以便其他包使用
 pub use provider::ChatMessage;

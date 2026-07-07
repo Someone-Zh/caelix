@@ -8,6 +8,7 @@ use crate::message::{MessageBusTrait, SessionManagerTrait};
 use crate::plugins::PluginManager;
 use crate::task::TaskManagerTrait;
 use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
+use crate::variables::VariableManager;
 use async_trait::async_trait;
 use std::path::Path;
 use std::path::PathBuf;
@@ -107,6 +108,7 @@ pub trait ContextProvider: Send + Sync {
     fn message_bus(&self) -> Arc<dyn MessageBusTrait>;
     fn task_manager(&self) -> Option<Arc<dyn TaskManagerTrait>>;
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait>;
+    fn variable_manager(&self) -> Arc<VariableManager>;
 }
 
 impl std::fmt::Debug for dyn ContextProvider {

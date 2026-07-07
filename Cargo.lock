@@ -446,6 +446,7 @@ dependencies = [
  "chrono",
  "futures",
  "inventory",
+ "regex",
  "serde",
  "serde_json",
  "tokio",

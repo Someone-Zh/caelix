@@ -9,6 +9,7 @@ use caelix_api::message::{AgentMessage, NotificationMessage};
 use caelix_api::task::TaskMeta;
 use futures::Stream;
 use futures::stream::BoxStream;
+use std::collections::HashMap;
 use std::pin::Pin;
 
 /// Caelix API trait
@@ -38,6 +39,34 @@ pub trait CaelixApi: Send + Sync {
 
     /// 获取所有 agent 名称列表
     async fn list_agents(&self) -> Vec<String>;
+
+    /// 设置全局变量
+    async fn set_variable(&self, key: &str, value: &str) -> Result<(), ApiError>;
+
+    /// 获取全局变量
+    async fn get_variable(&self, key: &str) -> Result<Option<String>, ApiError>;
+
+    /// 删除全局变量
+    async fn delete_variable(&self, key: &str) -> Result<(), ApiError>;
+
+    /// 列出所有全局变量
+    async fn list_variables(&self) -> Result<HashMap<String, String>, ApiError>;
+
+    /// 设置空间变量
+    async fn set_space_variable(&self, space: &str, key: &str, value: &str)
+    -> Result<(), ApiError>;
+
+    /// 获取空间变量
+    async fn get_space_variable(&self, space: &str, key: &str) -> Result<Option<String>, ApiError>;
+
+    /// 删除空间变量
+    async fn delete_space_variable(&self, space: &str, key: &str) -> Result<(), ApiError>;
+
+    /// 列出空间的所有变量
+    async fn list_space_variables(&self, space: &str) -> Result<HashMap<String, String>, ApiError>;
+
+    /// 替换文本中的变量
+    async fn replace_variables(&self, text: &str, space: Option<&str>) -> Result<String, ApiError>;
 
     /// 流式聊天
     async fn chat_stream(

@@ -7,6 +7,7 @@ use caelix_api::managers::{
 use caelix_api::message::{MessageBusTrait, SessionManagerTrait};
 use caelix_api::plugins::{PluginManager, PluginRegistry};
 use caelix_api::task::TaskManagerTrait;
+use caelix_api::variables::VariableManager;
 use caelix_config::EnvConfig;
 use caelix_message::{FileStorage, MessageBus, SessionManager};
 use caelix_security::SecurityChecker;
@@ -44,6 +45,8 @@ pub struct CaelixContext {
     pub task_manager: Option<Arc<TaskManager>>,
     /// 安全检查器实例
     pub security_checker: Arc<SecurityChecker>,
+    /// 变量管理器实例
+    pub variable_manager: Arc<VariableManager>,
 }
 
 impl CaelixContext {
@@ -80,6 +83,7 @@ impl CaelixContext {
             security_checker: Arc::new(SecurityChecker::new(
                 caelix_security::SecurityConfig::default(),
             )),
+            variable_manager: Arc::new(VariableManager::new()),
         }
     }
 
@@ -229,6 +233,10 @@ impl ContextProvider for CaelixContext {
 
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait> {
         self.security_checker.clone()
+    }
+
+    fn variable_manager(&self) -> Arc<VariableManager> {
+        self.variable_manager.clone()
     }
 }
 
