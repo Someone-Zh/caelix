@@ -70,22 +70,19 @@ async fn run_agent_consumer(
             AgentMessageType::Msg => {
                 // 持久化 Msg 类型
                 if let Err(e) = storage.append_agent_message(&msg).await {
-                    eprintln!("[Storage Error] Failed to append agent message: {}", e);
+                    tracing::warn!(error = %e, "[Storage] Failed to append agent message");
                 }
             }
             AgentMessageType::Event => {
-                // 持久化 Event 类型（触发事件标记，供前端在历史中展示时机）
+                // 持久化 Event 类型（触发事件标记，供前端在历史中展示时机
                 if let Err(e) = storage.append_agent_message(&msg).await {
-                    eprintln!("[Storage Error] Failed to append event message: {}", e);
+                    tracing::warn!(error = %e, "[Storage] Failed to append event message");
                 }
             }
             AgentMessageType::ManualApproval => {
                 // 持久化 ManualApproval：携带审批请求信息
                 if let Err(e) = storage.append_agent_message(&msg).await {
-                    eprintln!(
-                        "[Storage Error] Failed to append manual_approval message: {}",
-                        e
-                    );
+                    tracing::warn!(error = %e, "[Storage] Failed to append manual_approval message");
                 }
             }
             AgentMessageType::Chunk => {
@@ -526,6 +523,7 @@ impl SessionManager {
                     timestamp: msg.timestamp,
                     content: new_content,
                     agent_name: msg.agent_name.clone(),
+                    usage: msg.usage.clone(),
                 };
                 // 写回存储
                 self.storage

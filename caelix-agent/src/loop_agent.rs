@@ -3,7 +3,8 @@ use std::{pin::Pin, sync::Arc};
 use async_stream::stream;
 use async_trait::async_trait;
 use caelix_api::{
-    Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage, LlmConfig, LlmProvider, ToolCall,
+    context::RuntimeContext, Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage,
+    LlmConfig, LlmProvider, ToolCall,
 };
 use futures::{Stream, StreamExt};
 
@@ -40,9 +41,10 @@ impl Agent for LoopAgent {
             messages = def.build_messages(messages);
 
             let should_resume = has_pending_tool_calls(&messages);
+            let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
-            if should_resume {
-                if let Some(tools) = extract_pending_tool_calls(&messages) {
+            if should_resume
+                && let Some(tools) = extract_pending_tool_calls(&messages) {
                     match execute_tools_static_with_pre_check(&def, &tools).await {
                         ToolExecutionBatchResult::Executed(results) => {
                             for (id, name, res) in &results {
@@ -75,54 +77,104 @@ impl Agent for LoopAgent {
                                 approval_type: approval_type.clone(),
                                 parameters: parameters.clone(),
                             });
-                            // 中断：收尾 Finish
+                            // 中断：收尾 Finish（携带当前累计 usage）
+                            let final_usage = if cumulative_usage.total_tokens > 0
+                                || cumulative_usage.reasoning_tokens.is_some()
+                                || cumulative_usage.cache_hit_tokens.is_some()
+                            {
+                                Some(cumulative_usage.clone())
+                            } else {
+                                None
+                            };
                             yield Ok(AgentOutputChunk::Finish {
                                 reason: "awaiting_approval".into(),
+                                usage: final_usage,
                             });
                             return;
                         }
                     }
                 }
-            }
 
             loop {
+                if let Some(ctx) = RuntimeContext::try_current()
+                    && ctx.cancellation_token().is_cancelled()
+                {
+                    yield Ok(AgentOutputChunk::Stopped {
+                        reason: "cancelled_by_user".into(),
+                    });
+                    return;
+                }
+
                 let llm_stream = call_llm_static(&def, &messages, &llm, &cfg);
 
                 tokio::pin!(llm_stream);
                 let mut full_content = String::new();
                 let mut final_tool_calls = Vec::new();
 
-                while let Some(item) = llm_stream.next().await {
-                    match item {
-                        Ok(AgentOutputChunk::Content { content }) => {
-                            full_content.push_str(&content);
-                            yield Ok(AgentOutputChunk::Content { content });
-                        }
+                // 在 LLM 流迭代期间监听取消信号：cancel future 只构造一次并 pin，
+                // select! 每轮通过 `&mut` 复用，避免每个 chunk 都重建 future 与 waiter。
+                let cancel_fut = async {
+                    match RuntimeContext::try_current() {
+                        Some(ctx) => ctx.cancellation_token().cancelled().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                };
+                tokio::pin!(cancel_fut);
 
-                        Ok(AgentOutputChunk::ToolCall { tool_call_id, name, arguments }) => {
-                            let id = tool_call_id.clone();
-                            let name2 = name.clone();
-                            let arg2 = arguments.clone();
-
-                            final_tool_calls.push(ToolCall {
-                                id: tool_call_id,
-                                index: final_tool_calls.len() as u32,
-                                name,
-                                arguments: serde_json::Value::String(arguments),
-                                approval_state: None,
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = &mut cancel_fut => {
+                            yield Ok(AgentOutputChunk::Stopped {
+                                reason: "cancelled_by_user".into(),
                             });
-
-                            yield Ok(AgentOutputChunk::ToolCall {
-                                tool_call_id: id,
-                                name: name2,
-                                arguments: arg2,
-                            });
-                        }
-
-                        Ok(other) => yield Ok(other),
-                        Err(e) => {
-                            yield Err(e);
                             return;
+                        }
+                        next = llm_stream.next() => {
+                            let Some(item) = next else { break };
+                            match item {
+                                Ok(AgentOutputChunk::Stopped { reason }) => {
+                                    yield Ok(AgentOutputChunk::Stopped { reason });
+                                    return;
+                                }
+                                Ok(AgentOutputChunk::Content { content }) => {
+                                    full_content.push_str(&content);
+                                    yield Ok(AgentOutputChunk::Content { content });
+                                }
+
+                                Ok(AgentOutputChunk::ToolCall { tool_call_id, name, arguments }) => {
+                                    let id = tool_call_id.clone();
+                                    let name2 = name.clone();
+                                    let arg2 = arguments.clone();
+
+                                    final_tool_calls.push(ToolCall {
+                                        id: tool_call_id,
+                                        index: final_tool_calls.len() as u32,
+                                        name,
+                                        arguments: serde_json::Value::String(arguments),
+                                        approval_state: None,
+                                    });
+
+                                    yield Ok(AgentOutputChunk::ToolCall {
+                                        tool_call_id: id,
+                                        name: name2,
+                                        arguments: arg2,
+                                    });
+                                }
+
+                                Ok(AgentOutputChunk::Finish { usage, .. }) => {
+                                    // 拦截来自 call_llm_static 的内部 Finish，累加 usage（不会转发）
+                                    if let Some(u) = usage {
+                                        cumulative_usage.add(&u);
+                                    }
+                                }
+
+                                Ok(other) => yield Ok(other),
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
@@ -171,16 +223,37 @@ impl Agent for LoopAgent {
                             approval_type: approval_type.clone(),
                             parameters: parameters.clone(),
                         });
-                        // 中断：收尾 Finish
+                        // 中断：收尾 Finish（携带当前累计 usage）
+                        let final_usage = if cumulative_usage.total_tokens > 0
+                            || cumulative_usage.reasoning_tokens.is_some()
+                            || cumulative_usage.cache_hit_tokens.is_some()
+                        {
+                            Some(cumulative_usage.clone())
+                        } else {
+                            None
+                        };
                         yield Ok(AgentOutputChunk::Finish {
                             reason: "awaiting_approval".into(),
+                            usage: final_usage,
                         });
                         return;
                     }
                 }
             }
 
-            yield Ok(AgentOutputChunk::Finish { reason: "stop".into() });
+            // 最终收尾 Finish：携带整个 Agent 会话的累计 usage
+            let final_usage = if cumulative_usage.total_tokens > 0
+                || cumulative_usage.reasoning_tokens.is_some()
+                || cumulative_usage.cache_hit_tokens.is_some()
+            {
+                Some(cumulative_usage.clone())
+            } else {
+                None
+            };
+            yield Ok(AgentOutputChunk::Finish {
+                reason: "stop".into(),
+                usage: final_usage,
+            });
         };
 
         Box::pin(stream)
@@ -212,47 +285,73 @@ fn call_llm_static(
         let mut stream = llm.chat_stream(&msgs, &tool_defs, &cfg).await;
 
         let mut tool_buffers: Vec<(usize, String, String, String)> = Vec::new();
+        let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
-        while let Some(result) = stream.next().await {
-            let chunk = match result {
-                Ok(c) => c,
-                Err(e) => {
-                    yield Err(e);
+        // cancel future 只构造一次并 pin，select! 每轮通过 `&mut` 复用。
+        let cancel_fut = async {
+            match RuntimeContext::try_current() {
+                Some(ctx) => ctx.cancellation_token().cancelled().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(cancel_fut);
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut cancel_fut => {
+                    yield Ok(AgentOutputChunk::Stopped {
+                        reason: "cancelled_by_user".into(),
+                    });
                     return;
                 }
-            };
+                next = stream.next() => {
+                    let Some(result) = next else { break };
+                    let chunk = match result {
+                        Ok(c) => c,
+                        Err(e) => {
+                            yield Err(e);
+                            return;
+                        }
+                    };
 
-            if let Some(r) = &chunk.reasoning_content {
-                if !r.is_empty() {
-                    yield Ok(AgentOutputChunk::Reasoning {
-                        content: r.clone(),
-                    });
-                }
-            }
+                    if let Some(u) = &chunk.usage {
+                        cumulative_usage.add(u);
+                    }
 
-            if let Some(c) = &chunk.content {
-                yield Ok(AgentOutputChunk::Content {
-                    content: c.clone(),
-                });
-            }
+                    if let Some(r) = &chunk.reasoning_content
+                        && !r.is_empty()
+                    {
+                        yield Ok(AgentOutputChunk::Reasoning {
+                            content: r.clone(),
+                        });
+                    }
 
-            if let Some(tcs) = &chunk.tool_calls {
-                for tc in tcs {
-                    let idx = tc.index as usize;
-                    if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
-                        args.push_str(tc.arguments.as_str().unwrap_or(""));
-                    } else {
-                        let id = if tc.id.is_empty() {
-                            format!("call_{idx}")
-                        } else {
-                            tc.id.clone()
-                        };
-                        tool_buffers.push((
-                            idx,
-                            id,
-                            tc.name.clone(),
-                            tc.arguments.as_str().unwrap_or("").to_string(),
-                        ));
+                    if let Some(c) = &chunk.content {
+                        yield Ok(AgentOutputChunk::Content {
+                            content: c.clone(),
+                        });
+                    }
+
+                    if let Some(tcs) = &chunk.tool_calls {
+                        for tc in tcs {
+                            let idx = tc.index as usize;
+                            if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
+                                args.push_str(tc.arguments.as_str().unwrap_or(""));
+                            } else {
+                                let id = if tc.id.is_empty() {
+                                    format!("call_{idx}")
+                                } else {
+                                    tc.id.clone()
+                                };
+                                tool_buffers.push((
+                                    idx,
+                                    id,
+                                    tc.name.clone(),
+                                    tc.arguments.as_str().unwrap_or("").to_string(),
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -263,6 +362,18 @@ fn call_llm_static(
                 tool_call_id: id,
                 name,
                 arguments: args.trim().to_string(),
+            });
+        }
+
+        // 单次 LLM 调用结束：产出 Finish 并携带本次的累计 usage
+        // （外层 LoopAgent 会拦截这种 Finish，累加并最终产出全局 Finish）
+        if cumulative_usage.total_tokens > 0
+            || cumulative_usage.reasoning_tokens.is_some()
+            || cumulative_usage.cache_hit_tokens.is_some()
+        {
+            yield Ok(AgentOutputChunk::Finish {
+                reason: "llm_call_done".to_string(),
+                usage: Some(cumulative_usage),
             });
         }
     };

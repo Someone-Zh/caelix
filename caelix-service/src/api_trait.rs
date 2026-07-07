@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use caelix_api::agent::AgentOutputChunk;
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, NotificationMessage};
+use caelix_api::provider::{GlobalUsageView, SessionUsageView};
 use caelix_api::task::TaskMeta;
 use futures::Stream;
 use futures::stream::BoxStream;
@@ -122,4 +123,19 @@ pub trait CaelixApi: Send + Sync {
         tool_call_id: &str,
         approved: bool,
     ) -> Result<(), ApiError>;
+
+    /// 获取指定 session 的累计 Token 用量（含 context_size_tokens）
+    /// 若 session 不存在或暂无用量记录，返回 None
+    async fn get_session_usage(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionUsageView>, ApiError>;
+
+    /// 获取全局 Token 用量（按 provider/model 维度汇总）
+    async fn get_global_usage(&self) -> Result<GlobalUsageView, ApiError>;
+
+    /// 紧急停止指定 session 中正在运行的 Agent
+    ///
+    /// 返回 true 表示成功找到并触发停止，false 表示该 session 没有正在运行的 agent
+    async fn stop_agent(&self, session_id: &str) -> Result<bool, ApiError>;
 }

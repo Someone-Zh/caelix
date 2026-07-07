@@ -44,7 +44,7 @@ impl CommandHandler {
     /// 处理命令
     pub fn handle_command(app: &mut App, api: Arc<CaelixApiImpl>, cmd: &str) {
         // 提取命令（去除开头的 '/'）
-        let command = if cmd.starts_with('/') { &cmd[1..] } else { cmd };
+        let command = cmd.strip_prefix('/').unwrap_or(cmd);
 
         match command {
             "quit" => {
@@ -71,12 +71,12 @@ impl CommandHandler {
                 let tx = app.message_tx.clone();
                 // 注意：API 层内部已经处理了 RuntimeContext，这里不需要额外传递
                 tokio::spawn(async move {
-                    if let Ok(sessions) = api_clone.list_sessions().await {
-                        if let Some(tx) = tx {
-                            let _ = tx
-                                .send(super::state::AppMessage::UpdateSessions(sessions))
-                                .await;
-                        }
+                    if let Ok(sessions) = api_clone.list_sessions().await
+                        && let Some(tx) = tx
+                    {
+                        let _ = tx
+                            .send(super::state::AppMessage::UpdateSessions(sessions))
+                            .await;
                     }
                 });
             }
@@ -120,12 +120,12 @@ impl CommandHandler {
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
                 tokio::spawn(async move {
-                    if let Ok(providers) = api_clone.get_providers().await {
-                        if let Some(tx) = tx {
-                            let _ = tx
-                                .send(super::state::AppMessage::UpdateProviders(providers))
-                                .await;
-                        }
+                    if let Ok(providers) = api_clone.get_providers().await
+                        && let Some(tx) = tx
+                    {
+                        let _ = tx
+                            .send(super::state::AppMessage::UpdateProviders(providers))
+                            .await;
                     }
                 });
             }
@@ -139,12 +139,12 @@ impl CommandHandler {
                 let api_clone = api.clone();
                 let tx = app.message_tx.clone();
                 tokio::spawn(async move {
-                    if let Ok(providers) = api_clone.get_providers().await {
-                        if let Some(tx) = tx {
-                            let _ = tx
-                                .send(super::state::AppMessage::UpdateProviders(providers))
-                                .await;
-                        }
+                    if let Ok(providers) = api_clone.get_providers().await
+                        && let Some(tx) = tx
+                    {
+                        let _ = tx
+                            .send(super::state::AppMessage::UpdateProviders(providers))
+                            .await;
                     }
                 });
             }
@@ -175,28 +175,24 @@ impl CommandHandler {
             let session_id = session.session_id.clone();
             let tx = app.message_tx.clone();
             tokio::spawn(async move {
-                if let Ok(messages) = api_clone.get_session_messages(&session_id).await {
-                    if let Some(tx) = tx {
-                        for msg in messages {
-                            // AgentMessage.content 现在是 ChatMessage 的 JSON 字符串
-                            // 尝试解析 JSON 提取实际内容
-                            let display_content = if let Ok(chat_msg) =
-                                serde_json::from_str::<caelix_api::ChatMessage>(&msg.content)
-                            {
-                                // 成功解析，使用 ChatMessage 的 content 字段
-                                chat_msg.content
-                            } else {
-                                // 降级处理：直接使用原始 content（可能是旧数据）
-                                msg.content
-                            };
+                if let Ok(messages) = api_clone.get_session_messages(&session_id).await
+                    && let Some(tx) = tx
+                {
+                    for msg in messages {
+                        let display_content = if let Ok(chat_msg) =
+                            serde_json::from_str::<caelix_api::ChatMessage>(&msg.content)
+                        {
+                            chat_msg.content
+                        } else {
+                            msg.content
+                        };
 
-                            let tui_msg = TuiMessage {
-                                msg_type: TuiMessageType::Assistant,
-                                content: display_content,
-                                timestamp: Instant::now(),
-                            };
-                            let _ = tx.send(super::state::AppMessage::AddMessage(tui_msg)).await;
-                        }
+                        let tui_msg = TuiMessage {
+                            msg_type: TuiMessageType::Assistant,
+                            content: display_content,
+                            timestamp: Instant::now(),
+                        };
+                        let _ = tx.send(super::state::AppMessage::AddMessage(tui_msg)).await;
                     }
                 }
             });
@@ -246,12 +242,12 @@ impl CommandHandler {
             let provider_name = provider.name.clone();
             let tx = app.message_tx.clone();
             tokio::spawn(async move {
-                if let Ok(models) = api_clone.get_provider_models(&provider_name).await {
-                    if let Some(tx) = tx {
-                        let _ = tx
-                            .send(super::state::AppMessage::UpdateProviderModels(models))
-                            .await;
-                    }
+                if let Ok(models) = api_clone.get_provider_models(&provider_name).await
+                    && let Some(tx) = tx
+                {
+                    let _ = tx
+                        .send(super::state::AppMessage::UpdateProviderModels(models))
+                        .await;
                 }
             });
         }

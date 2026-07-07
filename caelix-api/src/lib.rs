@@ -3,10 +3,12 @@
 //! 包含所有 trait、类型、错误定义，供其他包和外部使用。
 
 pub mod agent;
+pub mod cancel;
 pub mod commands;
 pub mod context;
 pub mod error;
 pub mod hooks;
+pub mod logging;
 pub mod managers;
 pub mod message;
 pub mod plugins;
@@ -22,6 +24,7 @@ pub use commands::*;
 pub use context::*;
 pub use error::*;
 pub use hooks::*;
+pub use logging::*;
 pub use managers::*;
 pub use message::*;
 pub use plugins::*;

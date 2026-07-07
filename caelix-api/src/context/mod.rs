@@ -2,10 +2,13 @@
 //!
 //! 定义轻量级的接口 trait，允许运行时层通过统一接口访问配置层的组件，
 //! 避免 caelix-runtime 直接依赖 caelix-config
+use crate::agent::AgentSpec;
+use crate::commands::Command;
 use crate::hooks::HookRegistry;
-use crate::managers::{AgentManager, CommandManager, ProviderManager, SkillManager, ToolManager};
+use crate::managers::{AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager};
 use crate::message::{MessageBusTrait, SessionManagerTrait};
 use crate::plugins::PluginManager;
+use crate::provider::{SessionUsageView, UsageRecord};
 use crate::task::TaskManagerTrait;
 use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
 use crate::variables::VariableManager;
@@ -15,6 +18,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
+
+#[async_trait]
+pub trait ConfigOverlayTrait: Send + Sync {
+    /// 确保指定工作目录的项目配置已加载（懒加载，仅首次或目录变更时加载）
+    async fn ensure_project_config_loaded(&self, work_dir: &Path) -> Result<(), String>;
+    /// 获取技能（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_skill(&self, name: &str) -> Option<Arc<Skill>>;
+    /// 获取命令（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_command(&self, name: &str) -> Option<Command>;
+    /// 获取 AgentSpec（项目优先，需先调用 ensure_project_config_loaded；上层负责包装为 dyn Agent）
+    async fn get_agent_spec(&self, name: &str) -> Option<Arc<AgentSpec>>;
+}
 
 // ==================== 全局唯一 CaelixContext 存储 ====================
 
@@ -86,6 +101,42 @@ impl std::fmt::Debug for dyn SecurityCheckerTrait {
     }
 }
 
+// ==================== UsageTrackerTrait ====================
+
+/// Token 用量追踪器 Trait
+///
+/// 允许上层（caelix-agent、caelix-service 等）在不知道具体实现的情况下
+/// 记录与查询 Token 使用量。具体实现位于 `caelix-runtime` 中。
+#[async_trait]
+pub trait UsageTrackerTrait: Send + Sync {
+    /// 记录一次 LLM 调用的用量
+    async fn accumulate(&self, record: UsageRecord);
+
+    /// 查询指定 session 的累计用量（含 context_size_tokens）
+    async fn snapshot_session(
+        &self,
+        session_id: &str,
+        ctx_window_tokens: Option<u32>,
+    ) -> Option<SessionUsageView>;
+
+    /// 查询全局用量（按 provider/model 维度汇总）
+    async fn snapshot_global(&self) -> crate::provider::GlobalUsageView;
+}
+
+// ==================== AgentRunManagerTrait ====================
+
+/// Agent 运行管理器 Trait
+///
+/// 管理正在运行的 Agent 任务，支持紧急停止。
+/// 具体实现位于 `caelix-runtime` 包中。
+#[async_trait]
+pub trait AgentRunManagerTrait: Send + Sync {
+    /// 停止指定 session 中正在运行的 Agent
+    ///
+    /// 返回 true 表示成功找到并触发停止，false 表示该 session 没有正在运行的 agent
+    async fn stop_agent(&self, session_id: &str) -> bool;
+}
+
 // ==================== ContextProvider Trait ====================
 
 /// 统一的上下文入口 Trait
@@ -109,6 +160,12 @@ pub trait ContextProvider: Send + Sync {
     fn task_manager(&self) -> Option<Arc<dyn TaskManagerTrait>>;
     fn security_checker(&self) -> Arc<dyn SecurityCheckerTrait>;
     fn variable_manager(&self) -> Arc<VariableManager>;
+    /// 获取用量追踪器（若已初始化）
+    fn usage_tracker(&self) -> Option<Arc<dyn UsageTrackerTrait>>;
+    /// 获取 Agent 运行管理器（若已初始化）
+    fn agent_run_manager(&self) -> Option<Arc<dyn AgentRunManagerTrait>>;
+    /// 获取配置覆盖层（支持项目级配置覆盖全局配置）
+    fn config_overlay(&self) -> Arc<dyn ConfigOverlayTrait>;
 }
 
 impl std::fmt::Debug for dyn ContextProvider {
@@ -170,6 +227,9 @@ pub struct RuntimeContext {
 
     /// Debug 模式是否启用（协程内可覆盖全局设置）
     debug_enabled: bool,
+
+    /// 取消令牌：用于紧急停止当前 Agent 执行
+    cancellation_token: crate::cancel::CancellationToken,
 }
 
 impl std::fmt::Debug for RuntimeContext {
@@ -183,6 +243,7 @@ impl std::fmt::Debug for RuntimeContext {
             .field("provider", &self.provider)
             .field("model", &self.model)
             .field("debug_enabled", &self.debug_enabled)
+            .field("cancellation_token", &"CancellationToken")
             .field("context_provider", &"ContextProvider")
             .finish()
     }
@@ -199,6 +260,7 @@ impl Clone for RuntimeContext {
             provider: self.provider.clone(),
             model: self.model.clone(),
             debug_enabled: self.debug_enabled,
+            cancellation_token: self.cancellation_token.clone(),
         }
     }
 }
@@ -213,7 +275,7 @@ impl RuntimeContext {
     /// * `provider` - Provider 名称（必填）
     /// * `model` - Model 名称（必填）
     /// * `debug_enabled` - Debug 模式是否启用
-    /// * `context_provider` - 可选的上下文提供者
+    /// * `cancellation_token` - 取消令牌，用于紧急停止
     pub fn new(
         session_id: Option<String>,
         request_id: Option<String>,
@@ -221,6 +283,7 @@ impl RuntimeContext {
         provider: String,
         model: String,
         debug_enabled: bool,
+        cancellation_token: crate::cancel::CancellationToken,
     ) -> Self {
         let session_id = session_id.unwrap_or_else(generate_session_id);
         let request_id = request_id.unwrap_or_else(generate_request_id);
@@ -236,6 +299,7 @@ impl RuntimeContext {
             provider,
             model,
             debug_enabled,
+            cancellation_token,
         }
     }
 
@@ -302,6 +366,34 @@ impl RuntimeContext {
     /// 获取 Model 名称
     pub fn get_model(&self) -> &str {
         &self.model
+    }
+
+    /// 获取取消令牌
+    pub fn cancellation_token(&self) -> &crate::cancel::CancellationToken {
+        &self.cancellation_token
+    }
+
+    /// 创建一个绑定了 session/request/trace ID 等字段的 `tracing::Span`。
+    ///
+    /// 进入这个 span 后，本 session 内的所有 `tracing::info!/debug!/warn!/error!`
+    /// 等事件都会自动携带这些字段（前提是 subscriber 使用了 JSON 格式或
+    /// 在字段表中包含 span 字段）。
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let _guard = ctx.session_span().enter();
+    /// tracing::info!("开始处理请求");
+    /// ```
+    pub fn session_span(&self) -> tracing::Span {
+        tracing::info_span!(
+            "session",
+            session_id = %self.session_id,
+            request_id = %self.request_id,
+            span_id = %self.span_id,
+            trace_id = %self.trace_id,
+            provider = %self.provider,
+            model = %self.model,
+        )
     }
 }
 

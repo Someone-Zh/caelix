@@ -12,3 +12,4 @@ tokio.workspace = true
 tokio-stream.workspace = true
 async-stream.workspace = true
 serde.workspace = true
+tracing.workspace = true

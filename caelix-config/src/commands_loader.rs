@@ -61,18 +61,19 @@ pub async fn load_commands_from_directory(directory_path: &str) -> Result<Vec<Co
         {
             match load_command_from_file(path) {
                 Ok(command) => {
-                    println!(
-                        "Loaded command: {} ({})",
-                        command.name,
-                        match command.command_type {
-                            CommandType::Prompt => "prompt",
-                            CommandType::Shell => "shell",
-                        }
+                    let type_str: &str = match &command.command_type {
+                        caelix_api::commands::CommandType::Prompt => "prompt",
+                        caelix_api::commands::CommandType::Shell => "shell",
+                    };
+                    tracing::info!(
+                        command_name = %command.name,
+                        command_type = %type_str,
+                        "Loaded command"
                     );
                     commands.push(command);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to load command from {:?}: {}", path, e);
+                    tracing::warn!(file = %path.display(), error = %e, "Failed to load command");
                 }
             }
         }

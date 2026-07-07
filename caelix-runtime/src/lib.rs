@@ -6,7 +6,11 @@ pub mod context;
 pub mod hooks;
 pub mod id_generator;
 pub mod plugins;
+pub mod usage_tracker;
+pub mod agent_run_manager;
 
 // 重新导出常用类型
+pub use agent_run_manager::AgentRunManager;
 pub use hooks::HookRegistry;
 pub use id_generator::*;
+pub use usage_tracker::UsageTracker;

@@ -1,9 +1,26 @@
 //! SkillManager - 技能管理器
 
+use crate::plugins::SkillDef;
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
+
+/// 技能内脚本工具定义（对应 .skill 文件 YAML 头中 `inline_tools` 的一条）
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct InlineToolDef {
+    /// 工具名称
+    pub name: String,
+    /// 工具描述
+    pub description: String,
+    /// 待执行的脚本（运行时以技能文件所在目录为 CWD）
+    pub script: String,
+    /// 超时秒数
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
 
 /// 技能模型
 #[derive(Debug, Clone)]
@@ -18,11 +35,34 @@ pub struct Skill {
     pub description: String,
     /// 技能内容(Markdown格式)
     pub content: String,
+    /// .skill 文件的绝对路径；技能内脚本/资源以此为基准解析（`file_path.parent()` 即技能目录）
+    pub file_path: PathBuf,
+    /// 技能版本
+    pub version: Option<String>,
+    /// 作者
+    pub author: Option<String>,
+    /// 标签
+    pub tags: Vec<String>,
+    /// 本技能希望 Agent 拥有的全局工具名（从系统工具池中选取）
+    pub requires_tools: Vec<String>,
+    /// 本技能自带的本地脚本工具定义
+    pub inline_tools: Vec<InlineToolDef>,
 }
 
 impl Skill {
-    /// 创建新的技能
-    pub fn new(name: String, namespace: String, description: String, content: String) -> Self {
+    /// 内部构建：派生 `full_name` 并组装结构
+    fn build(
+        name: String,
+        namespace: String,
+        description: String,
+        content: String,
+        file_path: PathBuf,
+        version: Option<String>,
+        author: Option<String>,
+        tags: Vec<String>,
+        requires_tools: Vec<String>,
+        inline_tools: Vec<InlineToolDef>,
+    ) -> Self {
         let full_name = if namespace.is_empty() {
             name.clone()
         } else {
@@ -35,7 +75,80 @@ impl Skill {
             full_name,
             description,
             content,
+            file_path,
+            version,
+            author,
+            tags,
+            requires_tools,
+            inline_tools,
         }
+    }
+
+    /// 创建新的技能（元数据字段填默认值）
+    pub fn new(
+        name: String,
+        namespace: String,
+        description: String,
+        content: String,
+        file_path: PathBuf,
+    ) -> Self {
+        Self::build(
+            name,
+            namespace,
+            description,
+            content,
+            file_path,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// 创建带完整 YAML 元数据的技能
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_metadata(
+        name: String,
+        namespace: String,
+        description: String,
+        content: String,
+        file_path: PathBuf,
+        version: Option<String>,
+        author: Option<String>,
+        tags: Vec<String>,
+        requires_tools: Vec<String>,
+        inline_tools: Vec<InlineToolDef>,
+    ) -> Self {
+        Self::build(
+            name,
+            namespace,
+            description,
+            content,
+            file_path,
+            version,
+            author,
+            tags,
+            requires_tools,
+            inline_tools,
+        )
+    }
+}
+
+impl From<SkillDef> for Skill {
+    fn from(def: SkillDef) -> Self {
+        Self::build(
+            def.name,
+            def.namespace,
+            def.description,
+            def.content,
+            def.file_path,
+            def.version,
+            def.author,
+            def.tags,
+            def.requires_tools,
+            def.inline_tools,
+        )
     }
 }
 

@@ -22,7 +22,8 @@ caelix/                              # Workspace 根目录
 │   │   ├── task/                    # 任务相关定义
 │   │   │   └── mod.rs               # TaskMeta, TaskStatus, Runnable trait
 │   │   ├── context/                 # 运行时上下文接口
-│   │   │   └── mod.rs               # RuntimeContext trait
+│   │   │   └── mod.rs               # RuntimeContext trait, AgentRunManagerTrait
+│   │   ├── cancel.rs                # CancellationToken 取消令牌
 │   │   ├── hooks/                   # Hook 系统接口
 │   │   │   └── mod.rs               # Hook trait, HookRegistry
 │   │   ├── commands/                # 命令系统接口
@@ -78,6 +79,7 @@ caelix/                              # Workspace 根目录
 │   │   ├── context/                 # 运行时上下文实现
 │   │   │   ├── mod.rs
 │   │   │   └── runtime_context.rs   # RuntimeContext 具体实现
+│   │   ├── agent_run_manager.rs     # AgentRunManager 运行中 Agent 管理
 │   │   ├── hooks/                   # Hook 系统实现
 │   │   │   ├── mod.rs               # HookRegistry
 │   │   │   ├── skill_hook.rs        # 技能加载 Hook
@@ -95,6 +97,8 @@ caelix/                              # Workspace 根目录
 │   ├── src/
 │   │   ├── lib.rs                   # 模块入口
 │   │   ├── loop_runner.rs           # Agent 循环执行器
+│   │   ├── loop_agent.rs            # LoopAgent 流式执行器
+│   │   ├── agent_runner.rs          # Agent 运行器（消息总线集成）
 │   │   ├── tool_executor.rs         # 工具执行器
 │   │   └── converter.rs             # 消息转换器
 │   └── Cargo.toml
@@ -204,6 +208,8 @@ caelix/                              # Workspace 根目录
 | **任务管理器** | `caelix-task/src/manager.rs` | TaskManager 管理任务队列 |
 | **任务调度器** | `caelix-task/src/scheduler.rs` | TaskScheduler 定时任务调度 |
 | **RuntimeContext** | `caelix-runtime/src/context/runtime_context.rs` | 运行时上下文实现 |
+| **AgentRunManager** | `caelix-runtime/src/agent_run_manager.rs` | 运行中 Agent 管理（紧急停止） |
+| **CancellationToken** | `caelix-api/src/cancel.rs` | 取消令牌实现 |
 | **Hook 注册表** | `caelix-runtime/src/hooks/mod.rs` | HookRegistry 管理所有 Hook |
 | **技能 Hook** | `caelix-runtime/src/hooks/skill_hook.rs` | 自动加载和应用技能 |
 | **消息总线 Hook** | `caelix-runtime/src/hooks/message_bus_hook.rs` | 自动记录消息到总线 |
@@ -362,6 +368,53 @@ AgentOutputChunk → MessageBus::publish()
 7. 在特定时机（会话结束、Ctrl+C、定期），Flush 所有 Chunk 消息
 8. 确保所有消息最终都持久化到磁盘
 
+### 5. 紧急停止流程
+
+```
+用户触发 stop_agent(session_id)
+            ↓
+    CaelixApiImpl::stop_agent()
+            ↓
+    AgentRunManager::stop_agent()
+            ↓
+    ┌───────────────────────────┐
+    │ 1. 从 DashMap 中移除记录    │
+    │ 2. CancellationToken.cancel()
+    │ 3. AbortHandle.abort()     │
+    └───────────────────────────┘
+            ↓
+    ┌───────────────────────────┐
+    │ LLM 流中的 select! 检测到  │
+    │ cancellation_token 取消    │
+    └───────────────────────────┘
+            ↓
+    产出 AgentOutputChunk::Stopped
+            ↓
+    agent_runner 发送 ChunkEnd
+            ↓
+    提前退出，不持久化部分内容
+```
+
+**详细步骤**:
+1. 外部调用 `CaelixApi::stop_agent(session_id)` 触发紧急停止
+2. CaelixApiImpl 从 CaelixContext 获取 AgentRunManager
+3. AgentRunManager 通过 session_id 从 DashMap 查找运行中的 Agent
+4. 同时触发两种取消机制：
+   - `CancellationToken.cancel()` - 优雅取消，让流检测到后主动退出
+   - `AbortHandle.abort()` - 强制中止任务（双保险）
+5. LLM 流中 `tokio::select!` 检测到取消信号，立即断开 HTTP 连接
+6. 产出 `AgentOutputChunk::Stopped { reason: "cancelled_by_user" }`
+7. agent_runner 收到 Stopped 后发送 ChunkEnd 消息，提前结束
+8. 已收到的部分 LLM 内容**完全抛弃，不持久化**
+9. 任务结束后自动从 AgentRunManager 注销
+
+**关键特性**:
+- 按 session 隔离：一个 session 同时只有一个运行中的 Agent
+- 双保险取消：CancellationToken（优雅） + AbortHandle（强制）
+- 即时中断：LLM HTTP 连接立即断开，不等待响应完成
+- 内容丢弃：部分接收的内容不持久化，保持数据一致性
+- 资源清理：任务结束自动注销，无内存泄漏
+
 ## 依赖关系
 
 ### 层级依赖图
@@ -445,8 +498,9 @@ Level 0: caelix-api (无内部依赖，所有包的基础)
 | **会话管理** | [caelix-message/spec.md](file://caelix-message/spec.md#会话管理) | 会话生命周期管理，包括创建、查询、删除、持久化。每个会话有唯一 ID，隔离消息历史。支持会话摘要、消息检索、跨会话引用。 |
 | **技能系统** | [caelix-runtime/spec.md](file://caelix-runtime/spec.md#技能系统) | 技能文档自动加载和应用机制。Skill 是 Markdown 格式的指令集，Hook 系统在 Agent 执行前自动注入相关技能。支持按 Agent 名称和 group 匹配技能。 |
 | **ID 生成** | [caelix-runtime/spec.md](file://caelix-runtime/spec.md#id-生成) | 分布式 ID 生成器，使用 Snowflake 算法。生成 session_id、request_id、span_id、task_id、trace_id。保证全局唯一性和时间有序性，支持分布式追踪。 |
+| **紧急停止** | [caelix-runtime/spec.md](file://caelix-runtime/spec.md#紧急停止) | 支持立即中断当前 LLM 调用并退出 Agent。使用 CancellationToken + AbortHandle 双保险机制，按 session 隔离。LLM HTTP 连接立即断开，已接收的部分内容完全抛弃不持久化。通过 AgentRunManager 统一管理运行中的 Agent。 |
 
 ---
 
-**最后更新**: 2026-05-22  
+**最后更新**: 2026-07-02  
 **维护者**: Caelix 开发团队

@@ -148,17 +148,13 @@ impl Tool for DiffEditTool {
 }
 
 fn extract_context_lines(original: &[&str], line_idx: usize, context_size: usize) -> String {
-    let start = if line_idx >= context_size {
-        line_idx - context_size
-    } else {
-        0
-    };
+    let start = line_idx.saturating_sub(context_size);
     let end = (line_idx + context_size + 1).min(original.len());
 
     let mut result = String::new();
-    for i in start..end {
+    for (i, line) in original.iter().enumerate().take(end).skip(start) {
         let marker = if i == line_idx { ">>> " } else { "    " };
-        result.push_str(&format!("{}{}: {}\n", marker, i + 1, original[i]));
+        result.push_str(&format!("{}{}: {}\n", marker, i + 1, line));
     }
     result
 }

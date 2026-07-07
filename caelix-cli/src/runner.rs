@@ -3,7 +3,7 @@ use futures::StreamExt;
 use std::io::Write;
 use std::sync::Arc;
 
-use super::commands::handle_command;
+use super::commands::{handle_command, handle_usage_command, is_usage_command};
 use super::input_handler::read_multiline_input;
 use caelix_api::message::{AgentMessageType, TaskMessageType};
 use caelix_service::{CaelixApi, CaelixApiImpl, ChatRequest};
@@ -16,17 +16,17 @@ fn flush_completed_spans(
 ) {
     // 按完成顺序输出每个 span 的内容
     for span_id in completed_spans.drain(..) {
-        if let Some(content) = span_buffers.remove(&span_id) {
-            if !content.is_empty() {
-                // 如果是目标 span，直接输出（不带标题）
-                if span_id == target_span_id {
-                    print!("{}", content);
-                } else {
-                    // 异步任务的 span，带标题输出
-                    println!("\n📋 [异步任务结果] {}", content);
-                }
-                let _ = std::io::stdout().flush();
+        if let Some(content) = span_buffers.remove(&span_id)
+            && !content.is_empty()
+        {
+            // 如果是目标 span，直接输出（不带标题）
+            if span_id == target_span_id {
+                print!("{}", content);
+            } else {
+                // 异步任务的 span，带标题输出
+                println!("\n📋 [异步任务结果] {}", content);
             }
+            let _ = std::io::stdout().flush();
         }
     }
 }
@@ -43,15 +43,15 @@ fn flush_all_buffers(
 
     // 再输出活跃的（可能没有收到 ChunkEnd）
     for span_id in active_spans.drain(..) {
-        if let Some(content) = span_buffers.remove(&span_id) {
-            if !content.is_empty() {
-                if span_id == target_span_id {
-                    print!("{}", content);
-                } else {
-                    println!("\n📋 [异步任务结果] {}", content);
-                }
-                let _ = std::io::stdout().flush();
+        if let Some(content) = span_buffers.remove(&span_id)
+            && !content.is_empty()
+        {
+            if span_id == target_span_id {
+                print!("{}", content);
+            } else {
+                println!("\n📋 [异步任务结果] {}", content);
             }
+            let _ = std::io::stdout().flush();
         }
     }
 }
@@ -429,6 +429,12 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         // 检查是否是命令
         if handle_command(&input) {
             break;
+        }
+
+        // 检查是否是 usage 命令
+        if is_usage_command(&input) {
+            handle_usage_command(&input, &session_id, &api).await;
+            continue;
         }
 
         // 跳过空输入

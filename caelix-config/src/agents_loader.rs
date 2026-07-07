@@ -64,11 +64,11 @@ pub async fn load_agents_from_directory(
         let path = entry.path();
 
         if path.extension().and_then(|ext| ext.to_str()) == Some("agent") {
-            println!("Loading agent from: {:?}", path);
+            tracing::info!(agent_file = %path.display(), "Loading agent");
             match create_agent_from_file(&path, tool_manager).await {
                 Ok(agent) => agents.push(agent),
                 Err(e) => {
-                    eprintln!("Warning: Failed to load agent from {:?}: {}", path, e);
+                    tracing::warn!(agent_file = %path.display(), error = %e, "Failed to load agent");
                 }
             }
         }

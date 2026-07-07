@@ -2,18 +2,22 @@ use crate::api_trait::CaelixApi;
 use crate::types::{ChatAsyncResult, ChatRequest, ProviderInfo, SessionSummary};
 use crate::variable_replacer::VariableReplacer;
 use async_trait::async_trait;
-use caelix_api::agent::AgentOutputChunk;
+use caelix_api::agent::{Agent, AgentOutputChunk};
+use caelix_api::context::{ContextFutureExt, ContextProvider};
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
-use caelix_api::provider::{ChatMessage, LlmConfig};
+use caelix_api::provider::{ChatMessage, LlmConfig, SessionUsageView, GlobalUsageView};
 use caelix_api::task::TaskMeta;
+use caelix_agent::loop_agent::LoopAgent;
 use caelix_runtime::context::CaelixContext;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::HashMap;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// 执行 Agent 并发送结果到消息总线
 ///
@@ -35,11 +39,17 @@ async fn execute_agent_with_messaging(
 /// API 核心实现
 pub struct CaelixApiImpl {
     context: Arc<CaelixContext>,
+    /// 项目级 Agent 实例缓存：agent_name → LoopAgent
+    /// 避免每次请求都重新包装 AgentSpec
+    project_agent_cache: Arc<RwLock<HashMap<String, Arc<dyn Agent>>>>,
 }
 
 impl CaelixApiImpl {
     pub fn new(context: Arc<CaelixContext>) -> Self {
-        Self { context }
+        Self {
+            context,
+            project_agent_cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     /// 获取消息总线引用
@@ -105,6 +115,11 @@ impl CaelixApi for CaelixApiImpl {
 
     async fn create_session_with_id(&self, session_id: String) {
         // 使用指定的 session_id 创建会话配置
+        // 安全校验：拒绝路径穿越字符，防止构造 session/../../.. 的路径
+        if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+            eprintln!("⚠️  创建会话配置失败: session_id 包含非法字符");
+            return;
+        }
         if let Err(e) = self
             .context
             .session_manager
@@ -351,10 +366,10 @@ impl CaelixApi for CaelixApiImpl {
                 .map_err(|e| ApiError::InternalError(e.to_string()))?;
         }
 
-        // 2. 生成 request_id、span_id 和 trace_id（为将来扩展预留）
+        // 2. 生成 request_id、span_id（为将来扩展预留，trace_id 由 RuntimeContext 内部生成）
         let request_id = caelix_api::utils::generate_request_id();
         let span_id = caelix_api::utils::generate_span_id();
-        let trace_id = caelix_api::utils::generate_trace_id();
+        let _trace_id = caelix_api::utils::generate_trace_id();
 
         // 3. 确定 provider 和 model
         let default_provider = self.get_default_provider();
@@ -366,17 +381,41 @@ impl CaelixApi for CaelixApiImpl {
         let ctx_clone = self.context.clone();
         let request_clone = request.clone();
         let request_id_clone = request_id.clone();
-        let span_id_clone = span_id.clone();
-        let trace_id_clone = trace_id.clone();
 
-        // 5.2 在 RuntimeContext scope 中执行
-        // 获取 agent (Arc<dyn Agent>)
+        // 5.1 确保项目配置已加载（基于 work_dir，懒加载）
+        let work_dir_for_config = ctx_clone
+            .env_config()
+            .caelix_home()
+            .join("sessions")
+            .join(request_clone.session_id.clone());
+        let overlay = ctx_clone.config_overlay();
+        if let Err(e) = overlay.ensure_project_config_loaded(&work_dir_for_config).await {
+            tracing::warn!("Failed to load project config: {}", e);
+        }
+
+        // 5.2 获取 agent_spec（通过 ConfigOverlay 优先获取项目级配置）
+        // 然后包装为 LoopAgent 并缓存
         let agent_name = request_clone.agent.as_deref().unwrap_or("default");
-        let agent = ctx_clone
-            .agent_manager
-            .get(agent_name)
+        let agent_spec = overlay
+            .get_agent_spec(agent_name)
             .await
             .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
+
+        // 检查项目级 agent 缓存，避免重复包装
+        let agent: Arc<dyn Agent> = {
+            let cache = self.project_agent_cache.read().await;
+            if let Some(cached) = cache.get(agent_name) {
+                cached.clone()
+            } else {
+                drop(cache);
+                let agent: Arc<dyn Agent> = Arc::new(LoopAgent::new(agent_spec.clone()));
+                self.project_agent_cache
+                    .write()
+                    .await
+                    .insert(agent_name.to_string(), agent.clone());
+                agent
+            }
+        };
 
         // 获取 agent_spec 用于日志和消息传递
         let agent_spec = agent.get_spec();
@@ -401,27 +440,71 @@ impl CaelixApi for CaelixApiImpl {
             .get_session_messages(&request_clone.session_id)
             .await
             .map_err(|e| ApiError::InternalError(e.to_string()))?;
-        // 5. 在后台启动任务
-        tokio::spawn(async move {
-            let mut messages: Vec<ChatMessage> = Vec::new();
-            for msg in history_messages.iter() {
-                if msg.r#type == AgentMessageType::Msg {
-                    match serde_json::from_str::<ChatMessage>(&msg.content) {
-                        Ok(chat_msg) => messages.push(chat_msg),
-                        Err(_) => {
-                            messages.push(ChatMessage {
-                                role: "user".to_string(),
-                                content: msg.content.clone(),
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
+
+        // 获取工作目录（用于 RuntimeContext）
+        let work_dir = ctx_clone
+            .env_config()
+            .caelix_home()
+            .join("sessions")
+            .join(request_clone.session_id.clone());
+
+        // 5. 在后台启动任务，绑定 RuntimeContext
+        // 顺序很重要：先 register cancel_token 占位，再 spawn，spawn 后回填 handle。
+        // 这样消除 spawn→register 的竞态窗口——任何在 spawn 之前调用的 stop_agent
+        // 都能通过 cancel_token 通知任务（任务 spawn 后首个检查点即退出）。
+        let debug_enabled = ctx_clone.env_config().debug_enabled();
+        let agent_run_manager = ctx_clone.agent_run_manager.clone();
+        let arm_for_spawn = agent_run_manager.clone();
+        let cancel_token = caelix_api::cancel::CancellationToken::new();
+        let cancel_token_clone = cancel_token.clone();
+        let run_id = agent_run_manager.register(
+            request_clone.session_id.clone(),
+            cancel_token,
+        );
+
+        let join_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
+            // RunGuard 确保任务退出时（正常、panic、abort）从 AgentRunManager 注销
+            let _guard = caelix_runtime::agent_run_manager::RunGuard::new(
+                arm_for_spawn.clone(),
+                request_clone.session_id.clone(),
+                run_id,
+            );
+
+            // 创建 RuntimeContext 并绑定到 task_local 作用域
+            // 所有子异步（agent、message_bus_hook 等）都能通过 try_current() 访问
+            let runtime_ctx = Arc::new(caelix_api::context::RuntimeContext::new(
+                Some(request_clone.session_id.clone()),
+                Some(request_id_clone.clone()),
+                work_dir,
+                provider_name.clone(),
+                model_name.clone(),
+                debug_enabled,
+                cancel_token_clone,
+            ));
+
+            // 先克隆一份给 scope 使用，再把 runtime_ctx move 进 async block
+            let ctx_for_scope = runtime_ctx.clone();
+
+            let fut = async move {
+                let mut messages: Vec<ChatMessage> = Vec::new();
+                for msg in history_messages.iter() {
+                    if msg.r#type == AgentMessageType::Msg {
+                        match serde_json::from_str::<ChatMessage>(&msg.content) {
+                            Ok(chat_msg) => messages.push(chat_msg),
+                            Err(_) => {
+                                messages.push(ChatMessage {
+                                    role: "user".to_string(),
+                                    content: msg.content.clone(),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                            }
                         }
                     }
                 }
-            }
 
-            // 如果带用户消息则添加
-            if let Some(user_message) = request_clone.message.clone() {
+                // 如果带用户消息则添加
+                if let Some(user_message) = request_clone.message.clone() {
                 let space = std::env::current_dir()
                     .ok()
                     .map(|path| path.to_string_lossy().into_owned());
@@ -430,37 +513,40 @@ impl CaelixApi for CaelixApiImpl {
                     .replace_async(&user_message, space.as_deref())
                     .await;
 
-                messages.push(ChatMessage::user(user_message.clone()));
+                    messages.push(ChatMessage::user(user_message.clone()));
 
-                // 发送用户消息到消息总线（只有带用户消息才发）
-                let user_msg = AgentMessage {
-                    session_id: request_clone.session_id.clone(),
-                    request_id: request_id_clone.clone(),
-                    span_id: span_id_clone.clone(), // 使用预先生成的 span_id
-                    trace_id: trace_id_clone.clone(),
-                    r#type: AgentMessageType::Msg,
-                    timestamp: chrono::Utc::now(),
-                    content: user_message,
-                    agent_name: request_clone.agent.clone(),
-                };
-                let _ = ctx_clone.message_bus.send_agent(user_msg);
-            } else {
-                // 恢复（resume）场景：不追加新用户消息，
-                // 若 messages 最后一条是 Assistant 且含 tool_calls，
-                // 则 LoopAgent 会进入 resume 流程继续处理工具执行
-            }
+                    // 发送用户消息到消息总线（只有带用户消息才发）
+                    let user_msg = AgentMessage {
+                        session_id: request_clone.session_id.clone(),
+                        request_id: request_id_clone.clone(),
+                        span_id: runtime_ctx.get_span_id().to_string(),
+                        trace_id: runtime_ctx.get_trace_id().to_string(),
+                        r#type: AgentMessageType::Msg,
+                        timestamp: chrono::Utc::now(),
+                        content: user_message,
+                        agent_name: request_clone.agent.clone(),
+                        usage: None,
+                    };
+                    let _ = ctx_clone.message_bus.send_agent(user_msg);
+                }
 
-            // ✅ 使用 caelix_agent::run_agent（内部通过 ContextProvider 获取 message_bus 并发送消息）
-            let _result = execute_agent_with_messaging(agent_spec, messages, provider, &config)
-                .await
-                .map_err(|e| ApiError::InternalError(e.to_string()));
+                // 使用 caelix_agent::run_agent（内部通过 RuntimeContext + ContextProvider 获取 message_bus）
+                let _ = execute_agent_with_messaging(agent_spec, messages, provider, &config).await
+                    .inspect_err(|e| {
+                        tracing::error!(
+                            session_id = %request_clone.session_id,
+                            error = %e,
+                            "Agent execution failed"
+                        );
+                    });
+            };
 
-            let result = Ok::<_, ApiError>(());
-
-            if let Err(e) = result {
-                eprintln!("❌ chat_stream_async 执行失败: {:?}", e);
-            }
+            let _ = fut.with_runtime_ctx(ctx_for_scope).await;
+            // _guard 在此 drop，自动调用 unregister(session_id, run_id)
         });
+
+        // 回填 join_handle 与 abort_handle，使 stop_agent 可以等待/强制中止
+        agent_run_manager.set_handles(&request.session_id, run_id, join_handle);
 
         // 6. 立即返回完整信息
         Ok(ChatAsyncResult {
@@ -476,6 +562,11 @@ impl CaelixApi for CaelixApiImpl {
         tool_call_id: &str,
         approved: bool,
     ) -> Result<(), ApiError> {
+        // 安全校验：拒绝路径穿越字符，防止构造 session/../../.. 的路径
+        if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+            return Err(ApiError::InternalError("session_id 包含非法字符".into()));
+        }
+
         // 1. 先从历史中找到 ChatMessage 以及 tool_call 的位置
         let history_messages = self
             .context
@@ -493,17 +584,17 @@ impl CaelixApi for CaelixApiImpl {
                 if chat_msg.role != "assistant" {
                     continue;
                 }
-                if let Some(tool_calls) = &chat_msg.tool_calls {
-                    if tool_calls.iter().any(|t| t.id == tool_call_id) {
-                        // 记录相关工具名与参数
-                        let (tool_name, args) = tool_calls
-                            .iter()
-                            .find(|t| t.id == tool_call_id)
-                            .map(|t| (t.name.clone(), t.arguments.clone()))
-                            .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
-                        found_chat_msg = Some((msg_idx, chat_msg, tool_name, args.to_string()));
-                        break;
-                    }
+                if let Some(tool_calls) = &chat_msg.tool_calls
+                    && tool_calls.iter().any(|t| t.id == tool_call_id)
+                {
+                    // 记录相关工具名与参数
+                    let (tool_name, args) = tool_calls
+                        .iter()
+                        .find(|t| t.id == tool_call_id)
+                        .map(|t| (t.name.clone(), t.arguments.clone()))
+                        .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
+                    found_chat_msg = Some((msg_idx, chat_msg, tool_name, args.to_string()));
+                    break;
                 }
             }
         }
@@ -549,6 +640,7 @@ impl CaelixApi for CaelixApiImpl {
             timestamp: chrono::Utc::now(),
             content: new_content,
             agent_name: None,
+            usage: None,
         };
         storage
             .replace_agent_message(&session_for_storage, msg_idx, &new_agent_msg)
@@ -620,6 +712,7 @@ impl CaelixApi for CaelixApiImpl {
                     format!("{{\"role\":\"tool\",\"content\":\"{}\"}}", tool_result_text)
                 }),
                 agent_name: Some(tool_name.clone()),
+                usage: None,
             };
             let _ = storage
                 .append_agent_message(&agent_msg_for_storage)
@@ -639,6 +732,7 @@ impl CaelixApi for CaelixApiImpl {
                     tool_call_id, tool_name
                 ),
                 agent_name: Some(tool_name),
+                usage: None,
             };
             let _ = self.context.message_bus.send_agent(event_msg);
         } else {
@@ -658,6 +752,7 @@ impl CaelixApi for CaelixApiImpl {
                 timestamp: chrono::Utc::now(),
                 content: serde_json::to_string(&chat_tool_msg).unwrap_or_default(),
                 agent_name: None,
+                usage: None,
             };
             let _ = storage.append_agent_message(&agent_msg_for_storage).await;
 
@@ -683,6 +778,7 @@ impl CaelixApi for CaelixApiImpl {
                         .unwrap_or_default()
                 ),
                 agent_name: None,
+                usage: None,
             };
             let _ = self.context.message_bus.send_agent(event_msg);
         }
@@ -732,10 +828,48 @@ impl CaelixApi for CaelixApiImpl {
                     timestamp: chrono::Utc::now(),
                     content: format!("订阅错误: {:?}", e),
                     agent_name: None,
+                    usage: None,
                 }
             })
         }));
 
         Ok(Box::pin(merged_stream))
+    }
+
+    async fn get_session_usage(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionUsageView>, ApiError> {
+        let tracker = self
+            .context
+            .usage_tracker()
+            .ok_or_else(|| ApiError::InternalError("UsageTracker 未初始化".to_string()))?;
+        let ctx_window_tokens = self
+            .context
+            .llm_provider_manager
+            .read()
+            .await
+            .get_all_providers()
+            .first()
+            .cloned()
+            .and_then(|(_name, p)| p.config().ctx_window_tokens);
+        Ok(tracker.snapshot_session(session_id, ctx_window_tokens).await)
+    }
+
+    async fn get_global_usage(&self) -> Result<GlobalUsageView, ApiError> {
+        let tracker = self
+            .context
+            .usage_tracker()
+            .ok_or_else(|| ApiError::InternalError("UsageTracker 未初始化".to_string()))?;
+        Ok(tracker.snapshot_global().await)
+    }
+
+    async fn stop_agent(&self, session_id: &str) -> Result<bool, ApiError> {
+        // agent_run_manager 在 CaelixContext 中始终初始化；None 分支为 trait 通用性保留
+        let arm = self
+            .context
+            .agent_run_manager()
+            .ok_or_else(|| ApiError::InternalError("AgentRunManager 未初始化".to_string()))?;
+        Ok(arm.stop_agent(session_id).await)
     }
 }

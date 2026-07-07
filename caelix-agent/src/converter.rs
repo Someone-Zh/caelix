@@ -11,7 +11,10 @@ pub fn convert_chunk(chunk: ChatResponseChunk) -> Result<AgentOutputChunk, Agent
         return Ok(AgentOutputChunk::Content { content: c });
     }
     if let Some(r) = chunk.finish_reason {
-        return Ok(AgentOutputChunk::Finish { reason: r });
+        return Ok(AgentOutputChunk::Finish {
+            reason: r,
+            usage: chunk.usage,
+        });
     }
     Ok(AgentOutputChunk::Content {
         content: String::new(),

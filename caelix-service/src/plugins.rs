@@ -67,7 +67,7 @@ impl Plugin for DefaultServicePlugin {
         let skills_dir = self.context.env_config.caelix_home.join("skills");
         if !skills_dir.exists() {
             std::fs::create_dir_all(&skills_dir)?;
-            println!("Creating skills directory at: {:?}", skills_dir);
+            tracing::info!(dir = %skills_dir.display(), "Creating skills directory");
         }
 
         let skills =
@@ -76,14 +76,7 @@ impl Plugin for DefaultServicePlugin {
                 .map_err(|e| anyhow!(e))?;
         Ok(skills
             .into_iter()
-            .map(|skill| {
-                SkillDef::new(
-                    skill.name,
-                    skill.namespace,
-                    skill.description,
-                    skill.content,
-                )
-            })
+            .map(SkillDef::from)
             .collect())
     }
 
@@ -91,8 +84,8 @@ impl Plugin for DefaultServicePlugin {
         let agents_dir = self.context.env_config.caelix_home.join("agents");
         if !agents_dir.exists() {
             std::fs::create_dir_all(&agents_dir)?;
-            println!("Creating agents directory at: {:?}", agents_dir);
-            println!("Please add .agent files to this directory");
+            tracing::info!(dir = %agents_dir.display(), "Creating agents directory");
+            tracing::info!("Please add .agent files to this directory");
         }
 
         let mut agents = caelix_config::agents_loader::load_agents_from_directory(
@@ -122,7 +115,7 @@ impl Plugin for DefaultServicePlugin {
         let commands_dir = self.context.env_config.caelix_home.join("commands");
         if !commands_dir.exists() {
             std::fs::create_dir_all(&commands_dir)?;
-            println!("Creating commands directory at: {:?}", commands_dir);
+            tracing::info!(dir = %commands_dir.display(), "Creating commands directory");
         }
 
         let commands = caelix_config::commands_loader::load_commands_from_directory(

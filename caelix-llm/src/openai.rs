@@ -10,7 +10,7 @@ use tokio_stream::{Stream, StreamExt};
 
 use caelix_api::error::AgentError;
 use caelix_api::provider::{
-    ChatMessage, ChatResponseChunk, LlmConfig, LlmProvider, ProviderConfig,
+    ChatMessage, ChatResponseChunk, LlmConfig, LlmProvider, ProviderConfig, TokenUsage,
 };
 use caelix_api::tool::{ApiToolCall, ToolCall, ToolDefinition};
 
@@ -26,6 +26,9 @@ struct LlmChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
+    /// 始终携带 {include_usage: true}，确保流式响应末尾返回 usage 块
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<Value>,
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +66,69 @@ pub fn to_tool_json(tool: &ToolDefinition) -> Value {
 
 pub fn to_tools_array(definitions: &[ToolDefinition]) -> Vec<Value> {
     definitions.iter().map(to_tool_json).collect()
+}
+
+/// 解析 SSE 响应中的 usage 字段
+///
+/// 支持 OpenAI 标准响应结构：
+/// ```json
+/// { "usage": { "prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46 } }
+/// ```
+///
+/// 以及 prompt_cache_details（缓存命中 token 数）和 reasoning_tokens。
+fn parse_usage(json: &Value) -> Option<TokenUsage> {
+    let usage = json.get("usage")?;
+    if usage.is_null() {
+        return None;
+    }
+
+    let prompt_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+    let completion_tokens = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
+    let total_tokens = usage["total_tokens"].as_u64().unwrap_or(0) as u32;
+
+    // reasoning_tokens：部分模型（Claude/DeepSeek）会在 usage 中给出
+    let reasoning_tokens = usage["reasoning_tokens"]
+        .as_u64()
+        .map(|v| v as u32);
+
+    // cache_hit_tokens：OpenAI prompt_cache_details 中的 tokens 累积
+    let cache_hit_tokens = usage
+        .get("prompt_cache_details")
+        .and_then(|d| d.as_array())
+        .and_then(|arr| {
+            let mut total: u32 = 0;
+            for item in arr {
+                if let Some(v) = item["tokens"].as_u64() {
+                    total = total.saturating_add(v as u32);
+                }
+            }
+            if total == 0 {
+                None
+            } else {
+                Some(total)
+            }
+        })
+        .or_else(|| {
+            // 兼容字段名 cache_hit_tokens / cached_tokens
+            usage["cache_hit_tokens"]
+                .as_u64()
+                .map(|v| v as u32)
+                .or_else(|| usage["cached_tokens"].as_u64().map(|v| v as u32))
+        });
+
+    // 如果基础字段全为 0 且额外字段也为空，则视为无 usage 信息
+    if prompt_tokens == 0 && completion_tokens == 0 && total_tokens == 0
+        && reasoning_tokens.is_none() && cache_hit_tokens.is_none() {
+            return None;
+        }
+
+    Some(TokenUsage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        reasoning_tokens,
+        cache_hit_tokens,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -115,8 +181,12 @@ impl OpenAIProvider {
             temperature: self.config.temperature.unwrap_or(0.0f32),
             tools: Some(to_tools_array(tools)),
             tool_choice: None,
-            max_tokens: None,
+            max_tokens: self
+                .config
+                .max_output_tokens
+                .or(self.config.max_tokens),
             stream: true,
+            stream_options: Some(json!({ "include_usage": true })),
         }
     }
 
@@ -170,9 +240,42 @@ impl OpenAIProvider {
             *response_id = id.to_string();
         }
 
-        let choice = match json["choices"].as_array().and_then(|c| c.first()) {
+        // 解析顶层 usage 字段（流式响应末尾的 usage 块，choices 可能为空）
+        let usage = parse_usage(json);
+
+        let choices = match json["choices"].as_array() {
             Some(c) => c,
-            None => return Ok(None),
+            None => {
+                // choices 缺失但存在 usage，仍然产出一个带 usage 的空 chunk
+                if usage.is_some() {
+                    return Ok(Some(ChatResponseChunk {
+                        reasoning_content: None,
+                        content: None,
+                        id: response_id.clone(),
+                        tool_calls: None,
+                        finish_reason: None,
+                        usage,
+                    }));
+                }
+                return Ok(None);
+            }
+        };
+
+        let choice = match choices.first() {
+            Some(c) => c,
+            None => {
+                if usage.is_some() {
+                    return Ok(Some(ChatResponseChunk {
+                        reasoning_content: None,
+                        content: None,
+                        id: response_id.clone(),
+                        tool_calls: None,
+                        finish_reason: None,
+                        usage,
+                    }));
+                }
+                return Ok(None);
+            }
         };
 
         let delta = &choice["delta"];
@@ -193,6 +296,7 @@ impl OpenAIProvider {
             id: response_id.clone(),
             tool_calls: None,
             finish_reason: None,
+            usage,
         };
 
         if finish_reason.is_some() && !tool_buffer.is_empty() {
@@ -302,7 +406,7 @@ impl LlmProvider for OpenAIProvider {
                     let json = match serde_json::from_slice::<Value>(data) {
                         Ok(j) => j,
                         Err(e) => {
-                            eprintln!("JSON 解析失败: {}", e);
+                            tracing::warn!(error = %e, "JSON chunk parse failed");
                             continue;
                         }
                     };

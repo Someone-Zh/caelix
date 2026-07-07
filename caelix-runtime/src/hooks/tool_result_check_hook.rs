@@ -12,6 +12,12 @@ impl ToolResultSizeCheckHook {
     }
 }
 
+impl Default for ToolResultSizeCheckHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl AgentHook for ToolResultSizeCheckHook {
     fn name(&self) -> &str {
