@@ -173,7 +173,10 @@ impl OpenAIProvider {
                     reasoning_content: None,
                 };
 
-                serde_json::to_value(llm_msg).expect("LlmChatMessage serialization should not fail")
+                serde_json::to_value(llm_msg).unwrap_or_else(|e| {
+                    tracing::error!(error = %e, "LlmChatMessage serialization failed");
+                    serde_json::Value::Null
+                })
             })
             .collect()
     }

@@ -2,7 +2,6 @@ use axum::{
     Json,
     extract::State,
     http::StatusCode,
-    response::sse::{Event, Sse},
 };
 use std::sync::Arc;
 
@@ -11,22 +10,27 @@ use caelix_service::types::{
     SessionMessagesResponse, SessionNotificationsResponse, SessionSummary, TaskListResponse,
     TaskQueryParams,
 };
-use caelix_service::{CaelixApi, CaelixApiImpl, ChatRequest};
+use caelix_service::{CaelixApi, CaelixApiImpl};
 
 pub type ApiState = Arc<CaelixApiImpl>;
 
 /// 获取默认配置
 pub async fn get_default_config(State(api): State<ApiState>) -> Json<DefaultConfigResponse> {
     Json(DefaultConfigResponse {
-        default_provider: api.get_default_provider(),
-        default_model: api.get_default_model(),
+        default_provider: api.get_default_provider().unwrap_or_default(),
+        default_model: api.get_default_model().unwrap_or_default(),
     })
 }
 
 /// 创建新会话
-pub async fn create_session(State(api): State<ApiState>) -> Json<CreateSessionResponse> {
-    let session_id = api.create_session().await;
-    Json(CreateSessionResponse { session_id })
+pub async fn create_session(
+    State(api): State<ApiState>,
+) -> Result<Json<CreateSessionResponse>, StatusCode> {
+    let session_id = api
+        .create_session()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(CreateSessionResponse { session_id }))
 }
 
 /// 设置会话提供者
@@ -69,16 +73,6 @@ pub async fn set_session_model(
 pub async fn list_agents(State(api): State<ApiState>) -> Json<AgentListResponse> {
     let agents = api.list_agents().await;
     Json(AgentListResponse { agents })
-}
-
-/// 流式聊天（SSE）
-pub async fn chat_stream(
-    State(_api): State<ApiState>,
-    Json(_request): Json<ChatRequest>,
-) -> Result<Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>, StatusCode> {
-    // 先返回一个空流，让编译通过
-    let stream = futures::stream::empty();
-    Ok(Sse::new(stream))
 }
 
 /// 获取会话消息历史
@@ -144,15 +138,14 @@ pub async fn get_provider_models(
     Ok(Json(models))
 }
 
-/// 获取会话通知历史
+/// 获取会话通知历史（已弃用：通知不再持久化，请使用 subscribe_chat_stream 订阅）
 pub async fn get_session_notifications(
     State(api): State<ApiState>,
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Result<Json<SessionNotificationsResponse>, StatusCode> {
-    let notifications = api
-        .get_session_notifications(&session_id)
+    // 通知消息不再持久化，此接口始终返回 501
+    api.get_session_notifications(&session_id)
         .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-
-    Ok(Json(SessionNotificationsResponse { notifications }))
+        .map(|_| Json(SessionNotificationsResponse { notifications: vec![] }))
+        .map_err(|_| StatusCode::NOT_IMPLEMENTED)
 }

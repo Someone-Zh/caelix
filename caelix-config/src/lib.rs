@@ -4,7 +4,6 @@
 
 use caelix_api::logging::LogConfig;
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod agents_loader;
@@ -46,7 +45,7 @@ pub struct EnvConfig {
 }
 
 impl EnvConfig {
-    /// 从环境变量 + 配置文件创建实例
+    /// 从环境变量 + 配置文件创建实例（同步版本，用于启动阶段）
     pub fn new() -> Self {
         let caelix_home = Self::get_caelix_home();
         let debug_enabled = Self::is_debug_enabled();
@@ -57,7 +56,7 @@ impl EnvConfig {
         // 尝试从 config.json 加载（若存在）
         let config_path = caelix_home.join("config.json");
         if config_path.exists() {
-            match fs::read_to_string(&config_path) {
+            match std::fs::read_to_string(&config_path) {
                 Ok(content) => match serde_json::from_str::<RootConfig>(&content) {
                     Ok(root) => {
                         if let Some(loaded_log) = root.logging {
@@ -65,11 +64,60 @@ impl EnvConfig {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[config] 解析 {} 失败: {}", config_path.display(), e);
+                        tracing::warn!(
+                            path = %config_path.display(),
+                            error = %e,
+                            "解析配置文件失败，使用默认配置"
+                        );
                     }
                 },
                 Err(e) => {
-                    eprintln!("[config] 读取 {} 失败: {}", config_path.display(), e);
+                    tracing::warn!(
+                        path = %config_path.display(),
+                        error = %e,
+                        "读取配置文件失败，使用默认配置"
+                    );
+                }
+            }
+        }
+
+        Self {
+            caelix_home,
+            debug_enabled,
+            log,
+        }
+    }
+
+    /// 从环境变量 + 配置文件异步创建实例（避免阻塞 async runtime）
+    pub async fn new_async() -> Self {
+        let caelix_home = Self::get_caelix_home();
+        let debug_enabled = Self::is_debug_enabled();
+
+        let mut log = LogConfig::default().with_caelix_home(&caelix_home);
+
+        let config_path = caelix_home.join("config.json");
+        if config_path.exists() {
+            match tokio::fs::read_to_string(&config_path).await {
+                Ok(content) => match serde_json::from_str::<RootConfig>(&content) {
+                    Ok(root) => {
+                        if let Some(loaded_log) = root.logging {
+                            log = loaded_log;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %config_path.display(),
+                            error = %e,
+                            "解析配置文件失败，使用默认配置"
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        path = %config_path.display(),
+                        error = %e,
+                        "读取配置文件失败，使用默认配置"
+                    );
                 }
             }
         }
@@ -88,9 +136,13 @@ impl EnvConfig {
             .map(PathBuf::from)
             .ok()
             .unwrap_or_else(|| {
-                let mut home_dir = dirs::home_dir().expect("无法获取用户主目录");
-                home_dir.push(".caelix");
-                home_dir
+                if let Some(mut home_dir) = dirs::home_dir() {
+                    home_dir.push(".caelix");
+                    home_dir
+                } else {
+                    tracing::warn!("无法获取用户主目录，使用当前目录作为 CAELIX_HOME");
+                    PathBuf::from(".caelix")
+                }
             })
     }
 

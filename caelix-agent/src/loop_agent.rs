@@ -7,6 +7,7 @@ use caelix_api::{
     context::RuntimeContext,
 };
 use futures::{Stream, StreamExt};
+use tokio::sync::mpsc;
 
 use super::util::{extract_pending_tool_calls, has_pending_tool_calls};
 use crate::tool_executor::{ToolExecutionBatchResult, execute_tools_static_with_pre_check};
@@ -268,6 +269,34 @@ impl Agent for LoopAgent {
     }
 }
 
+struct LlmStreamWithAbort {
+    receiver: mpsc::Receiver<Result<AgentOutputChunk, AgentError>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl LlmStreamWithAbort {
+    fn abort(&self) {
+        self.handle.abort();
+    }
+}
+
+impl Drop for LlmStreamWithAbort {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl Stream for LlmStreamWithAbort {
+    type Item = Result<AgentOutputChunk, AgentError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.receiver.poll_recv(cx)
+    }
+}
+
 fn call_llm_static<'a>(
     def: &'a Arc<AgentSpec>,
     messages: &'a [ChatMessage],
@@ -277,24 +306,99 @@ fn call_llm_static<'a>(
     let tool_defs = def.get_tool_definitions();
     let llm = llm_provider.clone();
     let cfg = config.clone();
+    let messages_clone = messages.to_vec();
+    let tool_defs_clone = tool_defs.to_vec();
 
-    let s = stream! {
-        yield Ok(AgentOutputChunk::CallProvider {
+    let (tx, rx) = mpsc::channel(64);
+
+    let handle = tokio::spawn(async move {
+        let _ = tx.send(Ok(AgentOutputChunk::CallProvider {
             timestamp: chrono::Utc::now(),
             provider: llm.config().name.clone(),
             model: cfg.model_name.clone(),
-        });
+        })).await;
 
         let cancel_token =
             RuntimeContext::try_current().map(|ctx| ctx.cancellation_token().child_token());
         let mut stream = llm
-            .chat_stream_with_cancel(messages, &tool_defs, &cfg, cancel_token)
+            .chat_stream_with_cancel(&messages_clone, &tool_defs_clone, &cfg, cancel_token)
             .await;
 
         let mut tool_buffers: HashMap<usize, (String, String, String)> = HashMap::new();
         let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
-        // cancel future 只构造一次并 pin，select! 每轮通过 `&mut` 复用。
+        while let Some(result) = stream.next().await {
+            let chunk = match result {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(e)).await;
+                    return;
+                }
+            };
+
+            if let Some(u) = &chunk.usage {
+                cumulative_usage.add(u);
+            }
+
+            if let Some(r) = &chunk.reasoning_content && !r.is_empty() {
+                let _ = tx.send(Ok(AgentOutputChunk::Reasoning {
+                    content: r.clone(),
+                })).await;
+            }
+
+            if let Some(c) = &chunk.content {
+                let _ = tx.send(Ok(AgentOutputChunk::Content {
+                    content: c.clone(),
+                })).await;
+            }
+
+            if let Some(tcs) = &chunk.tool_calls {
+                for tc in tcs {
+                    let idx = tc.index as usize;
+                    let args_delta = tool_argument_delta(&tc.arguments);
+                    if let Some((_, _, args)) = tool_buffers.get_mut(&idx) {
+                        args.push_str(&args_delta);
+                    } else {
+                        let id = if tc.id.is_empty() {
+                            format!("call_{idx}")
+                        } else {
+                            tc.id.clone()
+                        };
+                        tool_buffers.insert(
+                            idx,
+                            (id, tc.name.clone(), args_delta),
+                        );
+                    }
+                }
+            }
+        }
+
+        let mut ordered_tool_buffers = tool_buffers.into_iter().collect::<Vec<_>>();
+        ordered_tool_buffers.sort_by_key(|(idx, _)| *idx);
+        for (_idx, (id, name, args)) in ordered_tool_buffers {
+            let _ = tx.send(Ok(AgentOutputChunk::ToolCall {
+                tool_call_id: id,
+                name,
+                arguments: args.trim().to_string(),
+            })).await;
+        }
+
+        if cumulative_usage.total_tokens > 0
+            || cumulative_usage.reasoning_tokens.is_some()
+            || cumulative_usage.cache_hit_tokens.is_some()
+        {
+            let _ = tx.send(Ok(AgentOutputChunk::Finish {
+                reason: "llm_call_done".to_string(),
+                usage: Some(cumulative_usage),
+            })).await;
+        }
+    });
+
+    let stream_with_abort = LlmStreamWithAbort { receiver: rx, handle };
+
+    let s = stream! {
+        tokio::pin!(stream_with_abort);
+
         let cancel_fut = async {
             match RuntimeContext::try_current() {
                 Some(ctx) => ctx.cancellation_token().cancelled().await,
@@ -307,84 +411,22 @@ fn call_llm_static<'a>(
             tokio::select! {
                 biased;
                 _ = &mut cancel_fut => {
+                    stream_with_abort.abort();
                     yield Ok(AgentOutputChunk::Stopped {
                         reason: "cancelled_by_user".into(),
                     });
                     return;
                 }
-                next = stream.next() => {
-                    let Some(result) = next else { break };
-                    let chunk = match result {
-                        Ok(c) => c,
-                        Err(e) => {
-                            yield Err(e);
-                            return;
-                        }
-                    };
-
-                    if let Some(u) = &chunk.usage {
-                        cumulative_usage.add(u);
-                    }
-
-                    if let Some(r) = &chunk.reasoning_content
-                        && !r.is_empty()
-                    {
-                        yield Ok(AgentOutputChunk::Reasoning {
-                            content: r.clone(),
-                        });
-                    }
-
-                    if let Some(c) = &chunk.content {
-                        yield Ok(AgentOutputChunk::Content {
-                            content: c.clone(),
-                        });
-                    }
-
-                    if let Some(tcs) = &chunk.tool_calls {
-                        for tc in tcs {
-                            let idx = tc.index as usize;
-                            let args_delta = tool_argument_delta(&tc.arguments);
-                            if let Some((_, _, args)) = tool_buffers.get_mut(&idx) {
-                                args.push_str(&args_delta);
-                            } else {
-                                let id = if tc.id.is_empty() {
-                                    format!("call_{idx}")
-                                } else {
-                                    tc.id.clone()
-                                };
-                                tool_buffers.insert(
-                                    idx,
-                                    (id, tc.name.clone(), args_delta),
-                                );
-                            }
-                        }
+                next = stream_with_abort.next() => {
+                    match next {
+                        Some(item) => yield item,
+                        None => break,
                     }
                 }
             }
         }
-
-        let mut ordered_tool_buffers = tool_buffers.into_iter().collect::<Vec<_>>();
-        ordered_tool_buffers.sort_by_key(|(idx, _)| *idx);
-        for (_idx, (id, name, args)) in ordered_tool_buffers {
-            yield Ok(AgentOutputChunk::ToolCall {
-                tool_call_id: id,
-                name,
-                arguments: args.trim().to_string(),
-            });
-        }
-
-        // 单次 LLM 调用结束：产出 Finish 并携带本次的累计 usage
-        // （外层 LoopAgent 会拦截这种 Finish，累加并最终产出全局 Finish）
-        if cumulative_usage.total_tokens > 0
-            || cumulative_usage.reasoning_tokens.is_some()
-            || cumulative_usage.cache_hit_tokens.is_some()
-        {
-            yield Ok(AgentOutputChunk::Finish {
-                reason: "llm_call_done".to_string(),
-                usage: Some(cumulative_usage),
-            });
-        }
     };
+
     Box::pin(s)
 }
 

@@ -1,7 +1,5 @@
 use crate::vault::{MemoryVault, PromoteTrigger};
-use caelix_api::hooks::{
-    AgentHook, HookCapability, HookScope, PostToolExecContext, PreToolExecContext,
-};
+use caelix_api::hooks::{AgentHook, HookCapability, PostToolExecContext};
 use caelix_api::task::{Runnable, TaskKind};
 use caelix_task::TaskManager;
 use serde_json;

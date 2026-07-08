@@ -1,8 +1,8 @@
-use crate::schema::{MemoryVaultConfig, RawSource};
+use crate::schema::RawSource;
 use crate::vault::MemoryVault;
 use async_trait::async_trait;
 use caelix_api::tool::{Tool, ToolResult};
-use chrono::{Date, Utc};
+use chrono::Utc;
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 

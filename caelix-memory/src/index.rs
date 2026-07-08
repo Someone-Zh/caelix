@@ -176,7 +176,8 @@ fn extract_snippets(content: &str) -> Vec<Snippet> {
             if !current_heading.is_empty() && !current_content.is_empty() {
                 let hash = crate::schema::compute_snippet_hash(&current_heading, &current_content);
                 let preview = if current_content.len() > 100 {
-                    format!("{}...", &current_content[..100])
+                    let end = current_content.floor_char_boundary(100);
+                    format!("{}...", &current_content[..end])
                 } else {
                     current_content.clone()
                 };
@@ -200,7 +201,8 @@ fn extract_snippets(content: &str) -> Vec<Snippet> {
     if !current_heading.is_empty() && !current_content.is_empty() {
         let hash = crate::schema::compute_snippet_hash(&current_heading, &current_content);
         let preview = if current_content.len() > 100 {
-            format!("{}...", &current_content[..100])
+            let end = current_content.floor_char_boundary(100);
+            format!("{}...", &current_content[..end])
         } else {
             current_content.clone()
         };
@@ -214,12 +216,17 @@ fn extract_snippets(content: &str) -> Vec<Snippet> {
     snippets
 }
 
+use std::sync::LazyLock;
+use regex::Regex;
+
+static ENTITY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[\[([^\]]+)\]\]").expect("Failed to compile entity regex")
+});
+
 fn extract_entity_names(content: &str) -> HashSet<String> {
-    use regex::Regex;
-    let re = Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
     let mut names = HashSet::new();
 
-    for cap in re.captures_iter(content) {
+    for cap in ENTITY_REGEX.captures_iter(content) {
         let content = &cap[1];
         if !content.ends_with('?') {
             let name = if content.starts_with("Event:") {

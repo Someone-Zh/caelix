@@ -3,6 +3,8 @@ use std::sync::Arc;
 use caelix_api::variables::VariableManager;
 use regex::Regex;
 
+const MAX_RECURSION_DEPTH: u32 = 10;
+
 pub struct VariableReplacer {
     manager: Arc<VariableManager>,
     pattern: Regex,
@@ -18,18 +20,31 @@ impl VariableReplacer {
 
     pub async fn replace_async(&self, text: &str, space: Option<&str>) -> String {
         let mut result = text.to_string();
+        let mut depth = 0;
 
-        for capture in self.pattern.captures_iter(text) {
-            let Some(full_match) = capture.get(0).map(|m| m.as_str()) else {
-                continue;
-            };
-            let Some(key) = capture.get(1).map(|m| m.as_str().trim()) else {
-                continue;
-            };
+        while depth < MAX_RECURSION_DEPTH {
+            let mut changed = false;
 
-            if let Some(value) = self.manager.resolve(space, key).await {
-                result = result.replace(full_match, &value);
+            for capture in self.pattern.captures_iter(&result.clone()) {
+                let Some(full_match) = capture.get(0).map(|m| m.as_str()) else {
+                    continue;
+                };
+                let Some(key) = capture.get(1).map(|m| m.as_str().trim()) else {
+                    continue;
+                };
+
+                if let Some(value) = self.manager.resolve(space, key).await {
+                    if result.contains(full_match) {
+                        result = result.replace(full_match, &value);
+                        changed = true;
+                    }
+                }
             }
+
+            if !changed {
+                break;
+            }
+            depth += 1;
         }
 
         result
@@ -79,5 +94,31 @@ mod tests {
         let result = replacer.replace_async("Keep {{missing}}", None).await;
 
         assert_eq!(result, "Keep {{missing}}");
+    }
+
+    #[tokio::test]
+    async fn recursive_variable_replacement() {
+        let manager = Arc::new(VariableManager::new());
+        manager.set_global("greeting", "Hello {{name}}").await;
+        manager.set_global("name", "Alice").await;
+
+        let replacer = VariableReplacer::new(manager);
+        let result = replacer.replace_async("{{greeting}}!", None).await;
+
+        assert_eq!(result, "Hello Alice!");
+    }
+
+    #[tokio::test]
+    async fn recursion_depth_limit() {
+        let manager = Arc::new(VariableManager::new());
+        manager.set_global("a", "{{b}}").await;
+        manager.set_global("b", "{{a}}").await;
+
+        let replacer = VariableReplacer::new(manager);
+        let result = replacer.replace_async("{{a}}", None).await;
+
+        // Should not infinite loop, and should stop at depth limit
+        // The exact output depends on how many levels get resolved before hitting limit
+        assert!(result.contains("{{a}}") || result.contains("{{b}}"));
     }
 }

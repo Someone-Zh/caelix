@@ -8,7 +8,7 @@ use tokio::fs;
 #[async_trait]
 pub trait TaskPersistence: Send + Sync + 'static {
     async fn save(&self, meta: &TaskMeta) -> Result<()>;
-    async fn delete(&self, task_id: &str) -> Result<()>;
+    async fn delete(&self, session_id: &str, task_id: &str) -> Result<()>;
     async fn load_all(&self) -> Result<Vec<TaskMeta>>;
 }
 
@@ -33,11 +33,6 @@ impl FilePersistence {
         } else {
             anyhow::bail!("Invalid {}: only [A-Za-z0-9_-] is allowed", kind);
         }
-    }
-
-    fn get_task_path(&self, task_id: &str) -> Result<PathBuf> {
-        Self::validate_path_id("task_id", task_id)?;
-        Ok(self.base_path.join(format!("{}.json", task_id)))
     }
 
     /// 获取 session 级别的任务存储路径
@@ -79,10 +74,8 @@ impl TaskPersistence for FilePersistence {
         Ok(())
     }
 
-    async fn delete(&self, task_id: &str) -> Result<()> {
-        // 注意：这里需要知道 session_id 才能正确删除
-        // 暂时保留旧逻辑作为兼容，后续可能需要修改接口
-        let path = self.get_task_path(task_id)?;
+    async fn delete(&self, session_id: &str, task_id: &str) -> Result<()> {
+        let path = self.get_session_task_path(session_id, task_id)?;
         if path.exists() {
             fs::remove_file(path).await?;
         }

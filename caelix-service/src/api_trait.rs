@@ -3,13 +3,11 @@
 
 use crate::types::{ChatAsyncResult, ChatRequest, ProviderInfo, SessionSummary};
 use async_trait::async_trait;
-use caelix_api::agent::AgentOutputChunk;
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, NotificationMessage};
 use caelix_api::provider::{GlobalUsageView, SessionUsageView};
 use caelix_api::task::TaskMeta;
 use futures::Stream;
-use futures::stream::BoxStream;
 use std::collections::HashMap;
 use std::pin::Pin;
 
@@ -17,11 +15,11 @@ use std::pin::Pin;
 /// 定义了对外提供的统一接口
 #[async_trait]
 pub trait CaelixApi: Send + Sync {
-    /// 获取默认提供者
-    fn get_default_provider(&self) -> String;
+    /// 获取默认提供者（None 表示未配置）
+    fn get_default_provider(&self) -> Option<String>;
 
-    /// 获取默认模型
-    fn get_default_model(&self) -> String;
+    /// 获取默认模型（None 表示未配置）
+    fn get_default_model(&self) -> Option<String>;
 
     /// 设置会话的提供者
     async fn set_session_provider(&self, session_id: &str, provider: &str) -> Result<(), ApiError>;
@@ -29,14 +27,17 @@ pub trait CaelixApi: Send + Sync {
     /// 设置会话的模型
     async fn set_session_model(&self, session_id: &str, model: &str) -> Result<(), ApiError>;
 
-    /// 创建新会话
-    async fn create_session(&self) -> String;
+    /// 创建新会话，返回 session_id
+    async fn create_session(&self) -> Result<String, ApiError>;
 
-    /// 使用指定的session_id创建会话（如果不存在）
-    async fn create_session_with_id(&self, session_id: String);
+    /// 使用指定的 session_id 创建会话（如果不存在）
+    async fn create_session_with_id(&self, session_id: String) -> Result<(), ApiError>;
 
     /// 检查会话是否存在
-    async fn session_exists(&self, session_id: &str) -> bool;
+    ///
+    /// # Errors
+    /// - 如果 session_id 格式非法，返回 `ApiError::InvalidRequest`
+    async fn session_exists(&self, session_id: &str) -> Result<bool, ApiError>;
 
     /// 获取所有 agent 名称列表
     async fn list_agents(&self) -> Vec<String>;
@@ -69,12 +70,6 @@ pub trait CaelixApi: Send + Sync {
     /// 替换文本中的变量
     async fn replace_variables(&self, text: &str, space: Option<&str>) -> Result<String, ApiError>;
 
-    /// 流式聊天
-    async fn chat_stream(
-        &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream<'static, Result<AgentOutputChunk, ApiError>>, ApiError>;
-
     /// 获取会话的完整 Agent 消息历史
     async fn get_session_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, ApiError>;
 
@@ -91,6 +86,9 @@ pub trait CaelixApi: Send + Sync {
     async fn get_provider_models(&self, provider_name: &str) -> Result<Vec<String>, ApiError>;
 
     /// 获取会话通知历史
+    ///
+    /// 注意：通知消息不再持久化，此接口始终返回错误。
+    /// 请通过 subscribe_chat_stream 订阅实时通知。
     async fn get_session_notifications(
         &self,
         session_id: &str,
@@ -101,7 +99,7 @@ pub trait CaelixApi: Send + Sync {
     /// 该方法会立即返回，聊天过程在后台异步执行
     /// 所有流式输出块会通过消息总线以 AgentMessageType::Chunk 类型发送
     /// 调用方可通过 subscribe_chat_stream 订阅结果
-    async fn chat_stream_async(&self, request: ChatRequest) -> Result<ChatAsyncResult, ApiError>; // 返回 request_id、span_id 和 session_id
+    async fn chat_stream_async(&self, request: ChatRequest) -> Result<ChatAsyncResult, ApiError>;
 
     /// 订阅聊天流
     ///

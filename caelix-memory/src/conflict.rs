@@ -2,7 +2,7 @@ use crate::schema::{
     AxiomCandidate, CandidateStatus, ConflictStatus, ConflictType, ConflictValue, Contradiction,
     Flags, PendingLink,
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde_json;
 use std::path::{Path, PathBuf};
 use tokio::fs;

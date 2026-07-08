@@ -125,10 +125,13 @@ impl Plugin for DefaultServicePlugin {
 }
 
 fn create_default_service_plugin(context: PluginFactoryContext) -> Arc<dyn Plugin> {
-    let context = context
-        .downcast::<CaelixContext>()
-        .expect("default service plugin requires CaelixContext");
-    Arc::new(DefaultServicePlugin::new(context))
+    match context.downcast::<CaelixContext>() {
+        Ok(caelix_ctx) => Arc::new(DefaultServicePlugin::new(caelix_ctx)),
+        Err(_) => {
+            tracing::error!("default service plugin requires CaelixContext, got wrong type");
+            panic!("default service plugin requires CaelixContext");
+        }
+    }
 }
 
 inventory::submit! {

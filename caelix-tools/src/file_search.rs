@@ -3,8 +3,9 @@ use caelix_api::tool::Tool;
 use caelix_api::tool::{ToolPreCheckResult, ToolResult};
 use serde_json::{Value as JsonValue, json};
 use std::fs::read_to_string;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
 use crate::security::require_path_allowed;
@@ -16,21 +17,31 @@ const MAX_NATIVE_SEARCH_FILE_SIZE: u64 = 2 * 1024 * 1024;
 #[derive(Debug, Default, Clone)]
 pub struct SmartSearchTool;
 
-// 缓存 ripgrep 检测结果，只执行一次
-static HAS_RIPGREP: LazyLock<bool> = LazyLock::new(|| {
-    // 同步检测，在 LazyLock 初始化时执行
-    std::process::Command::new("rg")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok()
-});
+// 缓存 ripgrep 检测结果，使用 Mutex 避免阻塞 tokio runtime
+static HAS_RIPGREP: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
+
+fn has_ripgrep_mutex() -> &'static Mutex<Option<bool>> {
+    HAS_RIPGREP.get_or_init(|| Mutex::new(None))
+}
 
 impl SmartSearchTool {
-    /// 使用缓存的 ripgrep 检测结果
+    /// 异步检测 ripgrep 是否可用（避免阻塞 runtime）
     async fn has_ripgrep(&self) -> bool {
-        *HAS_RIPGREP
+        let mut guard = has_ripgrep_mutex().lock().await;
+        if let Some(cached) = *guard {
+            return cached;
+        }
+
+        let result = Command::new("rg")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok();
+
+        *guard = Some(result);
+        result
     }
 
     /// 方案1：调用系统 rg 命令行（高性能）

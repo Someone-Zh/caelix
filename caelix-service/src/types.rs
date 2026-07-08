@@ -17,6 +17,9 @@ pub struct ChatRequest {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub agent: Option<String>,
+    /// 用户项目根目录，用于加载项目级配置（skills/commands/agents）和变量替换的 space。
+    /// 若为 None，则回退到服务进程的 current_dir()。
+    pub work_dir: Option<String>,
 }
 
 /// 会话创建响应

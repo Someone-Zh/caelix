@@ -6,8 +6,7 @@ use crate::index::ReverseIndexManager;
 use crate::link::{Link, LinkValidator};
 use crate::raw::RawLayer;
 use crate::schema::{
-    AliasEntry, ConflictValue, Layer, MemoryVaultConfig, PromoteConfig, RawSource,
-    WikiEntityCategory, WikiEntityStatus, WikiEventStatus,
+    Layer, MemoryVaultConfig, RawSource, WikiEntityCategory, WikiEntityStatus, WikiEventStatus,
 };
 use crate::wiki::entity::WikiEntityLayer;
 use crate::wiki::event::WikiEventLayer;
@@ -15,7 +14,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tokio::fs;
 use tokio::sync::RwLock;
 
@@ -30,6 +29,7 @@ pub struct RecallResult {
 
 #[derive(Debug)]
 pub struct MemoryVault {
+    #[allow(dead_code)]
     root_dir: PathBuf,
     config: MemoryVaultConfig,
     raw: RawLayer,
@@ -120,11 +120,13 @@ impl MemoryVault {
             )
             .await?;
 
-        for alias in aliases {
-            self.alias.write().await.add_alias(&alias, name);
+        {
+            let mut alias_mgr = self.alias.write().await;
+            for alias in aliases {
+                alias_mgr.add_alias(&alias, name);
+            }
         }
-
-        self.alias.read().await.save().await?;
+        self.alias.write().await.save().await?;
         self.update_index_for_wiki_entity(name).await?;
         self.validate_links_and_record_pending(body, &format!("Wiki/Entities/{}.md", name))
             .await?;
@@ -189,11 +191,16 @@ impl MemoryVault {
     }
 
     pub async fn recall(&self, query: &str, top_k: usize) -> anyhow::Result<Vec<RecallResult>> {
-        let alias = self.alias.read().await;
-        let canonical = alias.get_canonical(query).unwrap_or(query).to_string();
+        let canonical = {
+            let alias = self.alias.read().await;
+            alias.get_canonical(query).unwrap_or(query).to_string()
+        };
 
-        let index = self.index.read().await;
-        let results = index.search(&canonical, top_k);
+        let results = {
+            let index = self.index.read().await;
+            index.search(&canonical, top_k)
+        };
+
         let mut recall_results = Vec::new();
 
         for (entry, snippet) in results {
@@ -244,16 +251,19 @@ impl MemoryVault {
         }
 
         self.wiki_entity.rename(old_name, new_name).await?;
-        self.alias
-            .write()
-            .await
-            .update_canonical(old_name, new_name);
-        self.index.write().await.rename_entity(old_name, new_name);
+        {
+            let mut alias_mgr = self.alias.write().await;
+            alias_mgr.update_canonical(old_name, new_name);
+        }
+        self.alias.write().await.save().await?;
+        {
+            let mut index_mgr = self.index.write().await;
+            index_mgr.rename_entity(old_name, new_name);
+        }
+        self.index.write().await.save().await?;
 
         self.update_all_links(old_name, new_name).await?;
 
-        self.alias.read().await.save().await?;
-        self.index.read().await.save().await?;
         Ok(())
     }
 
@@ -267,11 +277,14 @@ impl MemoryVault {
         }
 
         self.wiki_event.rename(old_name, new_name).await?;
-        self.index.write().await.rename_entity(old_name, new_name);
+        {
+            let mut index_mgr = self.index.write().await;
+            index_mgr.rename_entity(old_name, new_name);
+        }
+        self.index.write().await.save().await?;
 
         self.update_all_links(old_name, new_name).await?;
 
-        self.index.read().await.save().await?;
         Ok(())
     }
 
@@ -333,8 +346,8 @@ impl MemoryVault {
         {
             let mut index = self.index.write().await;
             index.rebuild_from_files(&files);
+            index.save().await?;
         }
-        self.index.read().await.save().await?;
 
         Ok(())
     }
@@ -422,7 +435,7 @@ impl MemoryVault {
             .list_files()
             .await?
             .into_iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
             .collect())
     }
 
@@ -509,7 +522,8 @@ impl MemoryVault {
                 status: format!("{:?}", c.status),
                 created_at: c.created_at,
                 preview: if c.draft.len() > 50 {
-                    format!("{}...", &c.draft[..50])
+                    let end = c.draft.floor_char_boundary(50);
+                    format!("{}...", &c.draft[..end])
                 } else {
                     c.draft.clone()
                 },
@@ -518,23 +532,29 @@ impl MemoryVault {
     }
 
     pub async fn resolve_conflict(&self, id: &str) -> anyhow::Result<bool> {
-        let mut conflict = self.conflict.write().await;
-        let resolved = conflict.resolve_conflict(id, Vec::new());
-        conflict.save().await?;
+        let resolved = {
+            let mut conflict = self.conflict.write().await;
+            conflict.resolve_conflict(id, Vec::new())
+        };
+        self.conflict.write().await.save().await?;
         Ok(resolved)
     }
 
     pub async fn approve_candidate(&self, id: &str) -> anyhow::Result<bool> {
-        let mut conflict = self.conflict.write().await;
-        let approved = conflict.approve_candidate(id);
-        conflict.save().await?;
+        let approved = {
+            let mut conflict = self.conflict.write().await;
+            conflict.approve_candidate(id)
+        };
+        self.conflict.write().await.save().await?;
         Ok(approved)
     }
 
     pub async fn reject_candidate(&self, id: &str) -> anyhow::Result<bool> {
-        let mut conflict = self.conflict.write().await;
-        let rejected = conflict.reject_candidate(id);
-        conflict.save().await?;
+        let rejected = {
+            let mut conflict = self.conflict.write().await;
+            conflict.reject_candidate(id)
+        };
+        self.conflict.write().await.save().await?;
         Ok(rejected)
     }
 
@@ -548,16 +568,18 @@ impl MemoryVault {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
 
+            let snippets = extract_snippets(&content);
+            let entity_names = extract_entity_names(&content);
+            let path_str = path_to_rel_string(&path);
+
             {
                 let mut index = self.index.write().await;
-                index.remove_entries_for_file(&path_to_rel_string(&path));
-                let snippets = extract_snippets(&content);
-                let entity_names = extract_entity_names(&content);
+                index.remove_entries_for_file(&path_str);
 
                 for name in entity_names {
                     index.add_entry(
                         &name,
-                        &path_to_rel_string(&path),
+                        &path_str,
                         Layer::Raw,
                         mtime,
                         snippets.clone(),
@@ -567,15 +589,14 @@ impl MemoryVault {
                 for snippet in &snippets {
                     index.add_entry(
                         &snippet.heading,
-                        &path_to_rel_string(&path),
+                        &path_str,
                         Layer::Raw,
                         mtime,
                         snippets.clone(),
                     );
                 }
             }
-
-            self.index.read().await.save().await?;
+            self.index.write().await.save().await?;
         }
         Ok(())
     }
@@ -589,24 +610,26 @@ impl MemoryVault {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            self.index
-                .write()
-                .await
-                .remove_entries_for_file(&path_to_rel_string(&path));
+
             let snippets = extract_snippets(&content);
             let entity_names = extract_entity_names(&content);
+            let path_str = path_to_rel_string(&path);
 
-            for entity_name in entity_names {
-                self.index.write().await.add_entry(
-                    &entity_name,
-                    &path_to_rel_string(&path),
-                    Layer::Wiki,
-                    mtime,
-                    snippets.clone(),
-                );
+            {
+                let mut index = self.index.write().await;
+                index.remove_entries_for_file(&path_str);
+
+                for entity_name in entity_names {
+                    index.add_entry(
+                        &entity_name,
+                        &path_str,
+                        Layer::Wiki,
+                        mtime,
+                        snippets.clone(),
+                    );
+                }
             }
-
-            self.index.read().await.save().await?;
+            self.index.write().await.save().await?;
         }
         Ok(())
     }
@@ -620,24 +643,26 @@ impl MemoryVault {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            self.index
-                .write()
-                .await
-                .remove_entries_for_file(&path_to_rel_string(&path));
+
             let snippets = extract_snippets(&content);
             let entity_names = extract_entity_names(&content);
+            let path_str = path_to_rel_string(&path);
 
-            for entity_name in entity_names {
-                self.index.write().await.add_entry(
-                    &entity_name,
-                    &path_to_rel_string(&path),
-                    Layer::Wiki,
-                    mtime,
-                    snippets.clone(),
-                );
+            {
+                let mut index = self.index.write().await;
+                index.remove_entries_for_file(&path_str);
+
+                for entity_name in entity_names {
+                    index.add_entry(
+                        &entity_name,
+                        &path_str,
+                        Layer::Wiki,
+                        mtime,
+                        snippets.clone(),
+                    );
+                }
             }
-
-            self.index.read().await.save().await?;
+            self.index.write().await.save().await?;
         }
         Ok(())
     }
@@ -655,24 +680,26 @@ impl MemoryVault {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            self.index
-                .write()
-                .await
-                .remove_entries_for_file(&path_to_rel_string(&path));
+
             let snippets = extract_snippets(&content);
             let entity_names = extract_entity_names(&content);
+            let path_str = path_to_rel_string(&path);
 
-            for entity_name in entity_names {
-                self.index.write().await.add_entry(
-                    &entity_name,
-                    &path_to_rel_string(&path),
-                    Layer::Axiom,
-                    mtime,
-                    snippets.clone(),
-                );
+            {
+                let mut index = self.index.write().await;
+                index.remove_entries_for_file(&path_str);
+
+                for entity_name in entity_names {
+                    index.add_entry(
+                        &entity_name,
+                        &path_str,
+                        Layer::Axiom,
+                        mtime,
+                        snippets.clone(),
+                    );
+                }
             }
-
-            self.index.read().await.save().await?;
+            self.index.write().await.save().await?;
         }
         Ok(())
     }
@@ -691,14 +718,13 @@ impl MemoryVault {
         let validator = LinkValidator::new(entity_names, event_names, axiom_names);
         let pending_links = validator.validate(&links);
 
-        for link in pending_links {
-            self.conflict
-                .write()
-                .await
-                .add_pending_link(from_file, &link.original);
+        {
+            let mut conflict = self.conflict.write().await;
+            for link in pending_links {
+                conflict.add_pending_link(from_file, &link.original);
+            }
         }
-
-        self.conflict.read().await.save().await?;
+        self.conflict.write().await.save().await?;
         Ok(())
     }
 
@@ -811,8 +837,17 @@ pub struct CandidateInfo {
 
 fn resolve_root_dir(config_dir: &str) -> PathBuf {
     if config_dir.starts_with("~") {
-        let home_dir = dirs::home_dir().expect("Unable to get home directory");
-        PathBuf::from(config_dir.replace("~", home_dir.to_str().unwrap()))
+        if let Some(home_dir) = dirs::home_dir() {
+            if let Some(home_str) = home_dir.to_str() {
+                PathBuf::from(config_dir.replace("~", home_str))
+            } else {
+                tracing::warn!("无法将主目录转换为字符串，使用当前目录");
+                PathBuf::from(config_dir.replace("~", "."))
+            }
+        } else {
+            tracing::warn!("无法获取用户主目录，使用当前目录");
+            PathBuf::from(config_dir.replace("~", "."))
+        }
     } else {
         PathBuf::from(config_dir)
     }
@@ -849,7 +884,8 @@ fn extract_snippets(content: &str) -> Vec<crate::schema::Snippet> {
             if !current_heading.is_empty() && !current_content.is_empty() {
                 let hash = crate::schema::compute_snippet_hash(&current_heading, &current_content);
                 let preview = if current_content.len() > 100 {
-                    format!("{}...", &current_content[..100])
+                    let end = current_content.floor_char_boundary(100);
+                    format!("{}...", &current_content[..end])
                 } else {
                     current_content.clone()
                 };
@@ -873,7 +909,8 @@ fn extract_snippets(content: &str) -> Vec<crate::schema::Snippet> {
     if !current_heading.is_empty() && !current_content.is_empty() {
         let hash = crate::schema::compute_snippet_hash(&current_heading, &current_content);
         let preview = if current_content.len() > 100 {
-            format!("{}...", &current_content[..100])
+            let end = current_content.floor_char_boundary(100);
+            format!("{}...", &current_content[..end])
         } else {
             current_content.clone()
         };
@@ -887,12 +924,17 @@ fn extract_snippets(content: &str) -> Vec<crate::schema::Snippet> {
     snippets
 }
 
+use std::sync::LazyLock;
+use regex::Regex;
+
+static ENTITY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[\[([^\]]+)\]\]").expect("Failed to compile entity regex")
+});
+
 fn extract_entity_names(content: &str) -> HashSet<String> {
-    use regex::Regex;
-    let re = Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
     let mut names = HashSet::new();
 
-    for cap in re.captures_iter(content) {
+    for cap in ENTITY_REGEX.captures_iter(content) {
         let content = &cap[1];
         if !content.ends_with('?') {
             let name = if content.starts_with("Event:") {

@@ -25,7 +25,16 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     let mut app = App::new();
 
     // 创建会话（需要异步调用）
-    let session_id = api.create_session().await;
+    let session_id = match api.create_session().await {
+        Ok(sid) => sid,
+        Err(e) => {
+            eprintln!("创建会话失败: {:?}", e);
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("创建会话失败: {:?}", e),
+            )));
+        }
+    };
     app.session_id = Some(session_id.clone());
     app.status_message = format!("会话已创建: {}", &session_id[..8]);
 
@@ -45,10 +54,8 @@ pub async fn run_tui(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         app.tasks = tasks;
     }
 
-    // 加载通知历史
-    if let Ok(notifs) = api.get_session_notifications(&session_id).await {
-        app.notifications_history = notifs;
-    }
+    // 通知历史不再持久化，初始化为空（通过消息总线订阅实时通知）
+    // get_session_notifications 已弃用，始终返回错误
 
     let events = EventHandler::new(250);
 

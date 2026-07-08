@@ -1,14 +1,6 @@
-use crate::axiom::AxiomLayer;
-use crate::conflict::ConflictManager;
-use crate::schema::{
-    AxiomCategory, AxiomFrontmatter, AxiomStatus, CandidateStatus, ConflictType, ConflictValue,
-    Contradiction, Layer, WikiEntityCategory, WikiEntityFrontmatter, WikiEntityStatus,
-};
-use crate::vault::{MemoryVault, PromoteTrigger, RecallResult};
-use chrono::{Date, DateTime, Utc};
-use parking_lot::RwLock;
-use serde_json;
-use std::collections::HashMap;
+use crate::schema::{AxiomCategory, ConflictValue, Layer, WikiEntityCategory};
+use crate::vault::{MemoryVault, PromoteTrigger};
+use chrono::Utc;
 use std::sync::Arc;
 
 pub struct PromoteEngine {

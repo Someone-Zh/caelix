@@ -154,6 +154,12 @@ impl AgentRunManagerTrait for AgentRunManager {
     async fn stop_agent(&self, session_id: &str) -> bool {
         self.stop(session_id).await
     }
+
+    fn get_cancel_token(&self, session_id: &str) -> Option<caelix_api::cancel::CancellationToken> {
+        self.runs
+            .get(session_id)
+            .map(|entry| entry.value().cancel_token.child_token())
+    }
 }
 
 /// RAII 守卫：spawn 的任务结束时（无论正常返回、panic 还是被 abort）

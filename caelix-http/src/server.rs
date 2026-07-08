@@ -17,7 +17,7 @@ pub async fn start_http_server(
     let app = create_router(api);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    println!("🚀 HTTP Server starting on http://{}", addr);
+    tracing::info!("HTTP Server starting on http://{}", addr);
 
     axum::serve(
         tokio::net::TcpListener::bind(addr).await?,
@@ -58,8 +58,6 @@ fn create_router(api: Arc<CaelixApiImpl>) -> Router {
         // 提供者管理
         .route("/api/providers", get(get_providers))
         .route("/api/providers/{name}/models", get(get_provider_models))
-        // 流式聊天
-        .route("/api/chat/stream", post(chat_stream))
         // 添加 CORS 支持
         .layer(CorsLayer::permissive())
         .with_state(api)

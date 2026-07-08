@@ -1,4 +1,10 @@
 use std::collections::HashSet;
+use std::sync::LazyLock;
+use regex::Regex;
+
+static LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[\[([^\]]+)\]\]").expect("Failed to compile link regex")
+});
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkType {
@@ -17,9 +23,8 @@ pub struct Link {
 impl Link {
     pub fn parse(text: &str) -> Vec<Link> {
         let mut links = Vec::new();
-        let re = regex::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
 
-        for cap in re.captures_iter(text) {
+        for cap in LINK_REGEX.captures_iter(text) {
             let content = cap[1].to_string();
             let original = format!("[[{}]]", content);
 
@@ -130,8 +135,7 @@ impl LinkValidator {
     }
 
     pub fn replace_entity_links(text: &str, old_name: &str, new_name: &str) -> String {
-        let re = regex::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-        re.replace_all(text, |caps: &regex::Captures| {
+        LINK_REGEX.replace_all(text, |caps: &regex::Captures| {
             let content = &caps[1];
             if content == old_name {
                 format!("[[{}]]", new_name)

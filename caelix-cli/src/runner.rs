@@ -110,6 +110,11 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 
     let args = CliArgs::parse_from(cli_args);
 
+    // 获取当前工作目录，用于加载项目级配置（skills/commands/agents）和变量替换的 space
+    let work_dir = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()));
+
     println!("🚀 Caelix CLI 模式");
     println!("==================");
 
@@ -118,16 +123,16 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
         println!("✅ 使用指定会话: {}", sid);
         sid
     } else {
-        let new_session = api.create_session().await;
+        let new_session = api.create_session().await?;
         println!("✅ 创建新会话: {}", new_session);
         new_session
     };
 
     // 如果指定了session，先确保会话存在（不存在则创建），然后获取并展示历史对话
     // 先检查会话是否存在，不存在则创建
-    if !api.session_exists(&session_id).await {
+    if !api.session_exists(&session_id).await? {
         println!("ℹ️  会话 {} 不存在，正在创建...", session_id);
-        api.create_session_with_id(session_id.clone()).await;
+        api.create_session_with_id(session_id.clone()).await?;
     }
 
     match api.get_session_messages(&session_id).await {
@@ -185,8 +190,8 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
     };
 
     // 显示配置信息
-    let default_provider = api.get_default_provider();
-    let default_model = api.get_default_model();
+    let default_provider = api.get_default_provider().unwrap_or_default();
+    let default_model = api.get_default_model().unwrap_or_default();
 
     let provider_specified = args.provider.is_some();
     let model_specified = args.model.is_some();
@@ -224,6 +229,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             provider: Some(provider.clone()),
             model: Some(model.clone()),
             agent: selected_agent.clone(),
+            work_dir: work_dir.clone(),
         };
 
         // 使用新的异步接口
@@ -297,7 +303,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
 
                                             // 等待消息持久化完成
                                             api.session_manager()
-                                                .flush_session(&result.session_id)
+                                                .wait_for_session_persistence(&result.session_id)
                                                 .await;
 
                                             break;
@@ -452,6 +458,7 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             provider: Some(provider.clone()),
             model: Some(model.clone()),
             agent: selected_agent.clone(),
+            work_dir: work_dir.clone(),
         };
 
         // 使用新的异步接口

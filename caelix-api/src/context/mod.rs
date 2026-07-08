@@ -147,6 +147,12 @@ pub trait AgentRunManagerTrait: Send + Sync {
     ///
     /// 返回 true 表示成功找到并触发停止，false 表示该 session 没有正在运行的 agent
     async fn stop_agent(&self, session_id: &str) -> bool;
+
+    /// 获取指定 session 当前运行的取消令牌（子令牌）
+    ///
+    /// 若 session 当前无运行中的 Agent，返回 None。
+    /// 返回的是子令牌，父令牌取消会级联到子令牌；子令牌取消不影响父令牌。
+    fn get_cancel_token(&self, session_id: &str) -> Option<crate::cancel::CancellationToken>;
 }
 
 // ==================== ContextProvider Trait ====================

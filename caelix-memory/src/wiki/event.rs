@@ -1,9 +1,8 @@
 use crate::schema::{WikiEventFrontmatter, WikiEventStatus};
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_yaml;
 use std::path::{Path, PathBuf};
-use tokio::fs::{self, File};
-use tokio::io::AsyncWriteExt;
+use tokio::fs;
 
 #[derive(Debug, Clone)]
 pub struct WikiEvent {

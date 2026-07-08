@@ -16,7 +16,8 @@ use tokio::task::JoinHandle;
 type TaskHandle = (
     TaskMeta,
     Option<oneshot::Sender<Result<String, AgentError>>>,
-    Arc<RuntimeContext>, // 新增：保存任务注册时的 RuntimeContext
+    Option<oneshot::Receiver<Result<String, AgentError>>>,
+    Arc<RuntimeContext>,
     Option<JoinHandle<()>>,
 );
 
@@ -74,7 +75,7 @@ impl TaskManager {
 
                     // 检查任务是否还在注册表中
                     if let Some(mut handle) = registry_clone.get_mut(&task_id) {
-                        let (meta, _opt_tx, ctx, _) = handle.value_mut();
+                        let (meta, _opt_tx, _opt_rx, ctx, _) = handle.value_mut();
                         // 一次性更新所有字段
                         meta.status = TaskStatus::Running;
                         meta.updated_at = Utc::now();
@@ -124,13 +125,22 @@ impl TaskManager {
             // 重置状态
             meta.status = TaskStatus::Scheduled;
 
-            // 重新注册 (修复：去掉未使用的 _rx)
-            let (tx, _) = oneshot::channel();
+            let (tx, rx) = oneshot::channel();
             let task_id = meta.task_id.clone();
-            let ctx = RuntimeContext::current();
+            let ctx = RuntimeContext::try_current().unwrap_or_else(|| {
+                Arc::new(RuntimeContext::new(
+                    Some(meta.session_id.clone()),
+                    None,
+                    std::path::PathBuf::new(),
+                    "unknown".to_string(),
+                    "unknown".to_string(),
+                    false,
+                    caelix_api::cancel::CancellationToken::new(),
+                ))
+            });
 
             self.registry
-                .insert(task_id, (meta.clone(), Some(tx), ctx.clone(), None));
+                .insert(task_id, (meta.clone(), Some(tx), Some(rx), ctx, None));
 
             // 重新调度
             self.scheduler.schedule(meta).await;
@@ -159,8 +169,7 @@ impl TaskManager {
             task_payload,
         );
 
-        // 修复：去掉未使用的 rx
-        let (tx, _) = oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         let task_id = meta.task_id.clone();
         // 1. 存入注册表
         match kind {
@@ -187,12 +196,12 @@ impl TaskManager {
                 });
 
                 self.registry
-                    .insert(task_id.clone(), (meta, Some(tx), ctx.clone(), Some(handle)));
+                    .insert(task_id.clone(), (meta, Some(tx), Some(rx), ctx.clone(), Some(handle)));
             }
             TaskKind::Once(_) | TaskKind::Cron(_) => {
                 meta.status = TaskStatus::Scheduled;
                 self.registry
-                    .insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
+                    .insert(task_id.clone(), (meta.clone(), Some(tx), Some(rx), ctx.clone(), None));
                 self.scheduler.schedule(meta.clone()).await;
                 let _ = self.persistence.save(&meta).await;
             }
@@ -200,7 +209,7 @@ impl TaskManager {
                 // Todo 任务不执行，只保存元数据
                 meta.status = TaskStatus::Pending;
                 self.registry
-                    .insert(task_id.clone(), (meta.clone(), Some(tx), ctx.clone(), None));
+                    .insert(task_id.clone(), (meta.clone(), Some(tx), Some(rx), ctx.clone(), None));
                 let _ = self.persistence.save(&meta).await;
             }
         }
@@ -210,7 +219,7 @@ impl TaskManager {
 
     /// 取消任务
     pub async fn cancel(&self, task_id: TaskId) -> bool {
-        if let Some((mut meta, _, _, opt_handle)) = self.registry.remove(&task_id).map(|(_, v)| v) {
+        if let Some((mut meta, _, _, _, opt_handle)) = self.registry.remove(&task_id).map(|(_, v)| v) {
             // 尝试 Abort
             if let Some(handle) = opt_handle {
                 handle.abort();
@@ -222,7 +231,10 @@ impl TaskManager {
 
             // 清理
             self.scheduler.cancel(task_id.clone()).await;
-            let _ = self.persistence.delete(&task_id.to_string()).await;
+            let _ = self
+                .persistence
+                .delete(&meta.session_id, &task_id.to_string())
+                .await;
             true
         } else {
             false
@@ -236,26 +248,41 @@ impl TaskManager {
 
     /// 等待任务完成
     pub async fn wait(&self, task_id: TaskId) -> Option<Result<String, AgentError>> {
-        // 简化版自旋等待
-        loop {
-            if let Some(meta) = self.get_status(&task_id).await {
-                match meta.status {
-                    TaskStatus::Completed => {
-                        // 从注册表中获取结果
-                        if let Some(entry) = self.registry.get(&task_id) {
-                            let (_, _opt_tx, _, _) = entry.value();
-                            // 注意：tx 已经被 take 了，这里无法直接获取结果
-                            // 需要从 TaskMeta 中读取 result 字段（后续添加）
-                            return Some(Ok(String::new())); // 临时返回
-                        }
-                        return Some(Ok(String::new()));
-                    }
-                    TaskStatus::Failed(e) => return Some(Err(AgentError::TaskError(e))),
-                    TaskStatus::Cancelled => return None,
-                    _ => tokio::time::sleep(tokio::time::Duration::from_millis(100)).await,
+        // 先检查任务是否已经完成
+        if let Some(meta) = self.get_status(&task_id).await {
+            match &meta.status {
+                TaskStatus::Completed => {
+                    return Some(Ok(meta.result.unwrap_or_default()));
                 }
-            } else {
-                return None;
+                TaskStatus::Failed(e) => {
+                    return Some(Err(AgentError::TaskError(e.clone())));
+                }
+                TaskStatus::Cancelled => return None,
+                _ => {}
+            }
+        } else {
+            return None;
+        }
+
+        // 任务还在运行中，取出 receiver 等待
+        let rx = self.registry.get_mut(&task_id).and_then(|mut entry| {
+            let (_, _, opt_rx, _, _) = entry.value_mut();
+            opt_rx.take()
+        })?;
+
+        match rx.await {
+            Ok(result) => Some(result),
+            Err(_) => {
+                // sender 被丢弃，从注册表获取最终状态
+                if let Some(meta) = self.get_status(&task_id).await {
+                    match &meta.status {
+                        TaskStatus::Completed => Some(Ok(meta.result.unwrap_or_default())),
+                        TaskStatus::Failed(e) => Some(Err(AgentError::TaskError(e.clone()))),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             }
         }
     }
@@ -265,7 +292,7 @@ impl TaskManager {
         self.registry
             .iter()
             .filter_map(|entry| {
-                let (meta, _, _, _) = entry.value();
+                let (meta, _, _, _, _) = entry.value();
                 match filter_session {
                     Some(sess_id) if meta.session_id != sess_id => None,
                     _ => Some(meta.clone()),
@@ -277,7 +304,7 @@ impl TaskManager {
     /// 更新任务进度
     pub async fn update_progress(&self, task_id: TaskId, progress: f32) -> bool {
         if let Some(mut entry) = self.registry.get_mut(&task_id) {
-            let (meta, _, _, _) = entry.value_mut();
+            let (meta, _, _, _, _) = entry.value_mut();
             // 一次性更新所有字段
             meta.progress = Some(progress.clamp(0.0, 1.0));
             meta.updated_at = Utc::now();
@@ -298,8 +325,13 @@ impl TaskManager {
         new_status: TaskStatus,
         result: Option<String>,
     ) -> bool {
-        if let Some(mut entry) = self.registry.get_mut(&task_id) {
-            let (meta, _, _, _) = entry.value_mut();
+        // 先在锁内更新状态并克隆
+        let meta_clone = {
+            let mut entry = match self.registry.get_mut(&task_id) {
+                Some(e) => e,
+                None => return false,
+            };
+            let (meta, _, _, _, _) = entry.value_mut();
 
             // 只允许更新 Todo 类型的任务
             if meta.kind != TaskKind::Todo {
@@ -310,22 +342,21 @@ impl TaskManager {
             meta.status = new_status.clone();
             meta.result = result;
             meta.updated_at = Utc::now();
+            meta.clone()
+        };
 
-            // 持久化更新
-            let _ = self.persistence.save(meta).await;
+        // 持久化更新（在锁外执行）
+        let _ = self.persistence.save(&meta_clone).await;
 
-            // 发送状态变更通知
-            let notif_type = match new_status {
-                TaskStatus::Completed => TaskNotificationType::Completed,
-                TaskStatus::Failed(_) => TaskNotificationType::Failed,
-                _ => return true, // 其他状态不发送通知
-            };
-            Self::send_task_notification_static(meta, notif_type, &self.bus).await;
+        // 发送状态变更通知（在锁外执行）
+        let notif_type = match new_status {
+            TaskStatus::Completed => TaskNotificationType::Completed,
+            TaskStatus::Failed(_) => TaskNotificationType::Failed,
+            _ => return true, // 其他状态不发送通知
+        };
+        Self::send_task_notification_static(&meta_clone, notif_type, &self.bus).await;
 
-            true
-        } else {
-            false
-        }
+        true
     }
 
     // ==================== 内部辅助函数 ====================
@@ -361,22 +392,26 @@ impl TaskManager {
         // 先克隆结果用于通知判断
         let is_success = result.is_ok();
 
-        // 更新注册表
-        if let Some(mut entry) = registry.get_mut(&task_id) {
-            let (m, opt_tx, _, _) = entry.value_mut();
-            // 一次性更新所有字段
+        // 更新注册表（先更新内存状态，再释放锁后做持久化和通知）
+        let tx_to_send = {
+            let mut entry = match registry.get_mut(&task_id) {
+                Some(e) => e,
+                None => return,
+            };
+            let (m, opt_tx, _opt_rx, _ctx, _handle) = entry.value_mut();
             m.status = final_status.clone();
             m.result = result_str.clone();
             m.updated_at = Utc::now();
             meta = m.clone();
+            opt_tx.take()
+        };
 
-            // 持久化状态更新（包含结果）
-            let _ = persistence.save(&meta).await;
+        // 持久化状态更新（包含结果）- 在锁外执行
+        let _ = persistence.save(&meta).await;
 
-            // 通知等待者
-            if let Some(tx) = opt_tx.take() {
-                let _ = tx.send(result);
-            }
+        // 通知等待者
+        if let Some(tx) = tx_to_send {
+            let _ = tx.send(result);
         }
 
         // 发送完成/失败通知
@@ -392,14 +427,18 @@ impl TaskManager {
             TaskKind::Async | TaskKind::Once(_) | TaskKind::Todo => {
                 // 执行完毕，移除（Todo 任务不会执行到这里，但需要覆盖所有情况）
                 registry.remove(&task_id);
-                let _ = persistence.delete(&task_id.to_string()).await;
+                let _ = persistence
+                    .delete(&meta.session_id, &task_id.to_string())
+                    .await;
             }
             TaskKind::Cron(_) => {
                 // 重新调度下一次
                 if let Some(_next_run) = TaskScheduler::calculate_next_run(&meta.kind) {
                     let mut new_meta = meta.clone();
                     new_meta.status = TaskStatus::Scheduled;
-                    scheduler.schedule(new_meta).await;
+                    new_meta.updated_at = Utc::now();
+                    scheduler.schedule(new_meta.clone()).await;
+                    let _ = persistence.save(&new_meta).await;
                 }
             }
         }

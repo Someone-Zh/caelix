@@ -1,8 +1,7 @@
 use crate::schema::{AliasEntry, AliasTable};
 use serde_json;
 use std::path::{Path, PathBuf};
-use tokio::fs::{self, File};
-use tokio::io::AsyncWriteExt;
+use tokio::fs;
 
 #[derive(Debug)]
 pub struct AliasManager {

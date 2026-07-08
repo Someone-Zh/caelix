@@ -164,7 +164,11 @@ impl Tool for StringReplaceTool {
                 // 使用正则表达式替换
                 #[cfg(feature = "regex")]
                 {
-                    match regex::Regex::new(old_text) {
+                    match regex::RegexBuilder::new(old_text)
+                        .size_limit(1_000_000)
+                        .dfa_size_limit(1_000_000)
+                        .build()
+                    {
                         Ok(re) => {
                             let matches: Vec<_> = re.find_iter(&current_content).collect();
                             let count = matches.len();
@@ -211,12 +215,14 @@ impl Tool for StringReplaceTool {
                 "Replacement #{}: '{}' -> '{}' ({} occurrences, regex: {})",
                 idx + 1,
                 if old_text.len() > 50 {
-                    &old_text[..50]
+                    let end = old_text.floor_char_boundary(50);
+                    &old_text[..end]
                 } else {
                     old_text
                 },
                 if new_text.len() > 50 {
-                    &new_text[..50]
+                    let end = new_text.floor_char_boundary(50);
+                    &new_text[..end]
                 } else {
                     new_text
                 },

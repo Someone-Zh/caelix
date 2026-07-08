@@ -100,14 +100,26 @@ impl CommandHandler {
 
                 // 在后台异步创建会话配置
                 tokio::spawn(async move {
-                    let new_session_id = api_clone.create_session().await;
-                    if let Some(tx) = tx {
-                        let _ = tx
-                            .send(super::state::AppMessage::UpdateStatus(format!(
-                                "新会话已创建: {}",
-                                &new_session_id[..8]
-                            )))
-                            .await;
+                    match api_clone.create_session().await {
+                        Ok(new_session_id) => {
+                            if let Some(tx) = tx {
+                                let _ = tx
+                                    .send(super::state::AppMessage::UpdateStatus(format!(
+                                        "新会话已创建: {}",
+                                        &new_session_id[..8]
+                                    )))
+                                    .await;
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(tx) = tx {
+                                let _ = tx
+                                    .send(super::state::AppMessage::UpdateStatus(format!(
+                                        "创建会话失败: {e}"
+                                    )))
+                                    .await;
+                            }
+                        }
                     }
                 });
             }
