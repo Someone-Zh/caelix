@@ -1,6 +1,6 @@
+use crate::vault::MemoryVault;
 use async_trait::async_trait;
 use caelix_api::tool::{Tool, ToolResult};
-use crate::vault::MemoryVault;
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 
@@ -76,12 +76,20 @@ impl MemoryFlagTool {
         let conflict = conflict_mgr.read().await;
 
         let conflicts: Vec<crate::schema::Contradiction> = match filter {
-            "all" | "conflicts" => conflict.get_pending_conflicts().into_iter().cloned().collect(),
+            "all" | "conflicts" => conflict
+                .get_pending_conflicts()
+                .into_iter()
+                .cloned()
+                .collect(),
             _ => Vec::new(),
         };
 
         let candidates: Vec<crate::schema::AxiomCandidate> = match filter {
-            "all" | "candidates" => conflict.get_pending_candidates().into_iter().cloned().collect(),
+            "all" | "candidates" => conflict
+                .get_pending_candidates()
+                .into_iter()
+                .cloned()
+                .collect(),
             _ => Vec::new(),
         };
 
@@ -105,14 +113,20 @@ impl MemoryFlagTool {
                 }
                 output.push_str("  Values:\n");
                 for v in &c.values {
-                    output.push_str(&format!("    - {} (source: {}, confidence: {:.2})\n", v.value, v.source, v.confidence));
+                    output.push_str(&format!(
+                        "    - {} (source: {}, confidence: {:.2})\n",
+                        v.value, v.source, v.confidence
+                    ));
                 }
                 output.push('\n');
             }
         }
 
         if !candidates.is_empty() {
-            output.push_str(&format!("Pending Axiom Candidates ({}):\n", candidates.len()));
+            output.push_str(&format!(
+                "Pending Axiom Candidates ({}):\n",
+                candidates.len()
+            ));
             for c in candidates {
                 output.push_str(&format!("  ID: {}\n", c.id));
                 output.push_str(&format!("  Confidence: {:.2}\n", c.confidence));

@@ -5,7 +5,9 @@
 use crate::agent::AgentSpec;
 use crate::commands::Command;
 use crate::hooks::HookRegistry;
-use crate::managers::{AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager};
+use crate::managers::{
+    AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
+};
 use crate::message::{MessageBusTrait, SessionManagerTrait};
 use crate::plugins::PluginManager;
 use crate::provider::{SessionUsageView, UsageRecord};

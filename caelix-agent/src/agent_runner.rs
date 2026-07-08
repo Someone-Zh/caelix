@@ -53,7 +53,10 @@ pub async fn run_agent(
         };
 
     let fut = async move {
-        tracing::info!(agent = agent_name.as_deref().unwrap_or(""), "run_agent start");
+        tracing::info!(
+            agent = agent_name.as_deref().unwrap_or(""),
+            "run_agent start"
+        );
 
         // 从 ContextProvider 中获取 message_bus（可选；无则静默跳过）
         let maybe_bus = caelix_api::context::try_caelix_context();

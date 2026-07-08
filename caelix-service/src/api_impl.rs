@@ -2,13 +2,13 @@ use crate::api_trait::CaelixApi;
 use crate::types::{ChatAsyncResult, ChatRequest, ProviderInfo, SessionSummary};
 use crate::variable_replacer::VariableReplacer;
 use async_trait::async_trait;
+use caelix_agent::loop_agent::LoopAgent;
 use caelix_api::agent::{Agent, AgentOutputChunk};
 use caelix_api::context::{ContextFutureExt, ContextProvider};
 use caelix_api::error::ApiError;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage};
-use caelix_api::provider::{ChatMessage, LlmConfig, SessionUsageView, GlobalUsageView};
+use caelix_api::provider::{ChatMessage, GlobalUsageView, LlmConfig, SessionUsageView};
 use caelix_api::task::TaskMeta;
-use caelix_agent::loop_agent::LoopAgent;
 use caelix_runtime::context::CaelixContext;
 use futures::Stream;
 use futures::StreamExt;
@@ -388,7 +388,10 @@ impl CaelixApi for CaelixApiImpl {
             .join("sessions")
             .join(request_clone.session_id.clone());
         let overlay = ctx_clone.config_overlay();
-        if let Err(e) = overlay.ensure_project_config_loaded(&work_dir_for_config).await {
+        if let Err(e) = overlay
+            .ensure_project_config_loaded(&work_dir_for_config)
+            .await
+        {
             tracing::warn!("Failed to load project config: {}", e);
         }
 
@@ -396,7 +399,7 @@ impl CaelixApi for CaelixApiImpl {
         // 然后包装为 LoopAgent 并缓存
         let agent_name = request_clone.agent.as_deref().unwrap_or("default");
         let agent_spec = overlay
-            .get_agent_spec(agent_name)
+            .get_agent_spec_for_work_dir(&work_dir_for_config, agent_name)
             .await
             .ok_or_else(|| ApiError::agent_not_found(agent_name))?;
 
@@ -456,10 +459,7 @@ impl CaelixApi for CaelixApiImpl {
         let arm_for_spawn = agent_run_manager.clone();
         let cancel_token = caelix_api::cancel::CancellationToken::new();
         let cancel_token_clone = cancel_token.clone();
-        let run_id = agent_run_manager.register(
-            request_clone.session_id.clone(),
-            cancel_token,
-        );
+        let run_id = agent_run_manager.register(request_clone.session_id.clone(), cancel_token);
 
         let join_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             // RunGuard 确保任务退出时（正常、panic、abort）从 AgentRunManager 注销
@@ -504,13 +504,13 @@ impl CaelixApi for CaelixApiImpl {
 
                 // 如果带用户消息则添加
                 if let Some(user_message) = request_clone.message.clone() {
-                let space = std::env::current_dir()
-                    .ok()
-                    .map(|path| path.to_string_lossy().into_owned());
-                let replacer = VariableReplacer::new(ctx_clone.variable_manager.clone());
-                let user_message = replacer
-                    .replace_async(&user_message, space.as_deref())
-                    .await;
+                    let space = std::env::current_dir()
+                        .ok()
+                        .map(|path| path.to_string_lossy().into_owned());
+                    let replacer = VariableReplacer::new(ctx_clone.variable_manager.clone());
+                    let user_message = replacer
+                        .replace_async(&user_message, space.as_deref())
+                        .await;
 
                     messages.push(ChatMessage::user(user_message.clone()));
 
@@ -530,7 +530,8 @@ impl CaelixApi for CaelixApiImpl {
                 }
 
                 // 使用 caelix_agent::run_agent（内部通过 RuntimeContext + ContextProvider 获取 message_bus）
-                let _ = execute_agent_with_messaging(agent_spec, messages, provider, &config).await
+                let _ = execute_agent_with_messaging(agent_spec, messages, provider, &config)
+                    .await
                     .inspect_err(|e| {
                         tracing::error!(
                             session_id = %request_clone.session_id,
@@ -852,7 +853,9 @@ impl CaelixApi for CaelixApiImpl {
             .first()
             .cloned()
             .and_then(|(_name, p)| p.config().ctx_window_tokens);
-        Ok(tracker.snapshot_session(session_id, ctx_window_tokens).await)
+        Ok(tracker
+            .snapshot_session(session_id, ctx_window_tokens)
+            .await)
     }
 
     async fn get_global_usage(&self) -> Result<GlobalUsageView, ApiError> {

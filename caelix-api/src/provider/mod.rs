@@ -135,7 +135,6 @@ impl MessageRole {
             MessageRole::Tool => "tool",
         }
     }
-
 }
 
 impl std::str::FromStr for MessageRole {
@@ -275,6 +274,8 @@ pub struct ProviderConfig {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub models: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
     pub options: serde_json::Value,
     /// 上下文窗口 token 上限（如 128000），用于上下文压缩判断
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,10 +287,14 @@ pub struct ProviderConfig {
 
 impl ProviderConfig {
     pub fn default_model(&self) -> &str {
+        if let Some(model) = &self.default_model {
+            return model.as_str();
+        }
+
         self.models
-            .values()
-            .next()
-            .map(|s| s.as_str())
+            .iter()
+            .min_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key))
+            .map(|(_, model)| model.as_str())
             .unwrap_or("")
     }
 }

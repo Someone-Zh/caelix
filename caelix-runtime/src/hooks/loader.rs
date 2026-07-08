@@ -31,11 +31,10 @@ impl HookLoader {
         let tool_result_check_hook = Arc::new(ToolResultSizeCheckHook::new());
         hook_registry.register_hook(tool_result_check_hook).await;
 
-        println!(
-            "✅ 内置钩子加载完成，共 {} 个",
-            hook_registry.hook_count().await
+        tracing::info!(
+            hook_count = hook_registry.hook_count().await,
+            "Built-in hooks loaded"
         );
-        tracing::info!(hook_count = hook_registry.hook_count().await, "Built-in hooks loaded");
         Ok(())
     }
 }

@@ -1,11 +1,11 @@
-pub mod write;
-pub mod recall;
-pub mod promote;
-pub mod rename;
 pub mod flag;
+pub mod promote;
+pub mod recall;
+pub mod rename;
+pub mod write;
 
-pub use write::MemoryWriteTool;
-pub use recall::MemoryRecallTool;
-pub use promote::MemoryPromoteTool;
-pub use rename::MemoryRenameTool;
 pub use flag::MemoryFlagTool;
+pub use promote::MemoryPromoteTool;
+pub use recall::MemoryRecallTool;
+pub use rename::MemoryRenameTool;
+pub use write::MemoryWriteTool;

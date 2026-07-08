@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use caelix_api::agent::AgentSpec;
 use caelix_api::commands::Command;
 use caelix_api::context::{
-    AgentRunManagerTrait, ConfigOverlayTrait, ContextProvider, EnvConfigTrait, SecurityCheckerTrait,
-    UsageTrackerTrait, set_caelix_context,
+    AgentRunManagerTrait, ConfigOverlayTrait, ContextProvider, EnvConfigTrait,
+    SecurityCheckerTrait, UsageTrackerTrait, set_caelix_context,
 };
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
@@ -12,17 +12,18 @@ use caelix_api::message::{MessageBusTrait, SessionManagerTrait};
 use caelix_api::plugins::{PluginManager, PluginRegistry};
 use caelix_api::task::TaskManagerTrait;
 use caelix_api::variables::VariableManager;
-use caelix_config::{EnvConfig, SKILLS_DIR, COMMANDS_DIR, AGENTS_DIR};
-use caelix_config::skills_loader::load_skills_from_directory;
-use caelix_config::commands_loader::load_commands_from_directory;
 use caelix_config::agents_loader::load_agents_from_directory;
+use caelix_config::commands_loader::load_commands_from_directory;
+use caelix_config::skills_loader::load_skills_from_directory;
+use caelix_config::{AGENTS_DIR, COMMANDS_DIR, EnvConfig, SKILLS_DIR};
 use caelix_message::{FileStorage, MessageBus, SessionManager};
 use caelix_security::SecurityChecker;
 use caelix_task::{FilePersistence, RunnableFactory, TaskManager};
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{AgentRunManager, HookRegistry, UsageTracker};
 
@@ -45,6 +46,8 @@ pub struct ConfigOverlay {
     global_tool_manager: Arc<ToolManager>,
     /// 多工作目录缓存：work_dir → 项目配置
     project_configs: Arc<RwLock<HashMap<PathBuf, ProjectConfig>>>,
+    /// 每个工作目录独立的加载锁，避免并发首请求重复加载同一目录
+    load_locks: Arc<DashMap<PathBuf, Arc<Mutex<()>>>>,
 }
 
 impl ConfigOverlay {
@@ -60,6 +63,7 @@ impl ConfigOverlay {
             global_agent_manager: agent_manager,
             global_tool_manager: tool_manager,
             project_configs: Arc::new(RwLock::new(HashMap::new())),
+            load_locks: Arc::new(DashMap::new()),
         }
     }
 
@@ -69,6 +73,22 @@ impl ConfigOverlay {
         {
             let configs = self.project_configs.read().await;
             if configs.contains_key(work_dir) {
+                return;
+            }
+        }
+
+        let work_dir_buf = work_dir.to_path_buf();
+        let load_lock = self
+            .load_locks
+            .entry(work_dir_buf.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        let _load_guard = load_lock.lock().await;
+
+        {
+            let configs = self.project_configs.read().await;
+            if configs.contains_key(work_dir) {
+                self.load_locks.remove(&work_dir_buf);
                 return;
             }
         }
@@ -84,6 +104,7 @@ impl ConfigOverlay {
                 .write()
                 .await
                 .insert(work_dir.to_path_buf(), ProjectConfig::default());
+            self.load_locks.remove(&work_dir_buf);
             return;
         }
 
@@ -94,10 +115,14 @@ impl ConfigOverlay {
             match load_skills_from_directory(skills_path.to_str().unwrap_or("")).await {
                 Ok(skills) => {
                     for skill in skills {
-                        config.skills.insert(skill.full_name.clone(), Arc::new(skill));
+                        config
+                            .skills
+                            .insert(skill.full_name.clone(), Arc::new(skill));
                     }
                 }
-                Err(e) => tracing::warn!(path = %skills_path.display(), error = %e, "Failed to load project skills"),
+                Err(e) => {
+                    tracing::warn!(path = %skills_path.display(), error = %e, "Failed to load project skills")
+                }
             }
         }
 
@@ -105,19 +130,28 @@ impl ConfigOverlay {
         if commands_path.exists() {
             match load_commands_from_directory(commands_path.to_str().unwrap_or("")).await {
                 Ok(commands) => config.commands = commands,
-                Err(e) => tracing::warn!(path = %commands_path.display(), error = %e, "Failed to load project commands"),
+                Err(e) => {
+                    tracing::warn!(path = %commands_path.display(), error = %e, "Failed to load project commands")
+                }
             }
         }
 
         let agents_path = work_dir.join(AGENTS_DIR);
         if agents_path.exists() {
-            match load_agents_from_directory(agents_path.to_str().unwrap_or(""), &self.global_tool_manager).await {
+            match load_agents_from_directory(
+                agents_path.to_str().unwrap_or(""),
+                &self.global_tool_manager,
+            )
+            .await
+            {
                 Ok(agent_specs) => {
                     for spec in agent_specs {
                         config.agents.insert(spec.name.clone(), Arc::new(spec));
                     }
                 }
-                Err(e) => tracing::warn!(path = %agents_path.display(), error = %e, "Failed to load project agents"),
+                Err(e) => {
+                    tracing::warn!(path = %agents_path.display(), error = %e, "Failed to load project agents")
+                }
             }
         }
 
@@ -133,6 +167,7 @@ impl ConfigOverlay {
             .write()
             .await
             .insert(work_dir.to_path_buf(), config);
+        self.load_locks.remove(&work_dir_buf);
     }
 }
 
@@ -155,12 +190,36 @@ impl ConfigOverlayTrait for ConfigOverlay {
         self.global_skill_manager.get(name).await
     }
 
+    async fn get_skill_for_work_dir(&self, work_dir: &Path, name: &str) -> Option<Arc<Skill>> {
+        let configs = self.project_configs.read().await;
+        if let Some(skill) = configs
+            .get(work_dir)
+            .and_then(|config| config.skills.get(name))
+        {
+            return Some(skill.clone());
+        }
+        drop(configs);
+        self.global_skill_manager.get(name).await
+    }
+
     async fn get_command(&self, name: &str) -> Option<Command> {
         let configs = self.project_configs.read().await;
         for config in configs.values() {
             if let Some(cmd) = config.commands.iter().find(|c| c.name == name) {
                 return Some(cmd.clone());
             }
+        }
+        drop(configs);
+        self.global_command_manager.get_by_name(name).await
+    }
+
+    async fn get_command_for_work_dir(&self, work_dir: &Path, name: &str) -> Option<Command> {
+        let configs = self.project_configs.read().await;
+        if let Some(cmd) = configs
+            .get(work_dir)
+            .and_then(|config| config.commands.iter().find(|c| c.name == name))
+        {
+            return Some(cmd.clone());
         }
         drop(configs);
         self.global_command_manager.get_by_name(name).await
@@ -175,6 +234,23 @@ impl ConfigOverlayTrait for ConfigOverlay {
         }
         drop(configs);
         // 全局层：AgentManager 存的是 dyn Agent，取其 spec
+        let agent = self.global_agent_manager.get(name).await?;
+        Some(agent.get_spec())
+    }
+
+    async fn get_agent_spec_for_work_dir(
+        &self,
+        work_dir: &Path,
+        name: &str,
+    ) -> Option<Arc<AgentSpec>> {
+        let configs = self.project_configs.read().await;
+        if let Some(spec) = configs
+            .get(work_dir)
+            .and_then(|config| config.agents.get(name))
+        {
+            return Some(spec.clone());
+        }
+        drop(configs);
         let agent = self.global_agent_manager.get(name).await?;
         Some(agent.get_spec())
     }

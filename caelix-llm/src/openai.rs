@@ -87,9 +87,7 @@ fn parse_usage(json: &Value) -> Option<TokenUsage> {
     let total_tokens = usage["total_tokens"].as_u64().unwrap_or(0) as u32;
 
     // reasoning_tokens：部分模型（Claude/DeepSeek）会在 usage 中给出
-    let reasoning_tokens = usage["reasoning_tokens"]
-        .as_u64()
-        .map(|v| v as u32);
+    let reasoning_tokens = usage["reasoning_tokens"].as_u64().map(|v| v as u32);
 
     // cache_hit_tokens：OpenAI prompt_cache_details 中的 tokens 累积
     let cache_hit_tokens = usage
@@ -102,11 +100,7 @@ fn parse_usage(json: &Value) -> Option<TokenUsage> {
                     total = total.saturating_add(v as u32);
                 }
             }
-            if total == 0 {
-                None
-            } else {
-                Some(total)
-            }
+            if total == 0 { None } else { Some(total) }
         })
         .or_else(|| {
             // 兼容字段名 cache_hit_tokens / cached_tokens
@@ -117,10 +111,14 @@ fn parse_usage(json: &Value) -> Option<TokenUsage> {
         });
 
     // 如果基础字段全为 0 且额外字段也为空，则视为无 usage 信息
-    if prompt_tokens == 0 && completion_tokens == 0 && total_tokens == 0
-        && reasoning_tokens.is_none() && cache_hit_tokens.is_none() {
-            return None;
-        }
+    if prompt_tokens == 0
+        && completion_tokens == 0
+        && total_tokens == 0
+        && reasoning_tokens.is_none()
+        && cache_hit_tokens.is_none()
+    {
+        return None;
+    }
 
     Some(TokenUsage {
         prompt_tokens,
@@ -181,10 +179,7 @@ impl OpenAIProvider {
             temperature: self.config.temperature.unwrap_or(0.0f32),
             tools: Some(to_tools_array(tools)),
             tool_choice: None,
-            max_tokens: self
-                .config
-                .max_output_tokens
-                .or(self.config.max_tokens),
+            max_tokens: self.config.max_output_tokens.or(self.config.max_tokens),
             stream: true,
             stream_options: Some(json!({ "include_usage": true })),
         }

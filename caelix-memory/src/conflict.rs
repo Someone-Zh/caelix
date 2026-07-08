@@ -1,5 +1,6 @@
 use crate::schema::{
-    CandidateStatus, ConflictStatus, ConflictType, Contradiction, Flags, PendingLink, AxiomCandidate, ConflictValue,
+    AxiomCandidate, CandidateStatus, ConflictStatus, ConflictType, ConflictValue, Contradiction,
+    Flags, PendingLink,
 };
 use chrono::{DateTime, Utc};
 use serde_json;
@@ -92,7 +93,12 @@ impl ConflictManager {
         }
     }
 
-    pub fn add_axiom_candidate(&mut self, draft: &str, derived_from: Vec<String>, confidence: f64) -> String {
+    pub fn add_axiom_candidate(
+        &mut self,
+        draft: &str,
+        derived_from: Vec<String>,
+        confidence: f64,
+    ) -> String {
         let id = format!("ac-{}", self.flags.axiom_candidates.len() + 1);
         let candidate = AxiomCandidate {
             id: id.clone(),

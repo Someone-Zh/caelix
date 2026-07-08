@@ -66,15 +66,10 @@ impl DelegateTaskTool {
             .ok_or_else(|| format!("未找到 agent: {}", agent_name))?;
 
         // 2. 获取 Provider
-        let provider_name = RuntimeContext::try_current()
-            .map(|c| c.get_provider().to_string())
-            .unwrap_or_else(|| {
-                panic!(
-                    "[{}:{}] prepare_agent_exec 没有提供提供者",
-                    file!(),
-                    line!(),
-                )
-            });
+        let runtime_ctx = RuntimeContext::try_current().ok_or_else(|| {
+            "prepare_agent_exec 缺少 RuntimeContext，无法确定 provider/model".to_string()
+        })?;
+        let provider_name = runtime_ctx.get_provider().to_string();
 
         let provider_mgr = self.ctx.llm_provider_manager.read().await;
         let all_providers = provider_mgr.get_all_providers();
@@ -85,9 +80,7 @@ impl DelegateTaskTool {
             .ok_or("无可用 LLM Provider")?;
 
         // 3. 获取 Model Config
-        let mut model_name = RuntimeContext::try_current()
-            .map(|c| c.get_model().to_string())
-            .unwrap_or_else(|| provider.config().default_model().to_string());
+        let mut model_name = runtime_ctx.get_model().to_string();
         if model_name.is_empty() {
             model_name = provider.config().default_model().to_string();
         }

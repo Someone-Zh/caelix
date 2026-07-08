@@ -3,7 +3,7 @@ use crate::persistence::TaskPersistence;
 use crate::scheduler::TaskScheduler;
 use crate::types::*;
 use anyhow::Result;
-use caelix_api::context::RuntimeContext;
+use caelix_api::context::{RuntimeContext, spawn_with_runtime_ctx};
 use caelix_api::error::AgentError;
 use caelix_message::bus::MessageBus;
 use caelix_message::task_message::{TaskMessage, TaskMessageType};
@@ -74,7 +74,7 @@ impl TaskManager {
 
                     // 检查任务是否还在注册表中
                     if let Some(mut handle) = registry_clone.get_mut(&task_id) {
-                        let (meta, _opt_tx, _, _) = handle.value_mut();
+                        let (meta, _opt_tx, ctx, _) = handle.value_mut();
                         // 一次性更新所有字段
                         meta.status = TaskStatus::Running;
                         meta.updated_at = Utc::now();
@@ -88,8 +88,9 @@ impl TaskManager {
                             let registry = registry_clone.clone();
                             let scheduler = scheduler_clone.clone();
                             let persistence = persistence_clone.clone(); // 传给执行函数
+                            let ctx = ctx.clone();
 
-                            tokio::spawn(async move {
+                            spawn_with_runtime_ctx(ctx.clone(), async move {
                                 Self::execute_task_inner(
                                     runnable,
                                     meta,
@@ -172,7 +173,8 @@ impl TaskManager {
                 let persistence = self.persistence.clone();
 
                 // 立即 Spawn
-                let handle = tokio::spawn(async move {
+                let ctx_for_task = ctx.clone();
+                let handle = spawn_with_runtime_ctx(ctx_for_task.clone(), async move {
                     Self::execute_task_inner(
                         runnable,
                         meta_clone,

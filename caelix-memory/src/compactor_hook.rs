@@ -1,7 +1,9 @@
-use caelix_api::hooks::{AgentHook, HookCapability, HookScope, PostToolExecContext, PreToolExecContext};
+use crate::vault::{MemoryVault, PromoteTrigger};
+use caelix_api::hooks::{
+    AgentHook, HookCapability, HookScope, PostToolExecContext, PreToolExecContext,
+};
 use caelix_api::task::{Runnable, TaskKind};
 use caelix_task::TaskManager;
-use crate::vault::{MemoryVault, PromoteTrigger};
 use serde_json;
 use std::sync::Arc;
 
@@ -12,7 +14,10 @@ pub struct MemoryCompactorHook {
 
 impl MemoryCompactorHook {
     pub fn new(vault: Arc<MemoryVault>, task_manager: Arc<TaskManager>) -> Self {
-        Self { vault, task_manager }
+        Self {
+            vault,
+            task_manager,
+        }
     }
 }
 
@@ -53,13 +58,11 @@ impl MemoryCompactorHook {
                         "MemoryCompactorHook: Wiki entity '{}' ready for promotion (confidence: {:.2})",
                         entity_name, confidence
                     );
-                    self.submit_wiki_to_axiom_task(&entity_name, confidence).await;
+                    self.submit_wiki_to_axiom_task(&entity_name, confidence)
+                        .await;
                 }
                 PromoteTrigger::NewEntity(entity_name) => {
-                    tracing::info!(
-                        "MemoryCompactorHook: New entity '{}' detected",
-                        entity_name
-                    );
+                    tracing::info!("MemoryCompactorHook: New entity '{}' detected", entity_name);
                     self.submit_raw_to_wiki_task(&entity_name).await;
                 }
             }
@@ -72,7 +75,8 @@ impl MemoryCompactorHook {
             Err(_) => return,
         };
 
-        let mut entity_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut entity_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (_heading, content) in today_entries {
             let links = crate::link::Link::extract_entity_names(&content);
             for name in links {
@@ -154,7 +158,8 @@ impl Runnable for RawToWikiPromoteRunnable {
         serde_json::to_string(&serde_json::json!({
             "entity_name": self.entity_name,
             "type": "raw_to_wiki"
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     }
 }
 
@@ -184,6 +189,7 @@ impl Runnable for WikiToAxiomPromoteRunnable {
         serde_json::to_string(&serde_json::json!({
             "entity_name": self.entity_name,
             "type": "wiki_to_axiom"
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     }
 }

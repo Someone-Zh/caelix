@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -390,7 +390,10 @@ impl RawFrontmatter {
 impl WikiEntityFrontmatter {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.doc_type != "wiki_entity" {
-            return Err(anyhow::anyhow!("Invalid wiki_entity type: {}", self.doc_type));
+            return Err(anyhow::anyhow!(
+                "Invalid wiki_entity type: {}",
+                self.doc_type
+            ));
         }
         if self.confidence < 0.0 || self.confidence > 1.0 {
             return Err(anyhow::anyhow!("confidence must be between 0.0 and 1.0"));
@@ -405,7 +408,10 @@ impl WikiEntityFrontmatter {
 impl WikiEventFrontmatter {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.doc_type != "wiki_event" {
-            return Err(anyhow::anyhow!("Invalid wiki_event type: {}", self.doc_type));
+            return Err(anyhow::anyhow!(
+                "Invalid wiki_event type: {}",
+                self.doc_type
+            ));
         }
         if self.confidence < 0.0 || self.confidence > 1.0 {
             return Err(anyhow::anyhow!("confidence must be between 0.0 and 1.0"));

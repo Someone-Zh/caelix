@@ -5,14 +5,15 @@
 //! - 内存聚合：以 session_id、(provider, model) 维度汇总，提供查询接口
 //! - 启动恢复：从磁盘重新加载历史记录
 
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use caelix_api::context::UsageTrackerTrait;
 use caelix_api::provider::{
     GlobalUsageView, ProviderUsageView, SessionUsageView, UsageRecord, UsageSnapshot,
 };
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
@@ -86,10 +87,11 @@ impl UsageTracker {
 }
 
 fn apply_record(agg: &mut Aggregates, record: &UsageRecord) {
-    agg.total
-        .prompt_tokens = agg.total.prompt_tokens.saturating_add(record.prompt_tokens);
-    agg.total
-        .completion_tokens = agg.total.completion_tokens.saturating_add(record.completion_tokens);
+    agg.total.prompt_tokens = agg.total.prompt_tokens.saturating_add(record.prompt_tokens);
+    agg.total.completion_tokens = agg
+        .total
+        .completion_tokens
+        .saturating_add(record.completion_tokens);
     agg.total.total_tokens = agg.total.total_tokens.saturating_add(record.total_tokens);
     if let Some(r) = record.reasoning_tokens {
         agg.total.reasoning_tokens = agg.total.reasoning_tokens.saturating_add(r);
@@ -106,7 +108,9 @@ fn apply_record(agg: &mut Aggregates, record: &UsageRecord) {
     // by_session
     let snap = agg.by_session.entry(record.session_id.clone()).or_default();
     snap.prompt_tokens = snap.prompt_tokens.saturating_add(record.prompt_tokens);
-    snap.completion_tokens = snap.completion_tokens.saturating_add(record.completion_tokens);
+    snap.completion_tokens = snap
+        .completion_tokens
+        .saturating_add(record.completion_tokens);
     snap.total_tokens = snap.total_tokens.saturating_add(record.total_tokens);
     if let Some(r) = record.reasoning_tokens {
         snap.reasoning_tokens = snap.reasoning_tokens.saturating_add(r);
@@ -124,7 +128,9 @@ fn apply_record(agg: &mut Aggregates, record: &UsageRecord) {
     let key = (record.provider.clone(), record.model.clone());
     let snap = agg.by_provider_model.entry(key).or_default();
     snap.prompt_tokens = snap.prompt_tokens.saturating_add(record.prompt_tokens);
-    snap.completion_tokens = snap.completion_tokens.saturating_add(record.completion_tokens);
+    snap.completion_tokens = snap
+        .completion_tokens
+        .saturating_add(record.completion_tokens);
     snap.total_tokens = snap.total_tokens.saturating_add(record.total_tokens);
     if let Some(r) = record.reasoning_tokens {
         snap.reasoning_tokens = snap.reasoning_tokens.saturating_add(r);
@@ -150,7 +156,7 @@ impl UsageTrackerTrait for UsageTracker {
 
         // 2. 写入磁盘（JSON Lines append）
         let _guard = self.file_lock.lock().await;
-        match append_record_to_disk(&self.file_path, &record) {
+        match append_record_to_disk(&self.file_path, &record).await {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "写入 usage.jsonl 失败");
@@ -200,16 +206,21 @@ impl UsageTrackerTrait for UsageTracker {
     }
 }
 
-fn append_record_to_disk(
+async fn append_record_to_disk(
     path: &Path,
     record: &UsageRecord,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
     let line = serde_json::to_string(record)?;
-    writeln!(file, "{}", line)?;
-    file.flush()?;
+    file.write_all(line.as_bytes()).await?;
+    file.write_all(b"\n").await?;
+    file.flush().await?;
     Ok(())
 }

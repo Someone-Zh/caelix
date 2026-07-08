@@ -32,9 +32,11 @@ impl AgentHook for MessageBusHook {
 
     async fn on_message_update(&self, ctx: &MessageUpdateContext) -> Result<(), anyhow::Error> {
         // 从全局 task_local 的 RuntimeContext 获取运行时信息（session/request/span/trace id）
-        let runtime_ctx = RuntimeContext::try_current().expect(
-            "message_bus_hook: RuntimeContext 未在当前协程作用域中设置，请通过 with_runtime_ctx 绑定上下文后再调用钩子",
-        );
+        let Some(runtime_ctx) = RuntimeContext::try_current() else {
+            return Err(anyhow::anyhow!(
+                "message_bus_hook: RuntimeContext 未在当前协程作用域中设置，请通过 with_runtime_ctx 绑定上下文后再调用钩子"
+            ));
+        };
 
         // 按序循环处理 ctx.messages 中的每一条 ChatMessage
         for msg in ctx.messages.iter() {
@@ -42,7 +44,7 @@ impl AgentHook for MessageBusHook {
             let content_json = match serde_json::to_string(msg) {
                 Ok(json) => json,
                 Err(e) => {
-                    eprintln!("Warning: Failed to serialize ChatMessage to JSON: {}", e);
+                    tracing::warn!(error = %e, "failed to serialize ChatMessage to JSON");
                     // 降级处理：只保存 content 字段
                     msg.content.clone()
                 }
@@ -64,10 +66,10 @@ impl AgentHook for MessageBusHook {
             // 通过全局 CaelixContext 获取消息总线并发送消息
             if let Some(ctx_provider) = caelix_api::context::try_caelix_context() {
                 if let Err(e) = ctx_provider.message_bus().send_agent(agent_msg) {
-                    eprintln!("Warning: Failed to send message to bus: {}", e);
+                    tracing::warn!(error = %e, "failed to send message to bus");
                 }
             } else {
-                eprintln!("Warning: CaelixContext 尚未初始化，无法发送消息到总线");
+                tracing::warn!("CaelixContext 尚未初始化，无法发送消息到总线");
             }
         }
 

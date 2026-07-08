@@ -40,7 +40,14 @@ impl ReverseIndexManager {
         Ok(())
     }
 
-    pub fn add_entry(&mut self, entity_name: &str, file: &str, layer: Layer, mtime: i64, snippets: Vec<Snippet>) {
+    pub fn add_entry(
+        &mut self,
+        entity_name: &str,
+        file: &str,
+        layer: Layer,
+        mtime: i64,
+        snippets: Vec<Snippet>,
+    ) {
         let entry = IndexEntry {
             file: file.to_string(),
             layer,
@@ -89,7 +96,13 @@ impl ReverseIndexManager {
             }
 
             for snippet in &snippets {
-                self.add_entry(&snippet.heading, &file_str, layer.clone(), *mtime, snippets.clone());
+                self.add_entry(
+                    &snippet.heading,
+                    &file_str,
+                    layer.clone(),
+                    *mtime,
+                    snippets.clone(),
+                );
             }
         }
     }

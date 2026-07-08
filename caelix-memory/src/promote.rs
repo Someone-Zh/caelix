@@ -42,7 +42,10 @@ impl PromoteEngine {
         }
 
         if content.is_empty() {
-            return Err(anyhow::anyhow!("No Raw entries found for entity: {}", entity_name));
+            return Err(anyhow::anyhow!(
+                "No Raw entries found for entity: {}",
+                entity_name
+            ));
         }
 
         self.vault
@@ -57,7 +60,8 @@ impl PromoteEngine {
             )
             .await?;
 
-        self.write_promotion_log(&format!("Raw → Wiki: {}", entity_name)).await?;
+        self.write_promotion_log(&format!("Raw → Wiki: {}", entity_name))
+            .await?;
 
         Ok(PromotionResult {
             success: true,
@@ -68,7 +72,10 @@ impl PromoteEngine {
         })
     }
 
-    pub async fn promote_wiki_to_axiom(&self, entity_name: &str) -> anyhow::Result<PromotionResult> {
+    pub async fn promote_wiki_to_axiom(
+        &self,
+        entity_name: &str,
+    ) -> anyhow::Result<PromotionResult> {
         let entity = match self.vault.get_wiki_entity_layer().read(entity_name).await? {
             Some(e) => e,
             None => {
@@ -87,9 +94,7 @@ impl PromoteEngine {
             ));
         }
 
-        if entity.frontmatter.derived_from.len()
-            < config.promote.wiki_derived_from_min as usize
-        {
+        if entity.frontmatter.derived_from.len() < config.promote.wiki_derived_from_min as usize {
             return Err(anyhow::anyhow!(
                 "Derived from count {} below minimum {}",
                 entity.frontmatter.derived_from.len(),
@@ -148,11 +153,20 @@ impl PromoteEngine {
             let axiom_name = format!("{}_rule", entity_name);
 
             self.vault
-                .write_axiom(&axiom_name, category, confidence, entity.frontmatter.derived_from, &content)
+                .write_axiom(
+                    &axiom_name,
+                    category,
+                    confidence,
+                    entity.frontmatter.derived_from,
+                    &content,
+                )
                 .await?;
 
-            self.write_promotion_log(&format!("Wiki → Axiom: {} (confidence: {:.2})", entity_name, confidence))
-                .await?;
+            self.write_promotion_log(&format!(
+                "Wiki → Axiom: {} (confidence: {:.2})",
+                entity_name, confidence
+            ))
+            .await?;
 
             Ok(PromotionResult {
                 success: true,
@@ -179,20 +193,25 @@ impl PromoteEngine {
             self.write_promotion_log(&format!(
                 "Wiki → Axiom candidate: {} (confidence: {:.2}, waiting for approval)",
                 entity_name, confidence
-            )).await?;
+            ))
+            .await?;
 
             Ok(PromotionResult {
                 success: true,
                 entity_name: entity_name.to_string(),
                 from_layer: Layer::Wiki,
                 to_layer: Layer::Axiom,
-                message: format!("Axiom candidate created, waiting for approval: {}", entity_name),
+                message: format!(
+                    "Axiom candidate created, waiting for approval: {}",
+                    entity_name
+                ),
             })
         } else {
             self.write_promotion_log(&format!(
                 "Wiki → Axiom rejected: {} (confidence: {:.2} below threshold)",
                 entity_name, confidence
-            )).await?;
+            ))
+            .await?;
 
             Ok(PromotionResult {
                 success: false,

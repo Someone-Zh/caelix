@@ -51,7 +51,9 @@ impl WikiEntityLayer {
         let file_path = self.get_file_path(name);
 
         let version = if file_path.exists() {
-            self.read(name).await?.map_or(1, |e| e.frontmatter.version + 1)
+            self.read(name)
+                .await?
+                .map_or(1, |e| e.frontmatter.version + 1)
         } else {
             1
         };
@@ -86,7 +88,10 @@ impl WikiEntityLayer {
         let (yaml, body) = match crate::schema::parse_yaml_frontmatter(&content) {
             Some((y, b)) => (y, b.to_string()),
             None => {
-                return Err(anyhow::anyhow!("Invalid YAML frontmatter in {}", file_path.display()))
+                return Err(anyhow::anyhow!(
+                    "Invalid YAML frontmatter in {}",
+                    file_path.display()
+                ))
             }
         };
 
@@ -118,18 +123,20 @@ impl WikiEntityLayer {
     }
 
     pub async fn update_confidence(&self, name: &str, new_confidence: f64) -> anyhow::Result<()> {
-        let mut entity = self.read(name).await?.ok_or_else(|| {
-            anyhow::anyhow!("Entity {} not found", name)
-        })?;
+        let mut entity = self
+            .read(name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Entity {} not found", name))?;
         entity.frontmatter.confidence = new_confidence;
         entity.frontmatter.version += 1;
         self.write_entity(&entity).await
     }
 
     pub async fn add_derived_from(&self, name: &str, source: &str) -> anyhow::Result<()> {
-        let mut entity = self.read(name).await?.ok_or_else(|| {
-            anyhow::anyhow!("Entity {} not found", name)
-        })?;
+        let mut entity = self
+            .read(name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Entity {} not found", name))?;
         if !entity.frontmatter.derived_from.iter().any(|s| s == source) {
             entity.frontmatter.derived_from.push(source.to_string());
             entity.frontmatter.version += 1;

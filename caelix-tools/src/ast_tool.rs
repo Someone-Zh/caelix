@@ -35,10 +35,27 @@ fn get_language(ext: &str) -> Option<&Language> {
 fn symbol_kinds(lang: &str, kind_filter: &str) -> &'static [&'static str] {
     match (lang, kind_filter) {
         (_, "all") => match lang {
-            "rs" => &["function_item", "method_definition", "struct_item", "enum_item", "trait_item", "impl_item"],
+            "rs" => &[
+                "function_item",
+                "method_definition",
+                "struct_item",
+                "enum_item",
+                "trait_item",
+                "impl_item",
+            ],
             "py" => &["function_definition", "class_definition"],
-            "js" | "jsx" | "ts" | "tsx" => &["function_declaration", "method_definition", "arrow_function", "class_declaration", "struct_expression"],
-            "go" => &["function_declaration", "method_declaration", "type_declaration"],
+            "js" | "jsx" | "ts" | "tsx" => &[
+                "function_declaration",
+                "method_definition",
+                "arrow_function",
+                "class_declaration",
+                "struct_expression",
+            ],
+            "go" => &[
+                "function_declaration",
+                "method_declaration",
+                "type_declaration",
+            ],
             "c" => &["function_definition", "struct_specifier", "enum_specifier"],
             _ => &[],
         },
@@ -226,7 +243,11 @@ impl Tool for ListSymbolsTool {
         if source.len() > max_size {
             return ToolResult {
                 output: String::new(),
-                error: Some(format!("File size {} bytes exceeds limit of {} bytes", source.len(), max_size)),
+                error: Some(format!(
+                    "File size {} bytes exceeds limit of {} bytes",
+                    source.len(),
+                    max_size
+                )),
             };
         }
 
@@ -258,7 +279,10 @@ impl Tool for ListSymbolsTool {
         })
         .to_string();
 
-        ToolResult { output, error: None }
+        ToolResult {
+            output,
+            error: None,
+        }
     }
 
     fn clone_box(&self) -> Box<dyn Tool> {
@@ -355,7 +379,11 @@ impl Tool for GetSymbolDefinitionTool {
         if source.len() > max_size {
             return ToolResult {
                 output: String::new(),
-                error: Some(format!("File size {} bytes exceeds limit of {} bytes", source.len(), max_size)),
+                error: Some(format!(
+                    "File size {} bytes exceeds limit of {} bytes",
+                    source.len(),
+                    max_size
+                )),
             };
         }
 

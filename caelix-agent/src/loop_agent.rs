@@ -3,8 +3,8 @@ use std::{pin::Pin, sync::Arc};
 use async_stream::stream;
 use async_trait::async_trait;
 use caelix_api::{
-    context::RuntimeContext, Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage,
-    LlmConfig, LlmProvider, ToolCall,
+    Agent, AgentError, AgentOutputChunk, AgentSpec, ChatMessage, LlmConfig, LlmProvider, ToolCall,
+    context::RuntimeContext,
 };
 use futures::{Stream, StreamExt};
 

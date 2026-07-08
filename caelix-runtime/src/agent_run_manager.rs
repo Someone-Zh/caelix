@@ -1,8 +1,8 @@
-use caelix_api::context::AgentRunManagerTrait;
 use caelix_api::cancel::CancellationToken;
+use caelix_api::context::AgentRunManagerTrait;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::task::{AbortHandle, JoinHandle};
 
@@ -68,12 +68,7 @@ impl AgentRunManager {
     ///
     /// 若 entry 已被 `stop_agent` 移除或被新 run 覆盖（run_id 不匹配），
     /// 则丢弃 handle（对应任务会在 cancel 信号下自行退出）。
-    pub fn set_handles(
-        &self,
-        session_id: &str,
-        run_id: u64,
-        join_handle: JoinHandle<()>,
-    ) {
+    pub fn set_handles(&self, session_id: &str, run_id: u64, join_handle: JoinHandle<()>) {
         if let Some(mut entry) = self.runs.get_mut(session_id) {
             if entry.run_id == run_id {
                 entry.abort_handle = Some(join_handle.abort_handle());
@@ -120,15 +115,12 @@ impl AgentRunManager {
                     );
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!(
+                    tracing::error!(
                         session_id = session_id,
                         error = %e,
-                        "agent task panicked"
+                        is_panic = e.is_panic(),
+                        "agent task ended with join error"
                     );
-                    // 仍然恢复 panic 以保持 tokio 的 panic 传播语义
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    }
                 }
                 Err(_timeout) => {
                     tracing::warn!(

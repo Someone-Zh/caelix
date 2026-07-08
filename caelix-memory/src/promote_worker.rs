@@ -16,7 +16,10 @@ pub struct PromoteWorker {
 
 impl PromoteWorker {
     pub fn new(vault: Arc<MemoryVault>, task_manager: Arc<TaskManager>) -> Self {
-        Self { vault, task_manager }
+        Self {
+            vault,
+            task_manager,
+        }
     }
 
     pub async fn run(&self) {
@@ -52,7 +55,8 @@ impl PromoteWorker {
             Err(_) => return,
         };
 
-        let mut entity_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut entity_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (_heading, content) in today_entries {
             let links = crate::link::Link::extract_entity_names(&content);
             for name in links {
@@ -143,7 +147,8 @@ impl Runnable for RawToWikiRunnable {
         serde_json::to_string(&json!({
             "entity_name": self.entity_name,
             "type": "raw_to_wiki"
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     }
 }
 
@@ -187,7 +192,8 @@ impl Runnable for WikiToAxiomRunnable {
         serde_json::to_string(&json!({
             "entity_name": self.entity_name,
             "type": "wiki_to_axiom"
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     }
 }
 

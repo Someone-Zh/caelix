@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use caelix_api::tool::{Tool, ToolResult};
-use caelix_api::task::{Runnable, TaskKind};
-use caelix_task::TaskManager;
 use crate::vault::MemoryVault;
+use async_trait::async_trait;
+use caelix_api::task::{Runnable, TaskKind};
+use caelix_api::tool::{Tool, ToolResult};
+use caelix_task::TaskManager;
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 
@@ -14,7 +14,10 @@ pub struct MemoryPromoteTool {
 
 impl MemoryPromoteTool {
     pub fn new(vault: Arc<MemoryVault>, task_manager: Arc<TaskManager>) -> Self {
-        Self { vault, task_manager }
+        Self {
+            vault,
+            task_manager,
+        }
     }
 }
 
@@ -81,8 +84,14 @@ impl Tool for MemoryPromoteTool {
             confidence,
         };
 
-        let task_id = self.task_manager
-            .submit(None, Some("Memory Promotion".to_string()), TaskKind::Async, Box::new(runnable))
+        let task_id = self
+            .task_manager
+            .submit(
+                None,
+                Some("Memory Promotion".to_string()),
+                TaskKind::Async,
+                Box::new(runnable),
+            )
             .await;
 
         ToolResult {
@@ -110,20 +119,32 @@ impl Runnable for PromoteRunnable {
 
         let budget = self.vault.get_budget_manager();
         if !budget.write().await.try_acquire(&task_id) {
-            return Ok(format!("LLM budget exhausted. Task deferred: {}", self.entity_name));
+            return Ok(format!(
+                "LLM budget exhausted. Task deferred: {}",
+                self.entity_name
+            ));
         }
 
         let result = match self.promote_to.as_str() {
             "wiki" => self.promote_raw_to_wiki().await,
             "axiom" => self.promote_wiki_to_axiom().await,
-            _ => Err(anyhow::anyhow!("Unknown promotion target: {}", self.promote_to)),
+            _ => Err(anyhow::anyhow!(
+                "Unknown promotion target: {}",
+                self.promote_to
+            )),
         };
 
         budget.read().await.save().await.ok();
 
         match result {
-            Ok(message) => Ok(format!("Promotion successful: {}\n{}", self.entity_name, message)),
-            Err(e) => Err(caelix_api::error::AgentError::TaskError(format!("Promotion failed: {}", e))),
+            Ok(message) => Ok(format!(
+                "Promotion successful: {}\n{}",
+                self.entity_name, message
+            )),
+            Err(e) => Err(caelix_api::error::AgentError::TaskError(format!(
+                "Promotion failed: {}",
+                e
+            ))),
         }
     }
 
@@ -136,7 +157,8 @@ impl Runnable for PromoteRunnable {
             "entity_name": self.entity_name,
             "promote_to": self.promote_to,
             "confidence": self.confidence
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     }
 }
 
@@ -150,31 +172,50 @@ impl PromoteRunnable {
         for (heading, entry_content) in raw_entries {
             if entry_content.contains(&self.entity_name) {
                 content.push_str(&format!("## {}\n{}\n\n", heading, entry_content));
-                sources.push(format!("Raw/{}.md#{}", chrono::Utc::now().date_naive().format("%Y-%m-%d"), heading));
+                sources.push(format!(
+                    "Raw/{}.md#{}",
+                    chrono::Utc::now().date_naive().format("%Y-%m-%d"),
+                    heading
+                ));
             }
         }
 
         if content.is_empty() {
-            return Err(anyhow::anyhow!("No Raw entries found for entity: {}", self.entity_name));
+            return Err(anyhow::anyhow!(
+                "No Raw entries found for entity: {}",
+                self.entity_name
+            ));
         }
 
-        self.vault.write_wiki_entity(
-            &self.entity_name,
-            crate::schema::WikiEntityCategory::Person,
-            Vec::new(),
-            Vec::new(),
-            self.confidence,
-            sources,
-            &content,
-        ).await?;
+        self.vault
+            .write_wiki_entity(
+                &self.entity_name,
+                crate::schema::WikiEntityCategory::Person,
+                Vec::new(),
+                Vec::new(),
+                self.confidence,
+                sources,
+                &content,
+            )
+            .await?;
 
         Ok("Created Wiki entity from Raw entries".to_string())
     }
 
     async fn promote_wiki_to_axiom(&self) -> anyhow::Result<String> {
-        let entity = match self.vault.get_wiki_entity_layer().read(&self.entity_name).await? {
+        let entity = match self
+            .vault
+            .get_wiki_entity_layer()
+            .read(&self.entity_name)
+            .await?
+        {
             Some(e) => e,
-            None => return Err(anyhow::anyhow!("Wiki entity not found: {}", self.entity_name)),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Wiki entity not found: {}",
+                    self.entity_name
+                ))
+            }
         };
 
         let content = format!(
@@ -184,15 +225,20 @@ impl PromoteRunnable {
 
         let category = crate::schema::AxiomCategory::Rule;
 
-        self.vault.write_axiom(
-            &format!("{}_rule", self.entity_name),
-            category,
-            self.confidence,
-            entity.frontmatter.derived_from,
-            &content,
-        ).await?;
+        self.vault
+            .write_axiom(
+                &format!("{}_rule", self.entity_name),
+                category,
+                self.confidence,
+                entity.frontmatter.derived_from,
+                &content,
+            )
+            .await?;
 
-        Ok(format!("Created Axiom from Wiki entity: {}", self.entity_name))
+        Ok(format!(
+            "Created Axiom from Wiki entity: {}",
+            self.entity_name
+        ))
     }
 }
 

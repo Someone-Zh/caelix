@@ -38,7 +38,9 @@ impl AxiomLayer {
             AxiomCategory::Rule => "rules",
             AxiomCategory::Principle => "principles",
         };
-        self.root_dir.join(category_dir).join(format!("{}.md", name))
+        self.root_dir
+            .join(category_dir)
+            .join(format!("{}.md", name))
     }
 
     pub async fn exists(&self, category: AxiomCategory, name: &str) -> bool {
@@ -96,7 +98,10 @@ impl AxiomLayer {
         let (yaml, body) = match crate::schema::parse_yaml_frontmatter(&content) {
             Some((y, b)) => (y, b.to_string()),
             None => {
-                return Err(anyhow::anyhow!("Invalid YAML frontmatter in {}", file_path.display()))
+                return Err(anyhow::anyhow!(
+                    "Invalid YAML frontmatter in {}",
+                    file_path.display()
+                ))
             }
         };
 
@@ -119,14 +124,21 @@ impl AxiomLayer {
         let (yaml, body) = match crate::schema::parse_yaml_frontmatter(&content) {
             Some((y, b)) => (y, b.to_string()),
             None => {
-                return Err(anyhow::anyhow!("Invalid YAML frontmatter in {}", path.display()))
+                return Err(anyhow::anyhow!(
+                    "Invalid YAML frontmatter in {}",
+                    path.display()
+                ))
             }
         };
 
         let frontmatter: AxiomFrontmatter = serde_yaml::from_value(yaml)?;
         frontmatter.validate()?;
 
-        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
 
         Ok(Some(Axiom {
             name,
@@ -140,7 +152,11 @@ impl AxiomLayer {
         let mut names = Vec::new();
 
         let dirs = if let Some(cat) = category {
-            vec![self.get_file_path(cat, "dummy").parent().unwrap().to_path_buf()]
+            vec![self
+                .get_file_path(cat, "dummy")
+                .parent()
+                .unwrap()
+                .to_path_buf()]
         } else {
             vec![
                 self.root_dir.join("methodology"),
@@ -165,7 +181,11 @@ impl AxiomLayer {
 
     pub async fn list_all(&self) -> anyhow::Result<Vec<Axiom>> {
         let mut axioms = Vec::new();
-        for category in [AxiomCategory::Methodology, AxiomCategory::Rule, AxiomCategory::Principle] {
+        for category in [
+            AxiomCategory::Methodology,
+            AxiomCategory::Rule,
+            AxiomCategory::Principle,
+        ] {
             let names = self.list(Some(category.clone())).await?;
             for name in names {
                 if let Some(axiom) = self.read(category.clone(), &name).await? {
@@ -178,7 +198,10 @@ impl AxiomLayer {
 
     pub async fn list_active(&self) -> anyhow::Result<Vec<Axiom>> {
         let all = self.list_all().await?;
-        Ok(all.into_iter().filter(|a| a.frontmatter.status == AxiomStatus::Active).collect())
+        Ok(all
+            .into_iter()
+            .filter(|a| a.frontmatter.status == AxiomStatus::Active)
+            .collect())
     }
 
     pub async fn deprecate(
@@ -189,9 +212,10 @@ impl AxiomLayer {
         deprecated_reason: &str,
         replaced_by: Option<String>,
     ) -> anyhow::Result<()> {
-        let mut axiom = self.read(category, name).await?.ok_or_else(|| {
-            anyhow::anyhow!("Axiom {} not found", name)
-        })?;
+        let mut axiom = self
+            .read(category, name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Axiom {} not found", name))?;
 
         axiom.frontmatter.status = AxiomStatus::Deprecated;
         axiom.frontmatter.deprecated_by = Some(deprecated_by.to_string());
@@ -203,10 +227,16 @@ impl AxiomLayer {
         self.write_axiom(&axiom).await
     }
 
-    pub async fn add_contradiction(&self, category: AxiomCategory, name: &str, other: &str) -> anyhow::Result<()> {
-        let mut axiom = self.read(category, name).await?.ok_or_else(|| {
-            anyhow::anyhow!("Axiom {} not found", name)
-        })?;
+    pub async fn add_contradiction(
+        &self,
+        category: AxiomCategory,
+        name: &str,
+        other: &str,
+    ) -> anyhow::Result<()> {
+        let mut axiom = self
+            .read(category, name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Axiom {} not found", name))?;
 
         if !axiom.frontmatter.contradicts.iter().any(|s| s == other) {
             axiom.frontmatter.contradicts.push(other.to_string());

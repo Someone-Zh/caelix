@@ -71,26 +71,14 @@ pub async fn handle_usage_command(input: &str, session_id: &str, api: &Arc<Caeli
                 println!("\n==================================");
                 println!("  🌍 Token 用量总览 (全局)");
                 println!("==================================");
-                println!(
-                    "  Prompt Tokens     : {}",
-                    view.total.prompt_tokens
-                );
-                println!(
-                    "  Completion Tokens : {}",
-                    view.total.completion_tokens
-                );
+                println!("  Prompt Tokens     : {}", view.total.prompt_tokens);
+                println!("  Completion Tokens : {}", view.total.completion_tokens);
                 println!("  Total Tokens      : {}", view.total.total_tokens);
                 if view.total.reasoning_tokens > 0 {
-                    println!(
-                        "  Reasoning Tokens  : {}",
-                        view.total.reasoning_tokens
-                    );
+                    println!("  Reasoning Tokens  : {}", view.total.reasoning_tokens);
                 }
                 if view.total.cache_hit_tokens > 0 {
-                    println!(
-                        "  Cache Hit Tokens  : {}",
-                        view.total.cache_hit_tokens
-                    );
+                    println!("  Cache Hit Tokens  : {}", view.total.cache_hit_tokens);
                 }
                 println!("  记录数            : {}", view.total.record_count);
 
@@ -136,45 +124,24 @@ pub async fn handle_usage_command(input: &str, session_id: &str, api: &Arc<Caeli
             println!("  📊 Session Token 用量");
             println!("==================================");
             println!("  Session ID        : {}", view.session_id);
-            println!(
-                "  Prompt Tokens     : {}",
-                view.snapshot.prompt_tokens
-            );
-            println!(
-                "  Completion Tokens : {}",
-                view.snapshot.completion_tokens
-            );
+            println!("  Prompt Tokens     : {}", view.snapshot.prompt_tokens);
+            println!("  Completion Tokens : {}", view.snapshot.completion_tokens);
             println!("  Total Tokens      : {}", view.snapshot.total_tokens);
             if view.snapshot.reasoning_tokens > 0 {
-                println!(
-                    "  Reasoning Tokens  : {}",
-                    view.snapshot.reasoning_tokens
-                );
+                println!("  Reasoning Tokens  : {}", view.snapshot.reasoning_tokens);
             }
             if view.snapshot.cache_hit_tokens > 0 {
-                println!(
-                    "  Cache Hit Tokens  : {}",
-                    view.snapshot.cache_hit_tokens
-                );
+                println!("  Cache Hit Tokens  : {}", view.snapshot.cache_hit_tokens);
             }
-            println!(
-                "  记录数            : {}",
-                view.snapshot.record_count
-            );
-            println!(
-                "  上下文大小        : {} tokens",
-                view.context_size_tokens
-            );
+            println!("  记录数            : {}", view.snapshot.record_count);
+            println!("  上下文大小        : {} tokens", view.context_size_tokens);
             if let Some(limit) = view.ctx_window_tokens {
                 let pct = if limit > 0 {
                     (view.context_size_tokens as f64 / limit as f64) * 100.0
                 } else {
                     0.0
                 };
-                println!(
-                    "  上下文窗口上限    : {} tokens ({:.1}%)",
-                    limit, pct
-                );
+                println!("  上下文窗口上限    : {} tokens ({:.1}%)", limit, pct);
             } else {
                 println!("  上下文窗口上限    : 未配置");
             }
@@ -188,4 +155,3 @@ pub async fn handle_usage_command(input: &str, session_id: &str, api: &Arc<Caeli
         }
     }
 }
-

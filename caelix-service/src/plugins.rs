@@ -74,10 +74,7 @@ impl Plugin for DefaultServicePlugin {
             caelix_config::skills_loader::load_skills_from_directory(&skills_dir.to_string_lossy())
                 .await
                 .map_err(|e| anyhow!(e))?;
-        Ok(skills
-            .into_iter()
-            .map(SkillDef::from)
-            .collect())
+        Ok(skills.into_iter().map(SkillDef::from).collect())
     }
 
     async fn agent_instances(&self) -> anyhow::Result<Vec<Arc<dyn Agent>>> {

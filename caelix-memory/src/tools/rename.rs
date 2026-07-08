@@ -1,6 +1,6 @@
+use crate::vault::MemoryVault;
 use async_trait::async_trait;
 use caelix_api::tool::{Tool, ToolResult};
-use crate::vault::MemoryVault;
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 
@@ -74,15 +74,20 @@ impl Tool for MemoryRenameTool {
         let result = match entity_type {
             "entity" => self.vault.rename_entity(old_name, new_name).await,
             "event" => self.vault.rename_event(old_name, new_name).await,
-            _ => return ToolResult {
-                output: String::new(),
-                error: Some(format!("Unknown type: {}", entity_type)),
-            },
+            _ => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some(format!("Unknown type: {}", entity_type)),
+                }
+            }
         };
 
         match result {
             Ok(_) => ToolResult {
-                output: format!("Successfully renamed {} '{}' to '{}'", entity_type, old_name, new_name),
+                output: format!(
+                    "Successfully renamed {} '{}' to '{}'",
+                    entity_type, old_name, new_name
+                ),
                 error: None,
             },
             Err(e) => ToolResult {

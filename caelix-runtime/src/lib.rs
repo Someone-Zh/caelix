@@ -2,12 +2,12 @@
 //!
 //! 包含 Hook 系统、RuntimeContext 实现、命令系统等运行时功能
 
+pub mod agent_run_manager;
 pub mod context;
 pub mod hooks;
 pub mod id_generator;
 pub mod plugins;
 pub mod usage_tracker;
-pub mod agent_run_manager;
 
 // 重新导出常用类型
 pub use agent_run_manager::AgentRunManager;

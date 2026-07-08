@@ -184,7 +184,10 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
                             "Raw" => "📝",
                             _ => "📄",
                         };
-                        let conf = result.confidence.map(|c| format!(" ({:.0}%)", c * 100.0)).unwrap_or_default();
+                        let conf = result
+                            .confidence
+                            .map(|c| format!(" ({:.0}%)", c * 100.0))
+                            .unwrap_or_default();
                         println!("\n  [{i}] {layer_color} [{}]{conf}", result.layer);
                         println!("     文件: {}", result.file);
                         println!("     标题: {}", result.heading);
@@ -197,11 +200,13 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
         }
         "write" => {
             if args.len() < 2 {
-                eprintln!("❌ 用法: caelix memory write <content> [--source chat|meeting|tweet|paper|note] [--tag TAG...]");
+                eprintln!(
+                    "❌ 用法: caelix memory write <content> [--source chat|meeting|tweet|paper|note] [--tag TAG...]"
+                );
                 return;
             }
             let content = args[1].as_str();
-            
+
             let mut source_str = "chat";
             let mut tags = Vec::new();
             let mut i = 2;
@@ -238,7 +243,10 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
             let today = chrono::Utc::now().date_naive();
             let heading = chrono::Utc::now().format("%H:%M").to_string();
 
-            match vault.write_raw(today, source, tags, &heading, content).await {
+            match vault
+                .write_raw(today, source, tags, &heading, content)
+                .await
+            {
                 Ok(_) => println!("✅ 已写入 Raw 层"),
                 Err(e) => eprintln!("❌ 写入失败: {}", e),
             }
@@ -294,8 +302,19 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
                 println!("\n  🚫 冲突 ({})", conflicts.len());
                 println!("  ------------------------------");
                 for conflict in &conflicts {
-                    let status_icon = if conflict.status == "Pending" { "⏳" } else { "✅" };
-                    println!("  {} {} [{}] {} - {}", status_icon, conflict.id, conflict.r#type, conflict.entity, conflict.field.as_deref().unwrap_or(""));
+                    let status_icon = if conflict.status == "Pending" {
+                        "⏳"
+                    } else {
+                        "✅"
+                    };
+                    println!(
+                        "  {} {} [{}] {} - {}",
+                        status_icon,
+                        conflict.id,
+                        conflict.r#type,
+                        conflict.entity,
+                        conflict.field.as_deref().unwrap_or("")
+                    );
                     for value in &conflict.values {
                         println!("       - {}", value);
                     }
@@ -312,7 +331,12 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
                         "Rejected" => "❌",
                         _ => "📄",
                     };
-                    println!("  {} {} (confidence: {:.0}%)", status_icon, candidate.id, candidate.confidence * 100.0);
+                    println!(
+                        "  {} {} (confidence: {:.0}%)",
+                        status_icon,
+                        candidate.id,
+                        candidate.confidence * 100.0
+                    );
                     println!("       {}", candidate.preview);
                 }
             }
@@ -329,28 +353,32 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
                 Err(e) => eprintln!("❌ 索引重建失败: {}", e),
             }
         }
-        "stats" => {
-            match vault.stats().await {
-                Ok(stats) => {
-                    println!("==================================");
-                    println!("  📊 Memory Vault 统计");
-                    println!("==================================");
-                    println!("  Raw 文件数        : {}", stats.raw_files);
-                    println!("  Wiki 实体数       : {}", stats.wiki_entities);
-                    println!("  Wiki 事件数       : {}", stats.wiki_events);
-                    println!("  Axiom 总数        : {} (活跃: {})", stats.axioms, stats.axioms_active);
-                    println!("  待处理冲突        : {}", stats.pending_conflicts);
-                    println!("  Axiom 候选        : {}", stats.pending_candidates);
-                    println!("  待创建链接        : {}", stats.pending_links);
-                    println!("  LLM 预算          : {}/{}", stats.llm_budget_used, stats.llm_budget_total);
-                    println!("==================================");
-                }
-                Err(e) => eprintln!("❌ 获取统计失败: {}", e),
+        "stats" => match vault.stats().await {
+            Ok(stats) => {
+                println!("==================================");
+                println!("  📊 Memory Vault 统计");
+                println!("==================================");
+                println!("  Raw 文件数        : {}", stats.raw_files);
+                println!("  Wiki 实体数       : {}", stats.wiki_entities);
+                println!("  Wiki 事件数       : {}", stats.wiki_events);
+                println!(
+                    "  Axiom 总数        : {} (活跃: {})",
+                    stats.axioms, stats.axioms_active
+                );
+                println!("  待处理冲突        : {}", stats.pending_conflicts);
+                println!("  Axiom 候选        : {}", stats.pending_candidates);
+                println!("  待创建链接        : {}", stats.pending_links);
+                println!(
+                    "  LLM 预算          : {}/{}",
+                    stats.llm_budget_used, stats.llm_budget_total
+                );
+                println!("==================================");
             }
-        }
+            Err(e) => eprintln!("❌ 获取统计失败: {}", e),
+        },
         "axioms" => {
             let include_deprecated = args.contains(&"--include-deprecated".to_string());
-            
+
             match vault.list_axioms(include_deprecated).await {
                 Ok(axioms) => {
                     println!("==================================");
@@ -360,7 +388,11 @@ async fn run_memory_command(_caelix_ctx: Arc<CaelixContext>, args: &[String]) {
                     }
                     println!("==================================");
                     for axiom in &axioms {
-                        let status_icon = if axiom.status == "Active" { "✅" } else { "❌" };
+                        let status_icon = if axiom.status == "Active" {
+                            "✅"
+                        } else {
+                            "❌"
+                        };
                         println!("\n  {} {} [{}]", status_icon, axiom.name, axiom.category);
                         println!("     置信度: {:.0}%", axiom.confidence * 100.0);
                         println!("     创建于: {}", axiom.created_at.format("%Y-%m-%d %H:%M"));
@@ -482,7 +514,8 @@ fn list_logs(dir: &std::path::Path) {
                 let path = entry.path();
                 if path.is_file()
                     && let Some(name) = path.file_name().and_then(|s| s.to_str())
-                    && name.starts_with("caelix.") && name.ends_with(".log")
+                    && name.starts_with("caelix.")
+                    && name.ends_with(".log")
                 {
                     let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     let modified = entry
@@ -544,7 +577,8 @@ fn show_current_log(dir: &std::path::Path, n: usize) {
                     let spans: Option<serde_json::Value> = v.get("spans").cloned();
                     print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
                     if let Some(f) = &fields
-                        && !f.is_null() && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
+                        && !f.is_null()
+                        && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
                     {
                         print!(" | {}", f);
                     }
@@ -601,18 +635,15 @@ async fn follow_log(dir: &std::path::Path) {
                     if line.trim_start().starts_with('{')
                         && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
                     {
-                        let ts =
-                            v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                        let ts = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
                         let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
-                        let target =
-                            v.get("target").and_then(|t| t.as_str()).unwrap_or("");
-                        let msg =
-                            v.get("message").and_then(|t| t.as_str()).unwrap_or("");
+                        let target = v.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                        let msg = v.get("message").and_then(|t| t.as_str()).unwrap_or("");
                         let fields: Option<serde_json::Value> = v.get("fields").cloned();
                         print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
                         if let Some(f) = &fields
                             && !f.is_null()
-                                && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
+                            && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
                         {
                             print!(" | {}", f);
                         }
@@ -652,7 +683,8 @@ fn clean_logs(dir: &std::path::Path) {
             let path = entry.path();
             if path.is_file()
                 && let Some(name) = path.file_name().and_then(|s| s.to_str())
-                && name.starts_with("caelix.") && name.ends_with(".log")
+                && name.starts_with("caelix.")
+                && name.ends_with(".log")
             {
                 if fs::remove_file(&path).is_ok() {
                     count += 1;

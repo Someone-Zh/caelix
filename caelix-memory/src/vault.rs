@@ -11,7 +11,7 @@ use crate::schema::{
 };
 use crate::wiki::entity::WikiEntityLayer;
 use crate::wiki::event::WikiEventLayer;
-use chrono::{NaiveDate, DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -85,10 +85,15 @@ impl MemoryVault {
         heading: &str,
         content: &str,
     ) -> anyhow::Result<()> {
-        self.raw.write_entry(date, source, tags, heading, content).await?;
-        self.update_index_for_raw(date).await?;
-        self.validate_links_and_record_pending(content, &format!("Raw/{}.md", date.format("%Y-%m-%d")))
+        self.raw
+            .write_entry(date, source, tags, heading, content)
             .await?;
+        self.update_index_for_raw(date).await?;
+        self.validate_links_and_record_pending(
+            content,
+            &format!("Raw/{}.md", date.format("%Y-%m-%d")),
+        )
+        .await?;
         Ok(())
     }
 
@@ -103,7 +108,16 @@ impl MemoryVault {
         body: &str,
     ) -> anyhow::Result<()> {
         self.wiki_entity
-            .write(name, category, aliases.clone(), tags, WikiEntityStatus::Active, confidence, derived_from, body)
+            .write(
+                name,
+                category,
+                aliases.clone(),
+                tags,
+                WikiEntityStatus::Active,
+                confidence,
+                derived_from,
+                body,
+            )
             .await?;
 
         for alias in aliases {
@@ -112,7 +126,8 @@ impl MemoryVault {
 
         self.alias.read().await.save().await?;
         self.update_index_for_wiki_entity(name).await?;
-        self.validate_links_and_record_pending(body, &format!("Wiki/Entities/{}.md", name)).await?;
+        self.validate_links_and_record_pending(body, &format!("Wiki/Entities/{}.md", name))
+            .await?;
         Ok(())
     }
 
@@ -127,11 +142,21 @@ impl MemoryVault {
         body: &str,
     ) -> anyhow::Result<()> {
         self.wiki_event
-            .write(name, date_range, WikiEventStatus::Active, confidence, participants, related_entities, derived_from, body)
+            .write(
+                name,
+                date_range,
+                WikiEventStatus::Active,
+                confidence,
+                participants,
+                related_entities,
+                derived_from,
+                body,
+            )
             .await?;
 
         self.update_index_for_wiki_event(name).await?;
-        self.validate_links_and_record_pending(body, &format!("Wiki/Events/{}.md", name)).await?;
+        self.validate_links_and_record_pending(body, &format!("Wiki/Events/{}.md", name))
+            .await?;
         Ok(())
     }
 
@@ -144,10 +169,22 @@ impl MemoryVault {
         body: &str,
     ) -> anyhow::Result<()> {
         let category_dir = category_to_dir(&category);
-        self.axiom.write(name, category.clone(), confidence, derived_from, Vec::new(), body).await?;
-        self.update_index_for_axiom(category.clone(), name).await?;
-        self.validate_links_and_record_pending(body, &format!("Axioms/{}/{}.md", category_dir, name))
+        self.axiom
+            .write(
+                name,
+                category.clone(),
+                confidence,
+                derived_from,
+                Vec::new(),
+                body,
+            )
             .await?;
+        self.update_index_for_axiom(category.clone(), name).await?;
+        self.validate_links_and_record_pending(
+            body,
+            &format!("Axioms/{}/{}.md", category_dir, name),
+        )
+        .await?;
         Ok(())
     }
 
@@ -163,14 +200,23 @@ impl MemoryVault {
             let confidence = match entry.layer {
                 Layer::Axiom => {
                     let path = PathBuf::from(&entry.file);
-                    self.axiom.read_by_path(&path).await?.map(|a| a.frontmatter.confidence)
+                    self.axiom
+                        .read_by_path(&path)
+                        .await?
+                        .map(|a| a.frontmatter.confidence)
                 }
                 Layer::Wiki => {
                     let name = path_to_entity_name(&entry.file);
                     if entry.file.contains("Entities") {
-                        self.wiki_entity.read(&name).await?.map(|e| e.frontmatter.confidence)
+                        self.wiki_entity
+                            .read(&name)
+                            .await?
+                            .map(|e| e.frontmatter.confidence)
                     } else {
-                        self.wiki_event.read(&name).await?.map(|e| e.frontmatter.confidence)
+                        self.wiki_event
+                            .read(&name)
+                            .await?
+                            .map(|e| e.frontmatter.confidence)
                     }
                 }
                 Layer::Raw => None,
@@ -198,7 +244,10 @@ impl MemoryVault {
         }
 
         self.wiki_entity.rename(old_name, new_name).await?;
-        self.alias.write().await.update_canonical(old_name, new_name);
+        self.alias
+            .write()
+            .await
+            .update_canonical(old_name, new_name);
         self.index.write().await.rename_entity(old_name, new_name);
 
         self.update_all_links(old_name, new_name).await?;
@@ -231,14 +280,24 @@ impl MemoryVault {
 
         for (date, content) in self.raw.read_all_entries().await? {
             let path = self.raw.get_file_path(date);
-            let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+            let mtime = fs::metadata(&path)
+                .await?
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
             files.push((path, Layer::Raw, mtime, content));
         }
 
         for name in self.wiki_entity.list().await? {
             let path = self.wiki_entity.get_file_path(&name);
             if let Ok(content) = fs::read_to_string(&path).await {
-                let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                let mtime = fs::metadata(&path)
+                    .await?
+                    .modified()?
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
                 files.push((path, Layer::Wiki, mtime, content));
             }
         }
@@ -246,15 +305,27 @@ impl MemoryVault {
         for name in self.wiki_event.list().await? {
             let path = self.wiki_event.get_file_path(&name);
             if let Ok(content) = fs::read_to_string(&path).await {
-                let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                let mtime = fs::metadata(&path)
+                    .await?
+                    .modified()?
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
                 files.push((path, Layer::Wiki, mtime, content));
             }
         }
 
         for axiom in self.axiom.list_all().await? {
-            let path = self.axiom.get_file_path(axiom.frontmatter.category, &axiom.name);
+            let path = self
+                .axiom
+                .get_file_path(axiom.frontmatter.category, &axiom.name);
             if let Ok(content) = fs::read_to_string(&path).await {
-                let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                let mtime = fs::metadata(&path)
+                    .await?
+                    .modified()?
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
                 files.push((path, Layer::Axiom, mtime, content));
             }
         }
@@ -280,9 +351,13 @@ impl MemoryVault {
         for name in self.wiki_entity.list().await.unwrap_or_default() {
             if let Some(entity) = self.wiki_entity.read(&name).await.unwrap_or(None) {
                 if entity.frontmatter.confidence >= config.wiki_confidence_threshold
-                    && entity.frontmatter.derived_from.len() >= config.wiki_derived_from_min as usize
+                    && entity.frontmatter.derived_from.len()
+                        >= config.wiki_derived_from_min as usize
                 {
-                    triggers.push(PromoteTrigger::WikiEntityReady(name, entity.frontmatter.confidence));
+                    triggers.push(PromoteTrigger::WikiEntityReady(
+                        name,
+                        entity.frontmatter.confidence,
+                    ));
                 }
             }
         }
@@ -342,7 +417,13 @@ impl MemoryVault {
     }
 
     pub async fn list_raw_files(&self) -> anyhow::Result<Vec<String>> {
-        Ok(self.raw.list_files().await?.into_iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect())
+        Ok(self
+            .raw
+            .list_files()
+            .await?
+            .into_iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect())
     }
 
     pub async fn list_wiki_entities(&self) -> anyhow::Result<Vec<String>> {
@@ -358,17 +439,22 @@ impl MemoryVault {
         let filtered = if include_deprecated {
             all
         } else {
-            all.into_iter().filter(|a| a.frontmatter.status == crate::schema::AxiomStatus::Active).collect()
+            all.into_iter()
+                .filter(|a| a.frontmatter.status == crate::schema::AxiomStatus::Active)
+                .collect()
         };
 
-        Ok(filtered.into_iter().map(|a| AxiomInfo {
-            name: a.name,
-            category: format!("{:?}", a.frontmatter.category),
-            confidence: a.frontmatter.confidence,
-            status: format!("{:?}", a.frontmatter.status),
-            created_at: a.frontmatter.created_at,
-            deprecated_reason: a.frontmatter.deprecated_reason,
-        }).collect())
+        Ok(filtered
+            .into_iter()
+            .map(|a| AxiomInfo {
+                name: a.name,
+                category: format!("{:?}", a.frontmatter.category),
+                confidence: a.frontmatter.confidence,
+                status: format!("{:?}", a.frontmatter.status),
+                created_at: a.frontmatter.created_at,
+                deprecated_reason: a.frontmatter.deprecated_reason,
+            })
+            .collect())
     }
 
     pub async fn get_budget_info(&self) -> BudgetInfo {
@@ -389,15 +475,22 @@ impl MemoryVault {
             conflict.get_pending_conflicts()
         };
 
-        Ok(conflicts.iter().map(|c| ConflictInfo {
-            id: c.id.clone(),
-            r#type: format!("{:?}", c.r#type),
-            entity: c.entity.clone(),
-            field: c.field.clone(),
-            status: format!("{:?}", c.status),
-            created_at: c.created_at,
-            values: c.values.iter().map(|v| format!("{} ({}%)", v.value, (v.confidence * 100.0) as u32)).collect(),
-        }).collect())
+        Ok(conflicts
+            .iter()
+            .map(|c| ConflictInfo {
+                id: c.id.clone(),
+                r#type: format!("{:?}", c.r#type),
+                entity: c.entity.clone(),
+                field: c.field.clone(),
+                status: format!("{:?}", c.status),
+                created_at: c.created_at,
+                values: c
+                    .values
+                    .iter()
+                    .map(|v| format!("{} ({}%)", v.value, (v.confidence * 100.0) as u32))
+                    .collect(),
+            })
+            .collect())
     }
 
     pub async fn list_candidates(&self, all: bool) -> anyhow::Result<Vec<CandidateInfo>> {
@@ -408,13 +501,20 @@ impl MemoryVault {
             conflict.get_pending_candidates()
         };
 
-        Ok(candidates.iter().map(|c| CandidateInfo {
-            id: c.id.clone(),
-            confidence: c.confidence,
-            status: format!("{:?}", c.status),
-            created_at: c.created_at,
-            preview: if c.draft.len() > 50 { format!("{}...", &c.draft[..50]) } else { c.draft.clone() },
-        }).collect())
+        Ok(candidates
+            .iter()
+            .map(|c| CandidateInfo {
+                id: c.id.clone(),
+                confidence: c.confidence,
+                status: format!("{:?}", c.status),
+                created_at: c.created_at,
+                preview: if c.draft.len() > 50 {
+                    format!("{}...", &c.draft[..50])
+                } else {
+                    c.draft.clone()
+                },
+            })
+            .collect())
     }
 
     pub async fn resolve_conflict(&self, id: &str) -> anyhow::Result<bool> {
@@ -441,8 +541,13 @@ impl MemoryVault {
     async fn update_index_for_raw(&self, date: NaiveDate) -> anyhow::Result<()> {
         let path = self.raw.get_file_path(date);
         if let Some(content) = self.raw.read_file(date).await? {
-            let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-            
+            let mtime = fs::metadata(&path)
+                .await?
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
             {
                 let mut index = self.index.write().await;
                 index.remove_entries_for_file(&path_to_rel_string(&path));
@@ -450,11 +555,23 @@ impl MemoryVault {
                 let entity_names = extract_entity_names(&content);
 
                 for name in entity_names {
-                    index.add_entry(&name, &path_to_rel_string(&path), Layer::Raw, mtime, snippets.clone());
+                    index.add_entry(
+                        &name,
+                        &path_to_rel_string(&path),
+                        Layer::Raw,
+                        mtime,
+                        snippets.clone(),
+                    );
                 }
 
                 for snippet in &snippets {
-                    index.add_entry(&snippet.heading, &path_to_rel_string(&path), Layer::Raw, mtime, snippets.clone());
+                    index.add_entry(
+                        &snippet.heading,
+                        &path_to_rel_string(&path),
+                        Layer::Raw,
+                        mtime,
+                        snippets.clone(),
+                    );
                 }
             }
 
@@ -466,13 +583,27 @@ impl MemoryVault {
     async fn update_index_for_wiki_entity(&self, name: &str) -> anyhow::Result<()> {
         let path = self.wiki_entity.get_file_path(name);
         if let Ok(content) = fs::read_to_string(&path).await {
-            let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-            self.index.write().await.remove_entries_for_file(&path_to_rel_string(&path));
+            let mtime = fs::metadata(&path)
+                .await?
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            self.index
+                .write()
+                .await
+                .remove_entries_for_file(&path_to_rel_string(&path));
             let snippets = extract_snippets(&content);
             let entity_names = extract_entity_names(&content);
 
             for entity_name in entity_names {
-                self.index.write().await.add_entry(&entity_name, &path_to_rel_string(&path), Layer::Wiki, mtime, snippets.clone());
+                self.index.write().await.add_entry(
+                    &entity_name,
+                    &path_to_rel_string(&path),
+                    Layer::Wiki,
+                    mtime,
+                    snippets.clone(),
+                );
             }
 
             self.index.read().await.save().await?;
@@ -483,13 +614,27 @@ impl MemoryVault {
     async fn update_index_for_wiki_event(&self, name: &str) -> anyhow::Result<()> {
         let path = self.wiki_event.get_file_path(name);
         if let Ok(content) = fs::read_to_string(&path).await {
-            let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-            self.index.write().await.remove_entries_for_file(&path_to_rel_string(&path));
+            let mtime = fs::metadata(&path)
+                .await?
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            self.index
+                .write()
+                .await
+                .remove_entries_for_file(&path_to_rel_string(&path));
             let snippets = extract_snippets(&content);
             let entity_names = extract_entity_names(&content);
 
             for entity_name in entity_names {
-                self.index.write().await.add_entry(&entity_name, &path_to_rel_string(&path), Layer::Wiki, mtime, snippets.clone());
+                self.index.write().await.add_entry(
+                    &entity_name,
+                    &path_to_rel_string(&path),
+                    Layer::Wiki,
+                    mtime,
+                    snippets.clone(),
+                );
             }
 
             self.index.read().await.save().await?;
@@ -504,13 +649,27 @@ impl MemoryVault {
     ) -> anyhow::Result<()> {
         let path = self.axiom.get_file_path(category, name);
         if let Ok(content) = fs::read_to_string(&path).await {
-            let mtime = fs::metadata(&path).await?.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-            self.index.write().await.remove_entries_for_file(&path_to_rel_string(&path));
+            let mtime = fs::metadata(&path)
+                .await?
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            self.index
+                .write()
+                .await
+                .remove_entries_for_file(&path_to_rel_string(&path));
             let snippets = extract_snippets(&content);
             let entity_names = extract_entity_names(&content);
 
             for entity_name in entity_names {
-                self.index.write().await.add_entry(&entity_name, &path_to_rel_string(&path), Layer::Axiom, mtime, snippets.clone());
+                self.index.write().await.add_entry(
+                    &entity_name,
+                    &path_to_rel_string(&path),
+                    Layer::Axiom,
+                    mtime,
+                    snippets.clone(),
+                );
             }
 
             self.index.read().await.save().await?;
@@ -518,7 +677,11 @@ impl MemoryVault {
         Ok(())
     }
 
-    async fn validate_links_and_record_pending(&self, content: &str, from_file: &str) -> anyhow::Result<()> {
+    async fn validate_links_and_record_pending(
+        &self,
+        content: &str,
+        from_file: &str,
+    ) -> anyhow::Result<()> {
         let links = Link::parse(content);
 
         let entity_names: HashSet<String> = self.wiki_entity.list().await?.into_iter().collect();
@@ -529,7 +692,10 @@ impl MemoryVault {
         let pending_links = validator.validate(&links);
 
         for link in pending_links {
-            self.conflict.write().await.add_pending_link(from_file, &link.original);
+            self.conflict
+                .write()
+                .await
+                .add_pending_link(from_file, &link.original);
         }
 
         self.conflict.read().await.save().await?;

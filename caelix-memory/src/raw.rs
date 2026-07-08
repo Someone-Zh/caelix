@@ -23,7 +23,8 @@ impl RawLayer {
     }
 
     pub fn get_file_path(&self, date: NaiveDate) -> PathBuf {
-        self.root_dir.join(format!("{}.md", date.format("%Y-%m-%d")))
+        self.root_dir
+            .join(format!("{}.md", date.format("%Y-%m-%d")))
     }
 
     pub async fn write_entry(

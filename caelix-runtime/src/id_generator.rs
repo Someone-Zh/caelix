@@ -9,7 +9,7 @@ use tracing;
 
 /// ID生成器单例
 static ID_GENERATOR: once_cell::sync::Lazy<Arc<std::sync::Mutex<Generator>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(std::sync::Mutex::new(Generator::new(1))));
+    once_cell::sync::Lazy::new(|| Arc::new(std::sync::Mutex::new(Generator::new(node_id()))));
 
 /// ID前缀常量
 pub const SESSION_ID_PREFIX: &str = "S";
@@ -71,8 +71,18 @@ pub fn generate_task_id() -> String {
 
 /// 内部方法：生成snowflake ID
 fn generate_snowflake_id() -> u64 {
-    let mut generator = ID_GENERATOR.lock().unwrap();
+    let mut generator = ID_GENERATOR.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("ID generator mutex was poisoned; recovering inner generator");
+        poisoned.into_inner()
+    });
     generator.generate()
+}
+
+fn node_id() -> u16 {
+    std::env::var("CAELIX_NODE_ID")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(1)
 }
 
 #[cfg(test)]

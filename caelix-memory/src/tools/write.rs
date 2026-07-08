@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use caelix_api::tool::{Tool, ToolResult};
 use crate::schema::{MemoryVaultConfig, RawSource};
 use crate::vault::MemoryVault;
+use async_trait::async_trait;
+use caelix_api::tool::{Tool, ToolResult};
 use chrono::{Date, Utc};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
@@ -110,7 +110,10 @@ impl Tool for MemoryWriteTool {
             "wiki_event" => self.execute_write_wiki_event(input).await,
             "axiom" => ToolResult {
                 output: String::new(),
-                error: Some("Axiom layer cannot be written directly. Use memory_promote tool instead.".to_string()),
+                error: Some(
+                    "Axiom layer cannot be written directly. Use memory_promote tool instead."
+                        .to_string(),
+                ),
             },
             _ => ToolResult {
                 output: String::new(),
@@ -162,9 +165,18 @@ impl MemoryWriteTool {
             heading.to_string()
         };
 
-        match self.vault.write_raw(date, source, tags, &heading_text, content).await {
+        match self
+            .vault
+            .write_raw(date, source, tags, &heading_text, content)
+            .await
+        {
             Ok(_) => ToolResult {
-                output: format!("Successfully wrote to Raw layer\nDate: {}\nHeading: {}\nContent preview: {}", date.format("%Y-%m-%d"), heading_text, truncate_content(content)),
+                output: format!(
+                    "Successfully wrote to Raw layer\nDate: {}\nHeading: {}\nContent preview: {}",
+                    date.format("%Y-%m-%d"),
+                    heading_text,
+                    truncate_content(content)
+                ),
                 error: None,
             },
             Err(e) => ToolResult {
@@ -290,9 +302,26 @@ impl MemoryWriteTool {
         let today = Utc::now().date_naive();
         let date_range = vec![today, today];
 
-        match self.vault.write_wiki_event(name, date_range, participants, related_entities, confidence, derived_from, content).await {
+        match self
+            .vault
+            .write_wiki_event(
+                name,
+                date_range,
+                participants,
+                related_entities,
+                confidence,
+                derived_from,
+                content,
+            )
+            .await
+        {
             Ok(_) => ToolResult {
-                output: format!("Successfully wrote Wiki Event: {}\nConfidence: {:.2}\nContent preview: {}", name, confidence, truncate_content(content)),
+                output: format!(
+                    "Successfully wrote Wiki Event: {}\nConfidence: {:.2}\nContent preview: {}",
+                    name,
+                    confidence,
+                    truncate_content(content)
+                ),
                 error: None,
             },
             Err(e) => ToolResult {

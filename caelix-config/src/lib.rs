@@ -65,19 +65,11 @@ impl EnvConfig {
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[config] 解析 {} 失败: {}",
-                            config_path.display(),
-                            e
-                        );
+                        eprintln!("[config] 解析 {} 失败: {}", config_path.display(), e);
                     }
                 },
                 Err(e) => {
-                    eprintln!(
-                        "[config] 读取 {} 失败: {}",
-                        config_path.display(),
-                        e
-                    );
+                    eprintln!("[config] 读取 {} 失败: {}", config_path.display(), e);
                 }
             }
         }

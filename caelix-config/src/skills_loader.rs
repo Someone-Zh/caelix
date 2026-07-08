@@ -129,7 +129,8 @@ async fn load_single_skill(file_path: &Path, base_dir: &Path) -> Result<Skill, S
         .ok_or_else(|| format!("Invalid file name: {:?}", file_path))?;
 
     // 记录 skill 的绝对路径：优先 canonicalize，失败时退回原路径
-    let abs_file_path: PathBuf = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let abs_file_path: PathBuf =
+        fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
 
     // 创建 Skill 对象（携带来源位置与 YAML 元数据）
     let skill = Skill::with_metadata(
@@ -186,7 +187,9 @@ mod tests {
         )
         .unwrap();
 
-        let skills = load_skills_from_directory(&skills_root.to_string_lossy()).await.unwrap();
+        let skills = load_skills_from_directory(&skills_root.to_string_lossy())
+            .await
+            .unwrap();
         assert_eq!(skills.len(), 1);
 
         let s = &skills[0];

@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::Arc;
 use tracing_subscriber::{
     EnvFilter,
     fmt::{self, MakeWriter},
@@ -105,9 +105,11 @@ impl LogConfig {
 fn build_filter(config: &LogConfig) -> EnvFilter {
     let mut base = EnvFilter::new(&config.level);
     for directive in &config.directives {
-        base = base.add_directive(directive.parse().unwrap_or_else(|_| {
-            tracing::metadata::LevelFilter::INFO.into()
-        }));
+        base = base.add_directive(
+            directive
+                .parse()
+                .unwrap_or_else(|_| tracing::metadata::LevelFilter::INFO.into()),
+        );
     }
     base
 }
@@ -158,14 +160,15 @@ impl RollingFileInner {
         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S%.3f");
         let rotated = self.dir.join(format!("caelix.{}.log", ts));
         if self.current_path.exists()
-            && let Err(e) = fs::rename(&self.current_path, &rotated) {
-                tracing::warn!(
-                    from = %self.current_path.display(),
-                    to = %rotated.display(),
-                    error = %e,
-                    "log file rotate failed"
-                );
-            }
+            && let Err(e) = fs::rename(&self.current_path, &rotated)
+        {
+            tracing::warn!(
+                from = %self.current_path.display(),
+                to = %rotated.display(),
+                error = %e,
+                "log file rotate failed"
+            );
+        }
 
         // 打开新文件
         let new_file = OpenOptions::new()
@@ -293,8 +296,12 @@ impl<'a> MakeWriter<'a> for LogMakeWriter {
     fn make_writer(&'a self) -> Self::Writer {
         match &self.kind {
             LogSinkKind::Stdout => Box::new(io::stdout()),
-            LogSinkKind::File(inner) => Box::new(SharedRollingWriter { inner: inner.clone() }),
-            LogSinkKind::Tee(inner) => Box::new(TeeWriter { file: Some(inner.clone()) }),
+            LogSinkKind::File(inner) => Box::new(SharedRollingWriter {
+                inner: inner.clone(),
+            }),
+            LogSinkKind::Tee(inner) => Box::new(TeeWriter {
+                file: Some(inner.clone()),
+            }),
         }
     }
 }

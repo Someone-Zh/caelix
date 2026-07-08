@@ -52,7 +52,9 @@ impl WikiEventLayer {
         let file_path = self.get_file_path(name);
 
         let version = if file_path.exists() {
-            self.read(name).await?.map_or(1, |e| e.frontmatter.version + 1)
+            self.read(name)
+                .await?
+                .map_or(1, |e| e.frontmatter.version + 1)
         } else {
             1
         };
@@ -87,7 +89,10 @@ impl WikiEventLayer {
         let (yaml, body) = match crate::schema::parse_yaml_frontmatter(&content) {
             Some((y, b)) => (y, b.to_string()),
             None => {
-                return Err(anyhow::anyhow!("Invalid YAML frontmatter in {}", file_path.display()))
+                return Err(anyhow::anyhow!(
+                    "Invalid YAML frontmatter in {}",
+                    file_path.display()
+                ))
             }
         };
 
@@ -118,10 +123,15 @@ impl WikiEventLayer {
         Ok(names)
     }
 
-    pub async fn update_status(&self, name: &str, new_status: WikiEventStatus) -> anyhow::Result<()> {
-        let mut event = self.read(name).await?.ok_or_else(|| {
-            anyhow::anyhow!("Event {} not found", name)
-        })?;
+    pub async fn update_status(
+        &self,
+        name: &str,
+        new_status: WikiEventStatus,
+    ) -> anyhow::Result<()> {
+        let mut event = self
+            .read(name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Event {} not found", name))?;
         event.frontmatter.status = new_status;
         event.frontmatter.version += 1;
         self.write_event(&event).await

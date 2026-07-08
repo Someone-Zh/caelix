@@ -68,7 +68,10 @@ impl Link {
         links
             .into_iter()
             .map(|l| match l.link_type {
-                LinkType::Entity(name) | LinkType::Event(name) | LinkType::Axiom(name) | LinkType::Pending(name) => name,
+                LinkType::Entity(name)
+                | LinkType::Event(name)
+                | LinkType::Axiom(name)
+                | LinkType::Pending(name) => name,
             })
             .collect()
     }
@@ -81,7 +84,11 @@ pub struct LinkValidator {
 }
 
 impl LinkValidator {
-    pub fn new(entity_names: HashSet<String>, event_names: HashSet<String>, axiom_names: HashSet<String>) -> Self {
+    pub fn new(
+        entity_names: HashSet<String>,
+        event_names: HashSet<String>,
+        axiom_names: HashSet<String>,
+    ) -> Self {
         Self {
             entity_names,
             event_names,
@@ -135,11 +142,14 @@ impl LinkValidator {
             } else {
                 caps[0].to_string()
             }
-        }).to_string()
+        })
+        .to_string()
     }
 }
 
-pub fn find_all_links_in_directory(dir: &std::path::Path) -> anyhow::Result<Vec<(std::path::PathBuf, Vec<Link>)>> {
+pub fn find_all_links_in_directory(
+    dir: &std::path::Path,
+) -> anyhow::Result<Vec<(std::path::PathBuf, Vec<Link>)>> {
     let mut results = Vec::new();
 
     for entry in walkdir::WalkDir::new(dir)
