@@ -10,8 +10,6 @@ pub struct MessageBus {
 
 impl MessageBus {
     pub fn new(capacity: usize) -> Self {
-        // 使用更大的容量避免消息丢失，确保至少 8192
-        let capacity = capacity.max(8192);
         let (agent_sender, _) = broadcast::channel(capacity);
         let (notification_sender, _) = broadcast::channel(capacity);
         let (task_sender, _) = broadcast::channel(capacity);

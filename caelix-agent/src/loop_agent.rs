@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -105,74 +105,78 @@ impl Agent for LoopAgent {
                     return;
                 }
 
-                let llm_stream = call_llm_static(&def, &messages, &llm, &cfg);
-
-                tokio::pin!(llm_stream);
                 let mut full_content = String::new();
                 let mut final_tool_calls = Vec::new();
 
-                // 在 LLM 流迭代期间监听取消信号：cancel future 只构造一次并 pin，
-                // select! 每轮通过 `&mut` 复用，避免每个 chunk 都重建 future 与 waiter。
-                let cancel_fut = async {
-                    match RuntimeContext::try_current() {
-                        Some(ctx) => ctx.cancellation_token().cancelled().await,
-                        None => std::future::pending::<()>().await,
-                    }
-                };
-                tokio::pin!(cancel_fut);
+                {
+                    let llm_stream = call_llm_static(&def, &messages, &llm, &cfg);
 
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = &mut cancel_fut => {
-                            yield Ok(AgentOutputChunk::Stopped {
-                                reason: "cancelled_by_user".into(),
-                            });
-                            return;
+                    tokio::pin!(llm_stream);
+
+                    // 在 LLM 流迭代期间监听取消信号：cancel future 只构造一次并 pin，
+                    // select! 每轮通过 `&mut` 复用，避免每个 chunk 都重建 future 与 waiter。
+                    let cancel_fut = async {
+                        match RuntimeContext::try_current() {
+                            Some(ctx) => ctx.cancellation_token().cancelled().await,
+                            None => std::future::pending::<()>().await,
                         }
-                        next = llm_stream.next() => {
-                            let Some(item) = next else { break };
-                            match item {
-                                Ok(AgentOutputChunk::Stopped { reason }) => {
-                                    yield Ok(AgentOutputChunk::Stopped { reason });
-                                    return;
-                                }
-                                Ok(AgentOutputChunk::Content { content }) => {
-                                    full_content.push_str(&content);
-                                    yield Ok(AgentOutputChunk::Content { content });
-                                }
+                    };
+                    tokio::pin!(cancel_fut);
 
-                                Ok(AgentOutputChunk::ToolCall { tool_call_id, name, arguments }) => {
-                                    let id = tool_call_id.clone();
-                                    let name2 = name.clone();
-                                    let arg2 = arguments.clone();
-
-                                    final_tool_calls.push(ToolCall {
-                                        id: tool_call_id,
-                                        index: final_tool_calls.len() as u32,
-                                        name,
-                                        arguments: serde_json::Value::String(arguments),
-                                        approval_state: None,
-                                    });
-
-                                    yield Ok(AgentOutputChunk::ToolCall {
-                                        tool_call_id: id,
-                                        name: name2,
-                                        arguments: arg2,
-                                    });
-                                }
-
-                                Ok(AgentOutputChunk::Finish { usage, .. }) => {
-                                    // 拦截来自 call_llm_static 的内部 Finish，累加 usage（不会转发）
-                                    if let Some(u) = usage {
-                                        cumulative_usage.add(&u);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = &mut cancel_fut => {
+                                yield Ok(AgentOutputChunk::Stopped {
+                                    reason: "cancelled_by_user".into(),
+                                });
+                                return;
+                            }
+                            next = llm_stream.next() => {
+                                let Some(item) = next else { break };
+                                match item {
+                                    Ok(AgentOutputChunk::Stopped { reason }) => {
+                                        yield Ok(AgentOutputChunk::Stopped { reason });
+                                        return;
                                     }
-                                }
+                                    Ok(AgentOutputChunk::Content { content }) => {
+                                        full_content.push_str(&content);
+                                        yield Ok(AgentOutputChunk::Content { content });
+                                    }
 
-                                Ok(other) => yield Ok(other),
-                                Err(e) => {
-                                    yield Err(e);
-                                    return;
+                                    Ok(AgentOutputChunk::ToolCall { tool_call_id, name, arguments }) => {
+                                        let id = tool_call_id.clone();
+                                        let name2 = name.clone();
+                                        let arg2 = arguments.clone();
+                                        let parsed_arguments = parse_tool_arguments(&arguments);
+
+                                        final_tool_calls.push(ToolCall {
+                                            id: tool_call_id,
+                                            index: final_tool_calls.len() as u32,
+                                            name,
+                                            arguments: parsed_arguments,
+                                            approval_state: None,
+                                        });
+
+                                        yield Ok(AgentOutputChunk::ToolCall {
+                                            tool_call_id: id,
+                                            name: name2,
+                                            arguments: arg2,
+                                        });
+                                    }
+
+                                    Ok(AgentOutputChunk::Finish { usage, .. }) => {
+                                        // 拦截来自 call_llm_static 的内部 Finish，累加 usage（不会转发）
+                                        if let Some(u) = usage {
+                                            cumulative_usage.add(&u);
+                                        }
+                                    }
+
+                                    Ok(other) => yield Ok(other),
+                                    Err(e) => {
+                                        yield Err(e);
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -264,15 +268,14 @@ impl Agent for LoopAgent {
     }
 }
 
-fn call_llm_static(
-    def: &Arc<AgentSpec>,
-    messages: &[ChatMessage],
-    llm_provider: &Arc<dyn LlmProvider>,
-    config: &LlmConfig,
-) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'static>> {
+fn call_llm_static<'a>(
+    def: &'a Arc<AgentSpec>,
+    messages: &'a [ChatMessage],
+    llm_provider: &'a Arc<dyn LlmProvider>,
+    config: &'a LlmConfig,
+) -> Pin<Box<dyn Stream<Item = Result<AgentOutputChunk, AgentError>> + Send + 'a>> {
     let tool_defs = def.get_tool_definitions();
     let llm = llm_provider.clone();
-    let msgs = messages.to_vec();
     let cfg = config.clone();
 
     let s = stream! {
@@ -282,9 +285,13 @@ fn call_llm_static(
             model: cfg.model_name.clone(),
         });
 
-        let mut stream = llm.chat_stream(&msgs, &tool_defs, &cfg).await;
+        let cancel_token =
+            RuntimeContext::try_current().map(|ctx| ctx.cancellation_token().child_token());
+        let mut stream = llm
+            .chat_stream_with_cancel(messages, &tool_defs, &cfg, cancel_token)
+            .await;
 
-        let mut tool_buffers: Vec<(usize, String, String, String)> = Vec::new();
+        let mut tool_buffers: HashMap<usize, (String, String, String)> = HashMap::new();
         let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
         // cancel future 只构造一次并 pin，select! 每轮通过 `&mut` 复用。
@@ -336,20 +343,19 @@ fn call_llm_static(
                     if let Some(tcs) = &chunk.tool_calls {
                         for tc in tcs {
                             let idx = tc.index as usize;
-                            if let Some((_, _, _, args)) = tool_buffers.iter_mut().find(|(i, _, _, _)| *i == idx) {
-                                args.push_str(tc.arguments.as_str().unwrap_or(""));
+                            let args_delta = tool_argument_delta(&tc.arguments);
+                            if let Some((_, _, args)) = tool_buffers.get_mut(&idx) {
+                                args.push_str(&args_delta);
                             } else {
                                 let id = if tc.id.is_empty() {
                                     format!("call_{idx}")
                                 } else {
                                     tc.id.clone()
                                 };
-                                tool_buffers.push((
+                                tool_buffers.insert(
                                     idx,
-                                    id,
-                                    tc.name.clone(),
-                                    tc.arguments.as_str().unwrap_or("").to_string(),
-                                ));
+                                    (id, tc.name.clone(), args_delta),
+                                );
                             }
                         }
                     }
@@ -357,7 +363,9 @@ fn call_llm_static(
             }
         }
 
-        for (_idx, id, name, args) in tool_buffers {
+        let mut ordered_tool_buffers = tool_buffers.into_iter().collect::<Vec<_>>();
+        ordered_tool_buffers.sort_by_key(|(idx, _)| *idx);
+        for (_idx, (id, name, args)) in ordered_tool_buffers {
             yield Ok(AgentOutputChunk::ToolCall {
                 tool_call_id: id,
                 name,
@@ -378,4 +386,16 @@ fn call_llm_static(
         }
     };
     Box::pin(s)
+}
+
+fn tool_argument_delta(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
+    serde_json::from_str(arguments)
+        .unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()))
 }

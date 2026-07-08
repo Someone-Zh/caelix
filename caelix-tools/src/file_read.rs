@@ -4,6 +4,7 @@ use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::security::require_path_allowed;
 use caelix_api::tool::{Tool, ToolPreCheckResult, ToolResult};
 
 #[derive(Debug, Clone)]
@@ -75,6 +76,12 @@ impl Tool for ReadFileTool {
         let show_line_numbers = input["show_line_numbers"].as_bool().unwrap_or(true);
 
         let path = Path::new(file_path);
+        if let Err(e) = require_path_allowed(file_path).await {
+            return ToolResult {
+                output: String::new(),
+                error: Some(format!("Path rejected by security policy: {}", e)),
+            };
+        }
 
         // ==============================================
         // 🔥 模式 1：仅获取文件大小（O(1)，极快，不读文件）

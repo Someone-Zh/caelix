@@ -8,6 +8,7 @@ use anyhow::Result;
 use caelix_api::message::{AgentMessage, AgentMessageType, NotificationMessage, TaskMessage};
 use caelix_api::provider::ChatMessage;
 use caelix_api::tool::ToolCallApprovalState;
+use chrono::{Duration as ChronoDuration, Utc};
 use futures::Stream;
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
@@ -15,10 +16,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 // 类型别名，简化复杂类型
@@ -33,10 +32,10 @@ pub struct SessionManager {
     agent_buffers: Arc<tokio::sync::RwLock<AgentBufferMap>>,
     // Notification 消息通道和历史记录
     notification_channels:
-        Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
+        Arc<tokio::sync::RwLock<HashMap<String, broadcast::Sender<NotificationMessage>>>>,
     notification_history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
     // Task 消息通道和历史记录
-    task_channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<TaskMessage>>>>,
+    task_channels: Arc<tokio::sync::RwLock<HashMap<String, broadcast::Sender<TaskMessage>>>>,
     task_history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<TaskMessage>>>>,
     // 三个独立的消费者任务句柄
     _agent_handle: JoinHandle<()>,
@@ -48,6 +47,7 @@ pub struct SessionManager {
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 1000;
 const TASK_CHANNEL_CAPACITY: usize = 1000;
 const MAX_HISTORY_SIZE: usize = 1000; // 每个 session 保留的历史消息数
+const AGENT_BUFFER_TTL_SECS: i64 = 30 * 60;
 
 impl std::fmt::Debug for SessionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,13 +59,36 @@ impl std::fmt::Debug for SessionManager {
 
 // ==================== 独立的消费者函数 ====================
 
+async fn cleanup_stale_agent_buffers(agent_buffers: &Arc<tokio::sync::RwLock<AgentBufferMap>>) {
+    let cutoff = Utc::now() - ChronoDuration::seconds(AGENT_BUFFER_TTL_SECS);
+    let mut buffers = agent_buffers.write().await;
+    buffers.retain(|_, msgs| {
+        msgs.last()
+            .map(|msg| msg.timestamp >= cutoff)
+            .unwrap_or(false)
+    });
+}
+
 /// Agent 消息消费者（保持现有逻辑）
 async fn run_agent_consumer(
     mut rx: broadcast::Receiver<AgentMessage>,
     storage: Arc<dyn StorageBackend>,
     agent_buffers: Arc<tokio::sync::RwLock<AgentBufferMap>>,
 ) {
-    while let Ok(msg) = rx.recv().await {
+    let mut cleanup_interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
+    loop {
+        let msg = tokio::select! {
+            msg = rx.recv() => match msg {
+                Ok(msg) => msg,
+                Err(_) => break,
+            },
+            _ = cleanup_interval.tick() => {
+                cleanup_stale_agent_buffers(&agent_buffers).await;
+                continue;
+            }
+        };
+
         match msg.r#type {
             AgentMessageType::Msg => {
                 // 持久化 Msg 类型
@@ -112,78 +135,86 @@ async fn run_agent_consumer(
 /// Notification 消息消费者（带背压）
 async fn run_notification_consumer(
     mut rx: broadcast::Receiver<NotificationMessage>,
-    channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<NotificationMessage>>>>,
+    channels: Arc<tokio::sync::RwLock<HashMap<String, broadcast::Sender<NotificationMessage>>>>,
     history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<NotificationMessage>>>>,
 ) {
     while let Ok(msg) = rx.recv().await {
         let session_id = msg.session_id.clone();
 
-        // 获取或创建通道
+        // 先保存到历史记录，实时订阅者断开不应影响可恢复历史。
+        {
+            let mut hist = history.write().await;
+            let hist_vec = hist.entry(session_id.clone()).or_insert_with(VecDeque::new);
+            if hist_vec.len() >= MAX_HISTORY_SIZE {
+                hist_vec.pop_front();
+            }
+            hist_vec.push_back(msg.clone());
+        }
+
+        // 获取或创建 per-session broadcast 通道
         let sender = {
             let mut channs = channels.write().await;
             channs
                 .entry(session_id.clone())
                 .or_insert_with(|| {
-                    let (tx, _rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+                    let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
                     tx
                 })
                 .clone()
         };
 
-        // 尝试发送（如果通道满会阻塞，实现背压）
-        if sender.send(msg.clone()).await.is_err() {
-            // 接收者已断开，清理通道
+        if sender.send(msg).is_err() {
             let mut channs = channels.write().await;
-            channs.remove(&session_id);
-            continue;
+            if channs
+                .get(&session_id)
+                .is_some_and(|current| current.receiver_count() == 0)
+            {
+                channs.remove(&session_id);
+            }
         }
-
-        // 同时保存到历史记录（限制大小）
-        let mut hist = history.write().await;
-        let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
-        if hist_vec.len() >= MAX_HISTORY_SIZE {
-            hist_vec.pop_front();
-        }
-        hist_vec.push_back(msg);
     }
 }
 
 /// Task 消息消费者（带背压）
 async fn run_task_consumer(
     mut rx: broadcast::Receiver<TaskMessage>,
-    channels: Arc<tokio::sync::RwLock<HashMap<String, mpsc::Sender<TaskMessage>>>>,
+    channels: Arc<tokio::sync::RwLock<HashMap<String, broadcast::Sender<TaskMessage>>>>,
     history: Arc<tokio::sync::RwLock<HashMap<String, VecDeque<TaskMessage>>>>,
 ) {
     while let Ok(msg) = rx.recv().await {
         let session_id = msg.session_id.clone();
 
-        // 获取或创建通道
+        // 先保存到历史记录，实时订阅者断开不应影响可恢复历史。
+        {
+            let mut hist = history.write().await;
+            let hist_vec = hist.entry(session_id.clone()).or_insert_with(VecDeque::new);
+            if hist_vec.len() >= MAX_HISTORY_SIZE {
+                hist_vec.pop_front();
+            }
+            hist_vec.push_back(msg.clone());
+        }
+
+        // 获取或创建 per-session broadcast 通道
         let sender = {
             let mut channs = channels.write().await;
             channs
                 .entry(session_id.clone())
                 .or_insert_with(|| {
-                    let (tx, _rx) = mpsc::channel(TASK_CHANNEL_CAPACITY);
+                    let (tx, _) = broadcast::channel(TASK_CHANNEL_CAPACITY);
                     tx
                 })
                 .clone()
         };
 
-        // 尝试发送（如果通道满会阻塞，实现背压）
-        if sender.send(msg.clone()).await.is_err() {
-            // 接收者已断开，清理通道
+        if sender.send(msg).is_err() {
             let mut channs = channels.write().await;
-            channs.remove(&session_id);
-            continue;
+            if channs
+                .get(&session_id)
+                .is_some_and(|current| current.receiver_count() == 0)
+            {
+                channs.remove(&session_id);
+            }
         }
-
-        // 同时保存到历史记录（限制大小）
-        let mut hist = history.write().await;
-        let hist_vec = hist.entry(session_id).or_insert_with(VecDeque::new);
-        if hist_vec.len() >= MAX_HISTORY_SIZE {
-            hist_vec.pop_front();
-        }
-        hist_vec.push_back(msg);
     }
 }
 
@@ -253,6 +284,9 @@ impl SessionManager {
         Vec<AgentMessage>,
         Pin<Box<dyn Stream<Item = Result<AgentMessage, broadcast::error::RecvError>> + Send>>,
     )> {
+        // 先订阅实时消息，再读取/抽取历史，避免两步之间到达的 Chunk 丢失。
+        let rx = self.bus.subscribe_agent();
+
         // 1. 读取历史 Msg 消息
         let history = self.storage.read_agent_messages(&session_id).await?;
 
@@ -284,16 +318,17 @@ impl SessionManager {
         // 合并历史和积累的消息
         let mut all_history = history;
         all_history.extend(accumulated);
+        let cutoff = all_history.iter().map(|m| m.timestamp).max();
 
         // 3. 订阅实时
-        let rx = self.bus.subscribe_agent();
         let session_id_clone = session_id.clone();
 
         let stream = BroadcastStream::new(rx)
             .filter_map(move |res| {
-                let keep = res
-                    .as_ref()
-                    .map_or(true, |m| m.session_id == session_id_clone);
+                let keep = res.as_ref().map_or(true, |m| {
+                    m.session_id == session_id_clone
+                        && cutoff.is_none_or(|cutoff| m.timestamp > cutoff)
+                });
                 std::future::ready(if keep { Some(res) } else { None })
             })
             .map(|item| {
@@ -315,25 +350,41 @@ impl SessionManager {
             Box<dyn Stream<Item = Result<NotificationMessage, broadcast::error::RecvError>> + Send>,
         >,
     )> {
-        // 1. 从历史记录中获取累积消息
-        let accumulated = {
-            let mut hist = self.notification_history.write().await;
-            hist.remove(&session_id)
-                .map(|deque| deque.into_iter().collect::<Vec<_>>())
-                .unwrap_or_default()
+        // 1. 先订阅 per-session broadcast，避免订阅窗口内的新消息丢失。
+        let rx = {
+            let mut channels = self.notification_channels.write().await;
+            channels
+                .entry(session_id.clone())
+                .or_insert_with(|| {
+                    let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
+                    tx
+                })
+                .subscribe()
         };
 
-        // 2. 创建新的 mpsc 通道供订阅者使用
-        let (tx, rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        // 2. 从历史记录中获取快照，不能 remove，否则首个订阅者会吃掉全部历史。
+        let accumulated = {
+            let hist = self.notification_history.read().await;
+            hist.get(&session_id)
+                .map(|deque| deque.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        let cutoff = accumulated.iter().map(|m| m.timestamp).max();
+        let session_id_clone = session_id.clone();
 
-        // 3. 注册通道
-        {
-            let mut channels = self.notification_channels.write().await;
-            channels.insert(session_id.clone(), tx);
-        }
-
-        // 4. 将 mpsc::Receiver 转换为 Stream
-        let stream = ReceiverStream::new(rx).map(Ok::<_, RecvError>); // 转换为 Result 类型
+        let stream = BroadcastStream::new(rx)
+            .filter_map(move |res| {
+                let keep = res.as_ref().map_or(true, |m| {
+                    m.session_id == session_id_clone
+                        && cutoff.is_none_or(|cutoff| m.timestamp > cutoff)
+                });
+                std::future::ready(if keep { Some(res) } else { None })
+            })
+            .map(|item| {
+                item.map_err(|e| match e {
+                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
+                })
+            });
 
         Ok((accumulated, Box::pin(stream)))
     }
@@ -346,25 +397,41 @@ impl SessionManager {
         Vec<TaskMessage>,
         Pin<Box<dyn Stream<Item = Result<TaskMessage, broadcast::error::RecvError>> + Send>>,
     )> {
-        // 1. 从历史记录中获取累积消息
-        let accumulated = {
-            let mut hist = self.task_history.write().await;
-            hist.remove(&session_id)
-                .map(|deque| deque.into_iter().collect::<Vec<_>>())
-                .unwrap_or_default()
+        // 1. 先订阅 per-session broadcast，避免订阅窗口内的新消息丢失。
+        let rx = {
+            let mut channels = self.task_channels.write().await;
+            channels
+                .entry(session_id.clone())
+                .or_insert_with(|| {
+                    let (tx, _) = broadcast::channel(TASK_CHANNEL_CAPACITY);
+                    tx
+                })
+                .subscribe()
         };
 
-        // 2. 创建新的 mpsc 通道供订阅者使用
-        let (tx, rx) = mpsc::channel(TASK_CHANNEL_CAPACITY);
+        // 2. 从历史记录中获取快照，不能 remove，否则首个订阅者会吃掉全部历史。
+        let accumulated = {
+            let hist = self.task_history.read().await;
+            hist.get(&session_id)
+                .map(|deque| deque.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        let cutoff = accumulated.iter().map(|m| m.timestamp).max();
+        let session_id_clone = session_id.clone();
 
-        // 3. 注册通道
-        {
-            let mut channels = self.task_channels.write().await;
-            channels.insert(session_id.clone(), tx);
-        }
-
-        // 4. 将 mpsc::Receiver 转换为 Stream
-        let stream = ReceiverStream::new(rx).map(Ok::<_, RecvError>); // 转换为 Result 类型
+        let stream = BroadcastStream::new(rx)
+            .filter_map(move |res| {
+                let keep = res.as_ref().map_or(true, |m| {
+                    m.session_id == session_id_clone
+                        && cutoff.is_none_or(|cutoff| m.timestamp > cutoff)
+                });
+                std::future::ready(if keep { Some(res) } else { None })
+            })
+            .map(|item| {
+                item.map_err(|e| match e {
+                    BroadcastStreamRecvError::Lagged(n) => RecvError::Lagged(n),
+                })
+            });
 
         Ok((accumulated, Box::pin(stream)))
     }
@@ -535,12 +602,12 @@ impl SessionManager {
         Ok(None)
     }
 
-    /// 刷新指定 session 的所有待持久化消息
+    /// 等待指定 session 的异步消息消费者完成当前已排队的持久化工作。
     ///
     /// 注意：agent_buffers 中只存储 Chunk 消息（不持久化），
     /// Msg 消息已经在消费者中实时持久化了。
     /// 此方法主要用于确保所有异步操作完成。
-    pub async fn flush_session(&self, _session_id: &str) {
+    pub async fn wait_for_session_persistence(&self, _session_id: &str) {
         // 等待一小段时间，确保消费者完成当前的持久化操作
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -548,6 +615,12 @@ impl SessionManager {
         // 1. 检查是否有正在进行的持久化操作
         // 2. 等待所有 pending 的写操作完成
         // 目前由于 Msg 是实时持久化的，只需要短暂等待即可
+    }
+
+    /// 兼容旧 API：实际语义是等待后台消费者推进，而不是强制刷盘。
+    #[deprecated(note = "use wait_for_session_persistence; this method is best-effort")]
+    pub async fn flush_session(&self, session_id: &str) {
+        self.wait_for_session_persistence(session_id).await;
     }
 }
 
@@ -638,5 +711,169 @@ impl caelix_api::message::SessionManagerTrait for SessionManager {
 
     fn bus(&self) -> std::sync::Arc<dyn caelix_api::message::MessageBusTrait> {
         Arc::new(self.bus.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use caelix_api::message::{NotificationType, TaskMessageType};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    struct NoopStorage;
+
+    #[async_trait::async_trait]
+    impl StorageBackend for NoopStorage {
+        async fn append_agent_message(&self, _msg: &AgentMessage) -> Result<()> {
+            Ok(())
+        }
+
+        async fn read_agent_messages(&self, _session_id: &str) -> Result<Vec<AgentMessage>> {
+            Ok(Vec::new())
+        }
+
+        async fn replace_agent_message(
+            &self,
+            _session_id: &str,
+            _index: usize,
+            _new_msg: &AgentMessage,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn save_state(&self, _session_id: &str, _state: &SessionState) -> Result<()> {
+            Ok(())
+        }
+
+        async fn load_state(&self, _session_id: &str) -> Result<Option<SessionState>> {
+            Ok(None)
+        }
+    }
+
+    fn manager() -> SessionManager {
+        SessionManager::new(MessageBus::new(16), Arc::new(NoopStorage))
+    }
+
+    fn notification(session_id: &str, content: &str) -> NotificationMessage {
+        NotificationMessage {
+            session_id: session_id.to_string(),
+            r#type: NotificationType::Info,
+            timestamp: Utc::now(),
+            content: content.to_string(),
+        }
+    }
+
+    fn task(session_id: &str, content: &str) -> TaskMessage {
+        TaskMessage {
+            task_id: Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            r#type: TaskMessageType::Progress,
+            timestamp: Utc::now(),
+            content: content.to_string(),
+            result: None,
+        }
+    }
+
+    async fn wait_for_notification_history(manager: &SessionManager, session_id: &str, len: usize) {
+        for _ in 0..50 {
+            let current_len = manager
+                .notification_history
+                .read()
+                .await
+                .get(session_id)
+                .map_or(0, VecDeque::len);
+            if current_len >= len {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+        panic!("notification history did not reach length {len}");
+    }
+
+    async fn wait_for_task_history(manager: &SessionManager, session_id: &str, len: usize) {
+        for _ in 0..50 {
+            let current_len = manager
+                .task_history
+                .read()
+                .await
+                .get(session_id)
+                .map_or(0, VecDeque::len);
+            if current_len >= len {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+        panic!("task history did not reach length {len}");
+    }
+
+    #[tokio::test]
+    async fn notification_history_survives_without_and_across_subscribers() {
+        let manager = manager();
+        let session_id = "session";
+
+        manager
+            .bus()
+            .send_notification(notification(session_id, "before"))
+            .unwrap();
+        wait_for_notification_history(&manager, session_id, 1).await;
+
+        let (first_history, mut first_stream) = manager
+            .subscribe_notification(session_id.to_string())
+            .await
+            .unwrap();
+        let (second_history, mut second_stream) = manager
+            .subscribe_notification(session_id.to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(first_history.len(), 1);
+        assert_eq!(second_history.len(), 1);
+        assert_eq!(first_history[0].content, "before");
+        assert_eq!(second_history[0].content, "before");
+
+        manager
+            .bus()
+            .send_notification(notification(session_id, "after"))
+            .unwrap();
+
+        let first_next =
+            tokio::time::timeout(tokio::time::Duration::from_secs(1), first_stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        let second_next =
+            tokio::time::timeout(tokio::time::Duration::from_secs(1), second_stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(first_next.content, "after");
+        assert_eq!(second_next.content, "after");
+    }
+
+    #[tokio::test]
+    async fn task_history_snapshot_is_not_removed_by_first_subscriber() {
+        let manager = manager();
+        let session_id = "session";
+
+        manager.bus().send_task(task(session_id, "queued")).unwrap();
+        wait_for_task_history(&manager, session_id, 1).await;
+
+        let (first_history, _) = manager
+            .subscribe_task(session_id.to_string())
+            .await
+            .unwrap();
+        let (second_history, _) = manager
+            .subscribe_task(session_id.to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(first_history.len(), 1);
+        assert_eq!(second_history.len(), 1);
+        assert_eq!(first_history[0].content, "queued");
+        assert_eq!(second_history[0].content, "queued");
     }
 }

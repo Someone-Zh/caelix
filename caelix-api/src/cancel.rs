@@ -43,6 +43,15 @@ impl CancellationToken {
     pub async fn cancelled(&self) {
         self.inner.cancelled().await;
     }
+
+    /// 派生子令牌。
+    ///
+    /// 父令牌取消会级联到子令牌；子令牌取消不会反向取消父令牌。
+    pub fn child_token(&self) -> Self {
+        Self {
+            inner: Arc::new(self.inner.child_token()),
+        }
+    }
 }
 
 impl Default for CancellationToken {

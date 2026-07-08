@@ -183,7 +183,9 @@ pub async fn run_agent(
                         agent_name: agent_name.clone(),
                         usage: None,
                     };
-                    let _ = bus_ctx.message_bus().send_agent(agent_msg);
+                    if let Err(err) = bus_ctx.message_bus().send_agent(agent_msg) {
+                        tracing::warn!(error = %err, "failed to send agent message");
+                    }
                 }
 
                 // 遇到 Finish 时追加发送 ChunkEnd，清空消费者的请求缓冲
@@ -199,7 +201,9 @@ pub async fn run_agent(
                         agent_name: agent_name.clone(),
                         usage: usage.clone(),
                     };
-                    let _ = bus_ctx.message_bus().send_agent(end_msg);
+                    if let Err(err) = bus_ctx.message_bus().send_agent(end_msg) {
+                        tracing::warn!(error = %err, "failed to send chunk end message");
+                    }
                 }
 
                 // 遇到 Stopped 时也发送 ChunkEnd 并中断
@@ -215,7 +219,9 @@ pub async fn run_agent(
                         agent_name: agent_name.clone(),
                         usage: None,
                     };
-                    let _ = bus_ctx.message_bus().send_agent(end_msg);
+                    if let Err(err) = bus_ctx.message_bus().send_agent(end_msg) {
+                        tracing::warn!(error = %err, "failed to send stopped chunk end message");
+                    }
                 }
             }
 

@@ -1,6 +1,6 @@
 use crate::checker::SecurityError;
 use crate::config::PathSecurityConfig;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// 路径安全检测器
 pub struct PathChecker {
@@ -41,16 +41,14 @@ impl PathChecker {
 
     /// 检查 target 是否是 base 的子路径或相同路径
     fn is_subpath(&self, target: &Path, base: &Path) -> bool {
-        // 标准化路径后比较
-        match (target.canonicalize(), base.canonicalize()) {
-            (Ok(t), Ok(b)) => t.starts_with(&b),
-            _ => {
-                // 如果无法标准化,使用字符串前缀匹配
-                let target_str = target.to_string_lossy();
-                let base_str = base.to_string_lossy();
-                target_str.starts_with(base_str.as_ref())
-            }
-        }
+        let Ok(base) = base.canonicalize() else {
+            return false;
+        };
+        let Ok(target) = canonicalize_existing_prefix(target) else {
+            return false;
+        };
+
+        target.starts_with(base)
     }
 
     /// 添加允许路径
@@ -73,6 +71,47 @@ impl PathChecker {
     }
 }
 
+fn canonicalize_existing_prefix(path: &Path) -> std::io::Result<PathBuf> {
+    if path.exists() {
+        return path.canonicalize();
+    }
+
+    let mut missing_components = Vec::new();
+    let mut existing = path;
+    while !existing.exists() {
+        let Some(parent) = existing.parent() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "path has no existing ancestor",
+            ));
+        };
+
+        if let Some(name) = existing.file_name() {
+            missing_components.push(name.to_os_string());
+        }
+        existing = parent;
+    }
+
+    let mut canonical = existing.canonicalize()?;
+    for component in missing_components.iter().rev() {
+        let component_path = Path::new(component);
+        if component_path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unsafe path component",
+            ));
+        }
+        canonical.push(component);
+    }
+
+    Ok(canonical)
+}
+
 /// 防止路径穿越攻击
 pub fn sanitize_path(path: &str) -> Result<PathBuf, SecurityError> {
     let path_obj = Path::new(path);
@@ -93,38 +132,53 @@ mod tests {
 
     #[test]
     fn test_allowed_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("user");
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
         let config = PathSecurityConfig {
-            include: vec!["/home/user".to_string()],
+            include: vec![base.to_string_lossy().to_string()],
             exclude: vec![],
         };
         let checker = PathChecker::new(config);
 
-        assert!(checker.is_safe("/home/user/project"));
-        assert!(checker.is_safe("/home/user"));
+        assert!(checker.is_safe(project.to_str().unwrap()));
+        assert!(checker.is_safe(base.to_str().unwrap()));
     }
 
     #[test]
     fn test_excluded_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("user");
+        let git = base.join(".git");
+        std::fs::create_dir_all(git.join("objects")).unwrap();
+
         let config = PathSecurityConfig {
-            include: vec!["/home/user".to_string()],
-            exclude: vec!["/home/user/.git".to_string()],
+            include: vec![base.to_string_lossy().to_string()],
+            exclude: vec![git.to_string_lossy().to_string()],
         };
         let checker = PathChecker::new(config);
 
-        assert!(!checker.is_safe("/home/user/.git"));
-        assert!(!checker.is_safe("/home/user/.git/objects"));
+        assert!(!checker.is_safe(git.to_str().unwrap()));
+        assert!(!checker.is_safe(git.join("objects").to_str().unwrap()));
     }
 
     #[test]
     fn test_not_allowed_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let allowed = temp.path().join("allowed");
+        let denied = temp.path().join("denied");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&denied).unwrap();
+
         let config = PathSecurityConfig {
-            include: vec!["/home/user".to_string()],
+            include: vec![allowed.to_string_lossy().to_string()],
             exclude: vec![],
         };
         let checker = PathChecker::new(config);
 
-        assert!(!checker.is_safe("/etc/passwd"));
-        assert!(!checker.is_safe("/tmp/test"));
+        assert!(!checker.is_safe(denied.to_str().unwrap()));
     }
 
     #[test]
@@ -132,5 +186,35 @@ mod tests {
         assert!(sanitize_path("../etc/passwd").is_err());
         assert!(sanitize_path("/home/user/../secret").is_err());
         assert!(sanitize_path("/home/user/./file.txt").is_ok());
+    }
+
+    #[test]
+    fn test_prefix_collision_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("safe");
+        let sibling = temp.path().join("safe-but-not-safe");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+
+        let checker = PathChecker::new(PathSecurityConfig {
+            include: vec![base.to_string_lossy().to_string()],
+            exclude: vec![],
+        });
+
+        assert!(!checker.is_safe(sibling.join("file.txt").to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_new_file_under_allowed_existing_parent_is_allowed() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("safe");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let checker = PathChecker::new(PathSecurityConfig {
+            include: vec![base.to_string_lossy().to_string()],
+            exclude: vec![],
+        });
+
+        assert!(checker.is_safe(base.join("new.txt").to_str().unwrap()));
     }
 }

@@ -515,6 +515,7 @@ dependencies = [
  "caelix-api",
  "regex",
  "serde_json",
+ "shell-words",
  "tokio",
  "tree-sitter",
  "tree-sitter-c",

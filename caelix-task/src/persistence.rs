@@ -2,7 +2,6 @@
 use crate::types::TaskMeta;
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -24,15 +23,31 @@ impl FilePersistence {
         }
     }
 
-    fn get_task_path(&self, task_id: &str) -> PathBuf {
-        self.base_path.join(format!("{}.json", task_id))
+    fn validate_path_id(kind: &str, id: &str) -> Result<()> {
+        if !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            Ok(())
+        } else {
+            anyhow::bail!("Invalid {}: only [A-Za-z0-9_-] is allowed", kind);
+        }
+    }
+
+    fn get_task_path(&self, task_id: &str) -> Result<PathBuf> {
+        Self::validate_path_id("task_id", task_id)?;
+        Ok(self.base_path.join(format!("{}.json", task_id)))
     }
 
     /// 获取 session 级别的任务存储路径
-    fn get_session_task_path(&self, session_id: &str, task_id: &str) -> PathBuf {
-        self.base_path
+    fn get_session_task_path(&self, session_id: &str, task_id: &str) -> Result<PathBuf> {
+        Self::validate_path_id("session_id", session_id)?;
+        Self::validate_path_id("task_id", task_id)?;
+        Ok(self
+            .base_path
             .join(session_id)
-            .join(format!("{}.json", task_id))
+            .join(format!("{}.json", task_id)))
     }
 
     async fn ensure_dir(&self) -> Result<()> {
@@ -43,6 +58,7 @@ impl FilePersistence {
     }
 
     async fn ensure_session_dir(&self, session_id: &str) -> Result<()> {
+        Self::validate_path_id("session_id", session_id)?;
         let session_path = self.base_path.join(session_id);
         if !session_path.exists() {
             fs::create_dir_all(&session_path).await?;
@@ -57,7 +73,7 @@ impl TaskPersistence for FilePersistence {
         // 所有任务都需要持久化，包括 Async 任务
         // 使用 session 级别的路径组织任务文件
         self.ensure_session_dir(&meta.session_id).await?;
-        let path = self.get_session_task_path(&meta.session_id, &meta.task_id.to_string());
+        let path = self.get_session_task_path(&meta.session_id, &meta.task_id.to_string())?;
         let json = serde_json::to_string_pretty(meta)?;
         fs::write(path, json).await?;
         Ok(())
@@ -66,7 +82,7 @@ impl TaskPersistence for FilePersistence {
     async fn delete(&self, task_id: &str) -> Result<()> {
         // 注意：这里需要知道 session_id 才能正确删除
         // 暂时保留旧逻辑作为兼容，后续可能需要修改接口
-        let path = self.get_task_path(task_id);
+        let path = self.get_task_path(task_id)?;
         if path.exists() {
             fs::remove_file(path).await?;
         }

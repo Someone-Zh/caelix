@@ -7,6 +7,10 @@ use std::sync::LazyLock;
 use tokio::process::Command;
 use walkdir::WalkDir;
 
+use crate::security::require_path_allowed;
+
+const MAX_NATIVE_SEARCH_FILE_SIZE: u64 = 2 * 1024 * 1024;
+
 // ====================== 智能搜索工具（零新增依赖） ======================
 /// 全局文件搜索：优先使用ripgrep，无rg时自动降级为原生搜索
 #[derive(Debug, Default, Clone)]
@@ -45,15 +49,22 @@ impl SmartSearchTool {
             };
         }
 
+        let modes = match validate_modes(modes) {
+            Ok(modes) => modes,
+            Err(e) => {
+                return ToolResult {
+                    output: String::new(),
+                    error: Some(e),
+                };
+            }
+        };
+
         let mut cmd = Command::new("rg");
 
         // ✅ 修复：rg 命令顺序必须是：rg [选项] 关键词 路径
         // 先加所有模式参数
-        for m in modes {
-            let s = m.as_str().unwrap_or_default();
-            if !s.is_empty() {
-                cmd.arg(s);
-            }
+        for mode in modes {
+            cmd.arg(mode);
         }
 
         // 文件名搜索模式
@@ -61,8 +72,8 @@ impl SmartSearchTool {
             cmd.arg("--files-with-matches");
         }
 
-        // 最后加：关键词 + 路径
-        cmd.arg(keyword).arg(path);
+        // 终止 rg 选项解析，避免 keyword/path 以 '-' 开头时被当作开关。
+        cmd.arg("--").arg(keyword).arg(path);
 
         let output = match cmd
             .stdout(std::process::Stdio::piped())
@@ -107,6 +118,13 @@ impl SmartSearchTool {
         let empty_modes = vec![];
 
         let modes = input["modes"].as_array().unwrap_or(&empty_modes);
+        if let Err(e) = validate_modes(modes) {
+            return ToolResult {
+                output: String::new(),
+                error: Some(e),
+            };
+        }
+
         let ignore_case = modes.iter().any(|m| m == "-i" || m == "--ignore-case");
         let show_line_num = modes.iter().any(|m| m == "-n" || m == "--line-number");
 
@@ -151,6 +169,12 @@ impl SmartSearchTool {
                 if matched {
                     output.push_str(&format!("{}\n", file_path.display()));
                 }
+                continue;
+            }
+
+            if let Ok(meta) = file_path.metadata()
+                && meta.len() > MAX_NATIVE_SEARCH_FILE_SIZE
+            {
                 continue;
             }
 
@@ -239,6 +263,14 @@ impl Tool for SmartSearchTool {
     }
 
     async fn execute(&self, input: JsonValue) -> ToolResult {
+        let path = input["path"].as_str().unwrap_or_default();
+        if let Err(e) = require_path_allowed(path).await {
+            return ToolResult {
+                output: String::new(),
+                error: Some(format!("Path rejected by security policy: {}", e)),
+            };
+        }
+
         if self.has_ripgrep().await {
             self.search_with_ripgrep(&input).await
         } else {
@@ -256,4 +288,23 @@ impl Tool for SmartSearchTool {
     fn clone_box(&self) -> Box<dyn Tool> {
         Box::new(self.clone())
     }
+}
+
+fn validate_modes(modes: &[JsonValue]) -> Result<Vec<&'static str>, String> {
+    let mut out = Vec::new();
+    for mode in modes {
+        match mode.as_str().unwrap_or_default() {
+            "" => {}
+            "-i" | "--ignore-case" => out.push("--ignore-case"),
+            "-n" | "--line-number" => out.push("--line-number"),
+            other => {
+                return Err(format!(
+                    "Unsupported search mode '{}'. Allowed modes: -i/--ignore-case, -n/--line-number",
+                    other
+                ));
+            }
+        }
+    }
+
+    Ok(out)
 }

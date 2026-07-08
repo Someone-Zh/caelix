@@ -6,6 +6,7 @@ pub mod command_exec;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_search;
+mod security;
 pub mod string_replace;
 pub mod tree;
 

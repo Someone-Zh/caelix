@@ -3,6 +3,7 @@ use serde_json::{Value as JsonValue, json};
 use std::path::Path;
 use tokio::fs;
 
+use crate::security::require_path_allowed;
 use caelix_api::tool::{Tool, ToolPreCheckResult, ToolResult};
 
 // 最大可编辑文件大小：10MB
@@ -89,6 +90,12 @@ impl Tool for StringReplaceTool {
         };
 
         let path = Path::new(file_path);
+        if let Err(e) = require_path_allowed(file_path).await {
+            return ToolResult {
+                output: String::new(),
+                error: Some(format!("Path rejected by security policy: {}", e)),
+            };
+        }
 
         // 检查文件是否存在
         if !path.exists() || !path.is_file() {

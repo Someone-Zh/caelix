@@ -1,18 +1,27 @@
 //! OpenAI Provider 实现
 
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{Client, Response, StatusCode, Url};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tokio_stream::{Stream, StreamExt};
 
+use caelix_api::cancel::CancellationToken;
 use caelix_api::error::AgentError;
 use caelix_api::provider::{
     ChatMessage, ChatResponseChunk, LlmConfig, LlmProvider, ProviderConfig, TokenUsage,
 };
 use caelix_api::tool::{ApiToolCall, ToolCall, ToolDefinition};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_RETRIES: usize = 3;
 
 #[derive(Debug, Serialize)]
 struct LlmChatRequest {
@@ -137,8 +146,10 @@ pub struct OpenAIProvider {
 
 impl OpenAIProvider {
     pub fn new(config: Arc<ProviderConfig>) -> Self {
-        let client = Client::new();
-        Self { client, config }
+        Self {
+            client: shared_client().clone(),
+            config,
+        }
     }
 
     fn map_messages(&self, messages: &[ChatMessage]) -> Vec<Value> {
@@ -162,7 +173,7 @@ impl OpenAIProvider {
                     reasoning_content: None,
                 };
 
-                serde_json::to_value(llm_msg).unwrap()
+                serde_json::to_value(llm_msg).expect("LlmChatMessage serialization should not fail")
             })
             .collect()
     }
@@ -301,6 +312,119 @@ impl OpenAIProvider {
 
         Ok(Some(chunk))
     }
+
+    async fn send_chat_request(
+        &self,
+        url: &str,
+        api_key: &str,
+        request_body: &LlmChatRequest,
+        cancel_token: Option<&CancellationToken>,
+    ) -> Result<Response, AgentError> {
+        let mut attempt = 0;
+
+        loop {
+            if let Some(token) = cancel_token
+                && token.is_cancelled()
+            {
+                return Err(AgentError::LlmError("请求已取消".to_string()));
+            }
+
+            let send_fut = self
+                .client
+                .post(url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(request_body)
+                .send();
+
+            let send_result = match cancel_token {
+                Some(token) => {
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => return Err(AgentError::LlmError("请求已取消".to_string())),
+                        result = tokio::time::timeout(SEND_TIMEOUT, send_fut) => result,
+                    }
+                }
+                None => tokio::time::timeout(SEND_TIMEOUT, send_fut).await,
+            };
+
+            let response = match send_result {
+                Ok(Ok(response)) => response,
+                Ok(Err(err)) => {
+                    if attempt + 1 < MAX_RETRIES && err.is_timeout() {
+                        attempt += 1;
+                        retry_delay(attempt).await;
+                        continue;
+                    }
+                    return Err(AgentError::LlmError(format!("请求发送失败: {}", err)));
+                }
+                Err(_) => {
+                    if attempt + 1 < MAX_RETRIES {
+                        attempt += 1;
+                        retry_delay(attempt).await;
+                        continue;
+                    }
+                    return Err(AgentError::LlmError(format!(
+                        "请求发送超时: {}s",
+                        SEND_TIMEOUT.as_secs()
+                    )));
+                }
+            };
+
+            if should_retry_status(response.status()) && attempt + 1 < MAX_RETRIES {
+                attempt += 1;
+                retry_delay(attempt).await;
+                continue;
+            }
+
+            return Ok(response);
+        }
+    }
+}
+
+fn shared_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+            .build()
+            .expect("reqwest Client builder should succeed")
+    })
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    status.is_server_error()
+}
+
+async fn retry_delay(attempt: usize) {
+    let millis = 200_u64.saturating_mul(1_u64 << attempt.min(4));
+    tokio::time::sleep(Duration::from_millis(millis)).await;
+}
+
+fn validated_base_url(raw: &str) -> Result<String, AgentError> {
+    let parsed =
+        Url::parse(raw).map_err(|e| AgentError::LlmError(format!("base_url 无效: {}", e)))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(AgentError::LlmError(format!(
+                "base_url scheme '{}' 不被允许，仅支持 http/https",
+                scheme
+            )));
+        }
+    }
+
+    if parsed.host_str().is_none() {
+        return Err(AgentError::LlmError(
+            "base_url 必须包含有效 host".to_string(),
+        ));
+    }
+
+    Ok(raw.trim_end_matches('/').to_string())
 }
 
 #[async_trait]
@@ -316,6 +440,17 @@ impl LlmProvider for OpenAIProvider {
         tools: &[ToolDefinition],
         config: &LlmConfig,
     ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>> {
+        self.chat_stream_with_cancel(messages, tools, config, None)
+            .await
+    }
+
+    async fn chat_stream_with_cancel(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        config: &LlmConfig,
+        cancel_token: Option<CancellationToken>,
+    ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>> {
         let self_clone = self.clone();
         let messages = messages.to_vec();
         let tools = tools.to_vec();
@@ -325,7 +460,13 @@ impl LlmProvider for OpenAIProvider {
             // 1. 构建请求（错误直接 yield）
             let request_body = self_clone.build_request_body(&messages, &tools, &config);
             let base_url = match self_clone.config.base_url.as_ref() {
-                Some(url) => url,
+                Some(url) => match validated_base_url(url) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                },
                 None => {
                     yield Err(AgentError::LlmError(format!("{}: base_url 未配置", self_clone.config.name)));
                     return;
@@ -336,17 +477,13 @@ impl LlmProvider for OpenAIProvider {
             let url = format!("{}/chat/completions", base_url);
 
             // 2. 发送请求
-            let response = match self_clone.client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
+            let response = match self_clone
+                .send_chat_request(&url, &api_key, &request_body, cancel_token.as_ref())
                 .await
             {
                 Ok(res) => res,
                 Err(e) => {
-                    yield Err(AgentError::LlmError(format!("请求发送失败: {}", e)));
+                    yield Err(e);
                     return;
                 }
             };
@@ -364,7 +501,34 @@ impl LlmProvider for OpenAIProvider {
             let mut response_id = String::new();
             let mut tool_buffer = Vec::new();
 
-            while let Some(chunk_result) = byte_stream.next().await {
+            loop {
+                let next_chunk = match cancel_token.as_ref() {
+                    Some(token) => {
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                yield Err(AgentError::LlmError("请求已取消".to_string()));
+                                return;
+                            }
+                            result = tokio::time::timeout(STREAM_CHUNK_TIMEOUT, byte_stream.next()) => result,
+                        }
+                    }
+                    None => tokio::time::timeout(STREAM_CHUNK_TIMEOUT, byte_stream.next()).await,
+                };
+
+                let Some(chunk_result) = (match next_chunk {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        yield Err(AgentError::LlmError(format!(
+                            "流读取超时: {}s",
+                            STREAM_CHUNK_TIMEOUT.as_secs()
+                        )));
+                        return;
+                    }
+                }) else {
+                    break;
+                };
+
                 let bytes = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
@@ -395,7 +559,7 @@ impl LlmProvider for OpenAIProvider {
 
                     let data = &line[6..line.len() - 1];
                     if data == b"[DONE]" {
-                        break;
+                        return;
                     }
 
                     let json = match serde_json::from_slice::<Value>(data) {

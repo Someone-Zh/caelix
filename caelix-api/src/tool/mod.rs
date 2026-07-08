@@ -123,13 +123,18 @@ pub struct ApiToolCallFunction {
 
 impl ToolCall {
     pub fn to_api_format(&self) -> ApiToolCall {
+        let arguments = match &self.arguments {
+            serde_json::Value::String(s) => serde_json::Value::String(s.clone()),
+            other => serde_json::Value::String(other.to_string()),
+        };
+
         ApiToolCall {
             id: self.id.clone(),
             index: self.index,
             call_type: "function".to_string(),
             function: ApiToolCallFunction {
                 name: self.name.clone(),
-                arguments: self.arguments.clone(),
+                arguments,
             },
         }
     }

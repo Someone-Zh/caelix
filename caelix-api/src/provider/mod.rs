@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::Stream;
 
+use crate::cancel::CancellationToken;
 use crate::error::AgentError;
 use crate::tool::{ToolCall, ToolDefinition};
 
@@ -251,6 +252,16 @@ pub trait LlmProvider: Send + Sync + std::fmt::Debug {
         _tools: &[ToolDefinition],
         config: &LlmConfig,
     ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>>;
+
+    async fn chat_stream_with_cancel(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        config: &LlmConfig,
+        _cancel_token: Option<CancellationToken>,
+    ) -> Pin<Box<dyn Stream<Item = Result<ChatResponseChunk, AgentError>> + Send>> {
+        self.chat_stream(messages, tools, config).await
+    }
 
     /// 返回最近一次调用的 usage（若 provider 支持）；默认实现返回 None
     async fn last_usage(&self) -> Option<TokenUsage> {
