@@ -12,13 +12,8 @@ pub struct ToolManager {
 
 impl std::fmt::Debug for ToolManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tool_names = self
-            .tools
-            .try_read()
-            .map(|lock| lock.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
         f.debug_struct("ToolManager")
-            .field("tool_names", &tool_names)
+            .field("tools", &"<async RwLock>")
             .finish()
     }
 }

@@ -25,10 +25,20 @@ pub trait ConfigOverlayTrait: Send + Sync {
     async fn ensure_project_config_loaded(&self, work_dir: &Path) -> Result<(), String>;
     /// 获取技能（项目优先，需先调用 ensure_project_config_loaded）
     async fn get_skill(&self, name: &str) -> Option<Arc<Skill>>;
+    /// 获取指定工作目录的技能（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_skill_for_work_dir(&self, work_dir: &Path, name: &str) -> Option<Arc<Skill>>;
     /// 获取命令（项目优先，需先调用 ensure_project_config_loaded）
     async fn get_command(&self, name: &str) -> Option<Command>;
+    /// 获取指定工作目录的命令（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_command_for_work_dir(&self, work_dir: &Path, name: &str) -> Option<Command>;
     /// 获取 AgentSpec（项目优先，需先调用 ensure_project_config_loaded；上层负责包装为 dyn Agent）
     async fn get_agent_spec(&self, name: &str) -> Option<Arc<AgentSpec>>;
+    /// 获取指定工作目录的 AgentSpec（项目优先，需先调用 ensure_project_config_loaded）
+    async fn get_agent_spec_for_work_dir(
+        &self,
+        work_dir: &Path,
+        name: &str,
+    ) -> Option<Arc<AgentSpec>>;
 }
 
 // ==================== 全局唯一 CaelixContext 存储 ====================
@@ -199,6 +209,21 @@ pub trait ContextFutureExt: Future + Sized {
 }
 impl<F: Future> ContextFutureExt for F {}
 
+/// Spawn 一个继承指定 RuntimeContext 的 Tokio 任务。
+///
+/// `tokio::task_local!` 不会自动跨 `tokio::spawn` 传播；所有需要在新任务中访问
+/// `RuntimeContext::current/try_current` 的代码都应通过这个 helper 重新绑定上下文。
+pub fn spawn_with_runtime_ctx<F>(
+    ctx: Arc<RuntimeContext>,
+    future: F,
+) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::spawn(async move { CURRENT_CONTEXT.scope(ctx, future).await })
+}
+
 /// 运行时上下文 - Session 级别
 ///
 /// 每个 Session 有独立的上下文实例，通过 tokio::task_local! 存储
@@ -309,7 +334,7 @@ impl RuntimeContext {
     /// 如果在有效的 RuntimeContext 中，返回 Some(ctx)
     /// 否则返回 None
     pub fn try_current() -> Option<Arc<RuntimeContext>> {
-        std::panic::catch_unwind(Self::current).ok()
+        CURRENT_CONTEXT.try_with(|ctx| ctx.clone()).ok()
     }
 
     /// 获取当前 Session ID，如果不存在则使用提供的默认值

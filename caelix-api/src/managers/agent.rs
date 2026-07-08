@@ -36,17 +36,8 @@ impl Clone for AgentManager {
 
 impl std::fmt::Debug for AgentManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let agent_names = self
-            .agents
-            .try_read()
-            .map(
-                |guard: tokio::sync::RwLockReadGuard<'_, HashMap<String, AgentRef>>| {
-                    guard.keys().cloned().collect::<Vec<_>>()
-                },
-            )
-            .unwrap_or_default();
         f.debug_struct("AgentManager")
-            .field("agent_names", &agent_names)
+            .field("agents", &"<async RwLock>")
             .finish()
     }
 }
