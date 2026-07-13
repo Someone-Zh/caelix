@@ -3,7 +3,7 @@ use caelix_api::agent::AgentSpec;
 use caelix_api::commands::Command;
 use caelix_api::context::{
     AgentRunManagerTrait, ConfigOverlayTrait, ContextProvider, EnvConfigTrait,
-    SecurityCheckerTrait, UsageTrackerTrait, set_caelix_context,
+    ProjectConfig, SecurityCheckerTrait, UsageTrackerTrait, set_caelix_context,
 };
 use caelix_api::managers::{
     AgentManager, CommandManager, ProviderManager, Skill, SkillManager, ToolManager,
@@ -26,14 +26,6 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{AgentRunManager, HookRegistry, UsageTracker};
-
-/// 单个工作目录的项目配置快照
-#[derive(Default)]
-struct ProjectConfig {
-    skills: HashMap<String, Arc<Skill>>,
-    commands: Vec<Command>,
-    agents: HashMap<String, Arc<AgentSpec>>,
-}
 
 /// 配置覆盖层 - 支持项目级配置覆盖全局配置
 ///
@@ -65,6 +57,10 @@ impl ConfigOverlay {
             project_configs: Arc::new(RwLock::new(HashMap::new())),
             load_locks: Arc::new(DashMap::new()),
         }
+    }
+
+    pub async fn project_configs(&self) -> tokio::sync::RwLockReadGuard<'_, HashMap<PathBuf, caelix_api::context::ProjectConfig>> {
+        self.project_configs.read().await
     }
 
     /// 懒加载：仅当指定 work_dir 下存在配置目录且尚未缓存时才加载
@@ -253,6 +249,10 @@ impl ConfigOverlayTrait for ConfigOverlay {
         drop(configs);
         let agent = self.global_agent_manager.get(name).await?;
         Some(agent.get_spec())
+    }
+
+    async fn project_configs(&self) -> tokio::sync::RwLockReadGuard<'_, std::collections::HashMap<std::path::PathBuf, caelix_api::context::ProjectConfig>> {
+        self.project_configs.read().await
     }
 }
 

@@ -3,7 +3,7 @@ use futures::StreamExt;
 use std::io::Write;
 use std::sync::Arc;
 
-use super::commands::{handle_command, handle_usage_command, is_usage_command};
+use super::commands::{handle_cli_command, handle_command, is_cli_command};
 use super::input_handler::read_multiline_input;
 use caelix_api::message::{AgentMessageType, TaskMessageType};
 use caelix_service::{CaelixApi, CaelixApiImpl, ChatRequest};
@@ -432,14 +432,14 @@ pub async fn run_cli(api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::
             }
         };
 
-        // 检查是否是命令
+        // 检查是否是退出命令
         if handle_command(&input) {
             break;
         }
 
-        // 检查是否是 usage 命令
-        if is_usage_command(&input) {
-            handle_usage_command(&input, &session_id, &api).await;
+        // 检查是否是 CLI 命令
+        if is_cli_command(&input) {
+            handle_cli_command(&input, &session_id, &api).await;
             continue;
         }
 

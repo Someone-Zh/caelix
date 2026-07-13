@@ -1,4 +1,4 @@
-use crate::managers::{InlineToolDef, Skill, SkillRegistryError};
+use crate::managers::{InlineToolDef, Skill, SkillRegistryError, SkillTrigger};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,6 +51,32 @@ struct SkillConfig {
     /// 本技能自带的本地脚本工具定义
     #[serde(default)]
     inline_tools: Vec<InlineToolDef>,
+    /// 触发器列表
+    #[serde(default)]
+    triggers: Vec<SkillTrigger>,
+    /// 文件匹配模式列表
+    #[serde(default)]
+    globs: Vec<String>,
+    /// 是否禁止模型自动调用
+    #[serde(default = "default_false", rename = "disable-model-invocation")]
+    disable_model_invocation: bool,
+    /// 是否可被用户手动调用
+    #[serde(default = "default_true", rename = "user-invocable")]
+    user_invocable: bool,
+    /// 参数提示
+    #[serde(default, rename = "argument-hint")]
+    argument_hint: Option<String>,
+    /// 兼容性声明
+    #[serde(default)]
+    compatibility: Option<String>,
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// 递归扫描目录并加载所有 .skill 文件
@@ -144,6 +170,12 @@ async fn load_single_skill(file_path: &Path, base_dir: &Path) -> Result<Skill, S
         config.tags,
         config.requires_tools,
         config.inline_tools,
+        config.triggers,
+        config.globs,
+        config.disable_model_invocation,
+        config.user_invocable,
+        config.argument_hint,
+        config.compatibility,
     );
 
     Ok(skill)
@@ -207,6 +239,12 @@ mod tests {
         assert!(s.tags.is_empty());
         assert!(s.requires_tools.is_empty());
         assert!(s.inline_tools.is_empty());
+        assert!(s.triggers.is_empty());
+        assert!(s.globs.is_empty());
+        assert!(!s.disable_model_invocation);
+        assert!(s.user_invocable);
+        assert!(s.argument_hint.is_none());
+        assert!(s.compatibility.is_none());
     }
 
     /// 含全部新字段的 .skill 文件应被完整解析。
@@ -232,6 +270,14 @@ mod tests {
              \x20   description: \"运行 cargo check\"\n\
              \x20   script: \"cargo check --message-format=short\"\n\
              \x20   timeout_secs: 60\n\
+             triggers:\n\
+             \x20 - type: command\n\
+             \x20   name: rust\n\
+             globs:\n  - \"**/*.rs\"\n  - \"Cargo.toml\"\n\
+             disable-model-invocation: false\n\
+             user-invocable: true\n\
+             argument-hint: \"[crate 名称]\"\n\
+             compatibility: \"network: limited\"\n\
              ---\n\n# Rust 编码指南\n",
         )
         .unwrap();
@@ -258,6 +304,15 @@ mod tests {
         assert_eq!(it.description, "运行 cargo check");
         assert_eq!(it.script, "cargo check --message-format=short");
         assert_eq!(it.timeout_secs, Some(60));
+        // 新增元数据字段
+        assert_eq!(s.triggers.len(), 1);
+        assert_eq!(s.triggers[0].trigger_type, "command");
+        assert_eq!(s.triggers[0].name, "rust");
+        assert_eq!(s.globs, vec!["**/*.rs".to_string(), "Cargo.toml".to_string()]);
+        assert!(!s.disable_model_invocation);
+        assert!(s.user_invocable);
+        assert_eq!(s.argument_hint.as_deref(), Some("[crate 名称]"));
+        assert_eq!(s.compatibility.as_deref(), Some("network: limited"));
         // 位置字段为绝对路径
         assert!(s.file_path.is_absolute());
         assert_eq!(s.file_path, fs::canonicalize(&skill_file).unwrap());
@@ -272,6 +327,10 @@ mod tests {
             script: "echo hi".into(),
             timeout_secs: Some(5),
         }];
+        let triggers = vec![SkillTrigger {
+            trigger_type: "command".into(),
+            name: "git".into(),
+        }];
         let original = Skill::with_metadata(
             "git".into(),
             "coding".into(),
@@ -283,6 +342,12 @@ mod tests {
             vec!["a".into(), "b".into()],
             vec!["read_file".into()],
             inline.clone(),
+            triggers.clone(),
+            vec!["**/*.rs".into()],
+            false,
+            true,
+            Some("[path]".into()),
+            Some("network: limited".into()),
         );
 
         let def: caelix_api::plugins::SkillDef = original.clone().into();
@@ -299,5 +364,11 @@ mod tests {
         assert_eq!(back.tags, original.tags);
         assert_eq!(back.requires_tools, original.requires_tools);
         assert_eq!(back.inline_tools, original.inline_tools);
+        assert_eq!(back.triggers, original.triggers);
+        assert_eq!(back.globs, original.globs);
+        assert_eq!(back.disable_model_invocation, original.disable_model_invocation);
+        assert_eq!(back.user_invocable, original.user_invocable);
+        assert_eq!(back.argument_hint, original.argument_hint);
+        assert_eq!(back.compatibility, original.compatibility);
     }
 }

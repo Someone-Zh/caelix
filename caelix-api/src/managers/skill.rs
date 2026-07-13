@@ -22,6 +22,16 @@ pub struct InlineToolDef {
     pub timeout_secs: Option<u64>,
 }
 
+/// 技能触发器定义（对应 .skill 文件 YAML 头中 `triggers` 的一条）
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct SkillTrigger {
+    /// 触发器类型（如 "command"、"keyword"、"auto" 等）
+    #[serde(rename = "type")]
+    pub trigger_type: String,
+    /// 触发器名称/值
+    pub name: String,
+}
+
 /// 技能模型
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -47,10 +57,23 @@ pub struct Skill {
     pub requires_tools: Vec<String>,
     /// 本技能自带的本地脚本工具定义
     pub inline_tools: Vec<InlineToolDef>,
+    /// 触发器列表（定义技能如何被激活，如命令触发、关键词触发等）
+    pub triggers: Vec<SkillTrigger>,
+    /// 文件匹配模式列表（技能适用的文件 glob 模式）
+    pub globs: Vec<String>,
+    /// 是否禁止模型自动调用（为 true 时只能通过用户显式触发）
+    pub disable_model_invocation: bool,
+    /// 是否可被用户手动调用
+    pub user_invocable: bool,
+    /// 参数提示（调用时展示给用户的参数格式说明）
+    pub argument_hint: Option<String>,
+    /// 兼容性声明（如 "network: limited"）
+    pub compatibility: Option<String>,
 }
 
 impl Skill {
     /// 内部构建：派生 `full_name` 并组装结构
+    #[allow(clippy::too_many_arguments)]
     fn build(
         name: String,
         namespace: String,
@@ -62,6 +85,12 @@ impl Skill {
         tags: Vec<String>,
         requires_tools: Vec<String>,
         inline_tools: Vec<InlineToolDef>,
+        triggers: Vec<SkillTrigger>,
+        globs: Vec<String>,
+        disable_model_invocation: bool,
+        user_invocable: bool,
+        argument_hint: Option<String>,
+        compatibility: Option<String>,
     ) -> Self {
         let full_name = if namespace.is_empty() {
             name.clone()
@@ -81,6 +110,12 @@ impl Skill {
             tags,
             requires_tools,
             inline_tools,
+            triggers,
+            globs,
+            disable_model_invocation,
+            user_invocable,
+            argument_hint,
+            compatibility,
         }
     }
 
@@ -103,6 +138,12 @@ impl Skill {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            true,
+            None,
+            None,
         )
     }
 
@@ -119,6 +160,12 @@ impl Skill {
         tags: Vec<String>,
         requires_tools: Vec<String>,
         inline_tools: Vec<InlineToolDef>,
+        triggers: Vec<SkillTrigger>,
+        globs: Vec<String>,
+        disable_model_invocation: bool,
+        user_invocable: bool,
+        argument_hint: Option<String>,
+        compatibility: Option<String>,
     ) -> Self {
         Self::build(
             name,
@@ -131,6 +178,12 @@ impl Skill {
             tags,
             requires_tools,
             inline_tools,
+            triggers,
+            globs,
+            disable_model_invocation,
+            user_invocable,
+            argument_hint,
+            compatibility,
         )
     }
 }
@@ -148,6 +201,12 @@ impl From<SkillDef> for Skill {
             def.tags,
             def.requires_tools,
             def.inline_tools,
+            def.triggers,
+            def.globs,
+            def.disable_model_invocation,
+            def.user_invocable,
+            def.argument_hint,
+            def.compatibility,
         )
     }
 }

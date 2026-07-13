@@ -15,11 +15,19 @@ use crate::task::TaskManagerTrait;
 use crate::utils::{generate_request_id, generate_session_id, generate_span_id, generate_trace_id};
 use crate::variables::VariableManager;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
+
+#[derive(Default)]
+pub struct ProjectConfig {
+    pub skills: HashMap<String, Arc<Skill>>,
+    pub commands: Vec<Command>,
+    pub agents: HashMap<String, Arc<AgentSpec>>,
+}
 
 #[async_trait]
 pub trait ConfigOverlayTrait: Send + Sync {
@@ -41,6 +49,8 @@ pub trait ConfigOverlayTrait: Send + Sync {
         work_dir: &Path,
         name: &str,
     ) -> Option<Arc<AgentSpec>>;
+    /// 获取所有项目配置（只读）
+    async fn project_configs(&self) -> tokio::sync::RwLockReadGuard<'_, HashMap<PathBuf, crate::context::ProjectConfig>>;
 }
 
 // ==================== 全局唯一 CaelixContext 存储 ====================

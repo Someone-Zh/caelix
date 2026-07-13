@@ -4,6 +4,7 @@
 
 use caelix_api::message::{AgentMessage, NotificationMessage};
 use caelix_api::task::TaskMeta;
+use caelix_security::config::SecurityConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -87,4 +88,65 @@ pub struct ChatAsyncResult {
     pub request_id: String,
     pub span_id: String,
     pub session_id: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SecurityCheckerInfo {
+    pub config: SecurityConfig,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct HookInfo {
+    pub name: String,
+    pub capabilities: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PluginInfo {
+    pub name: String,
+    pub capabilities: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SkillInfo {
+    pub name: String,
+    pub namespace: String,
+    pub full_name: String,
+    pub description: String,
+    pub version: Option<String>,
+    pub author: Option<String>,
+    pub tags: Vec<String>,
+    pub triggers: Vec<SkillTriggerInfo>,
+    pub globs: Vec<String>,
+    pub disable_model_invocation: bool,
+    pub user_invocable: bool,
+    pub argument_hint: Option<String>,
+    pub compatibility: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SkillTriggerInfo {
+    pub trigger_type: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentSpecInfo {
+    pub name: String,
+    pub group: Option<String>,
+    pub tools: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct CommandInfo {
+    pub name: String,
+    pub command_type: String,
+    pub description: String,
 }

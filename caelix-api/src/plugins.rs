@@ -3,7 +3,7 @@
 use crate::agent::{Agent, AgentSpec};
 use crate::commands::Command;
 use crate::hooks::{AgentHook, Hook};
-use crate::managers::{InlineToolDef, Skill};
+use crate::managers::{InlineToolDef, Skill, SkillTrigger};
 use crate::provider::LlmProvider;
 use crate::tool::Tool;
 use async_trait::async_trait;
@@ -33,6 +33,18 @@ pub struct SkillDef {
     pub requires_tools: Vec<String>,
     /// 本技能自带的本地脚本工具定义
     pub inline_tools: Vec<InlineToolDef>,
+    /// 触发器列表
+    pub triggers: Vec<SkillTrigger>,
+    /// 文件匹配模式列表
+    pub globs: Vec<String>,
+    /// 是否禁止模型自动调用
+    pub disable_model_invocation: bool,
+    /// 是否可被用户手动调用
+    pub user_invocable: bool,
+    /// 参数提示
+    pub argument_hint: Option<String>,
+    /// 兼容性声明
+    pub compatibility: Option<String>,
 }
 
 impl SkillDef {
@@ -54,6 +66,12 @@ impl SkillDef {
             tags: Vec::new(),
             requires_tools: Vec::new(),
             inline_tools: Vec::new(),
+            triggers: Vec::new(),
+            globs: Vec::new(),
+            disable_model_invocation: false,
+            user_invocable: true,
+            argument_hint: None,
+            compatibility: None,
         }
     }
 
@@ -70,6 +88,12 @@ impl SkillDef {
         tags: Vec<String>,
         requires_tools: Vec<String>,
         inline_tools: Vec<InlineToolDef>,
+        triggers: Vec<SkillTrigger>,
+        globs: Vec<String>,
+        disable_model_invocation: bool,
+        user_invocable: bool,
+        argument_hint: Option<String>,
+        compatibility: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -82,6 +106,12 @@ impl SkillDef {
             tags,
             requires_tools,
             inline_tools,
+            triggers,
+            globs,
+            disable_model_invocation,
+            user_invocable,
+            argument_hint,
+            compatibility,
         }
     }
 }
@@ -99,6 +129,12 @@ impl From<Skill> for SkillDef {
             skill.tags,
             skill.requires_tools,
             skill.inline_tools,
+            skill.triggers,
+            skill.globs,
+            skill.disable_model_invocation,
+            skill.user_invocable,
+            skill.argument_hint,
+            skill.compatibility,
         )
     }
 }

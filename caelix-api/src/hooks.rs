@@ -303,6 +303,11 @@ impl HookRegistry {
         hooks.len()
     }
 
+    pub async fn list_hooks(&self) -> Vec<Arc<dyn AgentHook>> {
+        let hooks: tokio::sync::RwLockReadGuard<'_, Vec<HookRef>> = self.hooks.read().await;
+        hooks.iter().cloned().collect()
+    }
+
     /// 应用Init阶段钩子到AgentSpec（用于Agent注册时的一次性增强）
     pub async fn apply_init_hooks(
         &self,
