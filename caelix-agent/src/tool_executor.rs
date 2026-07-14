@@ -1,11 +1,11 @@
+use std::sync::Arc;
+
 use caelix_api::AgentSpec;
-use caelix_api::context::try_caelix_context;
 use caelix_api::error::AgentError;
 use caelix_api::tool::ToolResult;
-use caelix_api::tool::{
-    Tool, ToolApprovalType, ToolCall, ToolCallApprovalState, ToolPreCheckResult,
-};
-use std::sync::Arc;
+use caelix_api::tool::{Tool, ToolCall, ToolCallApprovalState};
+
+use crate::security_check::pre_check_allowed;
 
 /// 带预查（人工审批）的批量工具执行结果。
 ///
@@ -104,43 +104,6 @@ pub async fn execute_tools_static_with_pre_check(
         executed.push((tc.id.clone(), tc.name.clone(), output));
     }
     ToolExecutionBatchResult::Executed(executed)
-}
-
-async fn pre_check_allowed(pre_result: &ToolPreCheckResult) -> bool {
-    let Some(ctx) = try_caelix_context() else {
-        return false;
-    };
-
-    let security_checker = ctx.security_checker();
-    match pre_result.approval_type {
-        ToolApprovalType::Path => {
-            let Some(path) = pre_result
-                .parameters
-                .get("path")
-                .or_else(|| pre_result.parameters.get("file_path"))
-                .and_then(|v| v.as_str())
-            else {
-                return false;
-            };
-            security_checker.check_path(path).await.is_ok()
-        }
-        ToolApprovalType::Url => {
-            let Some(url) = pre_result.parameters.get("url").and_then(|v| v.as_str()) else {
-                return false;
-            };
-            security_checker.check_url(url).await.is_ok()
-        }
-        ToolApprovalType::Command => {
-            let Some(command) = pre_result
-                .parameters
-                .get("command")
-                .and_then(|v| v.as_str())
-            else {
-                return false;
-            };
-            security_checker.check_command(command).await.is_ok()
-        }
-    }
 }
 
 /// 解析 tool_call.arguments 为 JsonValue。

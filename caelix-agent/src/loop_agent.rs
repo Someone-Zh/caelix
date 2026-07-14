@@ -309,6 +309,10 @@ fn call_llm_static<'a>(
     let messages_clone = messages.to_vec();
     let tool_defs_clone = tool_defs.to_vec();
 
+    // 在 spawn 外部获取取消令牌，避免 task_local 跨 tokio::spawn 不传播的问题
+    let cancel_token =
+        RuntimeContext::try_current().map(|ctx| ctx.cancellation_token().child_token());
+
     let (tx, rx) = mpsc::channel(64);
 
     let handle = tokio::spawn(async move {
@@ -318,8 +322,6 @@ fn call_llm_static<'a>(
             model: cfg.model_name.clone(),
         })).await;
 
-        let cancel_token =
-            RuntimeContext::try_current().map(|ctx| ctx.cancellation_token().child_token());
         let mut stream = llm
             .chat_stream_with_cancel(&messages_clone, &tool_defs_clone, &cfg, cancel_token)
             .await;
