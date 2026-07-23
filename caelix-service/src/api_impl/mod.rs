@@ -7,6 +7,7 @@ mod agent;
 mod chat;
 mod command;
 mod hook;
+mod memory;
 mod notification;
 mod plugin;
 mod security;
@@ -27,7 +28,9 @@ use std::sync::Arc;
 use crate::api_trait::CaelixApi;
 use crate::types::{
     AgentSpecInfo, ChatAsyncResult, ChatRequest, CommandInfo, HookInfo, PluginInfo, ProviderInfo,
-    SecurityCheckerInfo, SessionSummary, SkillInfo, ToolInfo,
+    SecurityCheckerInfo, SessionSummary, SkillInfo, ToolExecuteResult, ToolInfo,
+    MemoryRecallResult, MemoryStats, MemoryAxiom, MemoryConflict, MemoryCandidate,
+    MemoryBudgetInfo,
 };
 use caelix_api::message::NotificationMessage;
 use caelix_api::provider::GlobalUsageView;
@@ -165,11 +168,15 @@ pub(crate) async fn persist_and_notify_tool_result(
 /// API 核心实现
 pub struct CaelixApiImpl {
     pub(crate) context: Arc<CaelixContext>,
+    pub(crate) memory_service: memory::MemoryService,
 }
 
 impl CaelixApiImpl {
     pub fn new(context: Arc<CaelixContext>) -> Self {
-        Self { context }
+        Self {
+            context,
+            memory_service: memory::MemoryService::new(),
+        }
     }
 
     /// 获取消息总线引用
@@ -439,6 +446,68 @@ impl CaelixApi for CaelixApiImpl {
 
     async fn get_tool_info(&self, name: &str) -> Result<Option<ToolInfo>, ApiError> {
         tool::get_tool_info(&self.context, name).await
+    }
+
+    async fn execute_tool(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolExecuteResult, ApiError> {
+        tool::execute_tool(&self.context, tool_name, arguments).await
+    }
+
+    // ==================== 记忆包管理 ====================
+
+    async fn memory_recall(
+        &self,
+        query: &str,
+        top_k: u32,
+    ) -> Result<Vec<MemoryRecallResult>, ApiError> {
+        memory::memory_recall(&self.memory_service, query, top_k).await
+    }
+
+    async fn memory_write(
+        &self,
+        content: &str,
+        source: &str,
+        tags: Vec<String>,
+    ) -> Result<(), ApiError> {
+        memory::memory_write(&self.memory_service, content, source, tags).await
+    }
+
+    async fn memory_promote_raw(&self, file: &str) -> Result<(), ApiError> {
+        memory::memory_promote_raw(&self.memory_service, file).await
+    }
+
+    async fn memory_promote_wiki(&self, entity: &str) -> Result<(), ApiError> {
+        memory::memory_promote_wiki(&self.memory_service, entity).await
+    }
+
+    async fn memory_list_conflicts(&self, all: bool) -> Result<Vec<MemoryConflict>, ApiError> {
+        memory::memory_list_conflicts(&self.memory_service, all).await
+    }
+
+    async fn memory_list_candidates(&self, all: bool) -> Result<Vec<MemoryCandidate>, ApiError> {
+        memory::memory_list_candidates(&self.memory_service, all).await
+    }
+
+    async fn memory_rebuild_index(&self) -> Result<(), ApiError> {
+        memory::memory_rebuild_index(&self.memory_service).await
+    }
+
+    async fn memory_stats(&self) -> Result<MemoryStats, ApiError> {
+        memory::memory_stats(&self.memory_service).await
+    }
+
+    async fn memory_list_axioms(
+        &self,
+        include_deprecated: bool,
+    ) -> Result<Vec<MemoryAxiom>, ApiError> {
+        memory::memory_list_axioms(&self.memory_service, include_deprecated).await
+    }
+
+    async fn memory_budget(&self) -> Result<MemoryBudgetInfo, ApiError> {
+        memory::memory_budget(&self.memory_service).await
     }
 
     // ==================== Hook 管理 ====================

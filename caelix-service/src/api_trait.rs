@@ -4,6 +4,8 @@
 use crate::types::{
     ChatAsyncResult, ChatRequest, HookInfo, PluginInfo, ProviderInfo, SessionSummary,
     SecurityCheckerInfo, SkillInfo, ToolInfo, AgentSpecInfo, CommandInfo,
+    ToolExecuteResult, MemoryRecallResult, MemoryStats, MemoryAxiom,
+    MemoryConflict, MemoryCandidate, MemoryBudgetInfo,
 };
 use async_trait::async_trait;
 use caelix_api::error::ApiError;
@@ -204,6 +206,57 @@ pub trait CaelixApi: Send + Sync {
 
     /// 获取指定工具信息
     async fn get_tool_info(&self, name: &str) -> Result<Option<ToolInfo>, ApiError>;
+
+    /// 执行指定工具
+    async fn execute_tool(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolExecuteResult, ApiError>;
+
+    // ==================== 记忆包管理 ====================
+
+    /// 记忆检索
+    async fn memory_recall(
+        &self,
+        query: &str,
+        top_k: u32,
+    ) -> Result<Vec<MemoryRecallResult>, ApiError>;
+
+    /// 写入 Raw 层记忆
+    async fn memory_write(
+        &self,
+        content: &str,
+        source: &str,
+        tags: Vec<String>,
+    ) -> Result<(), ApiError>;
+
+    /// 手动触发 Raw→Wiki 晋升
+    async fn memory_promote_raw(&self, file: &str) -> Result<(), ApiError>;
+
+    /// 手动触发 Wiki→Axiom 晋升
+    async fn memory_promote_wiki(&self, entity: &str) -> Result<(), ApiError>;
+
+    /// 列出冲突
+    async fn memory_list_conflicts(&self, all: bool) -> Result<Vec<MemoryConflict>, ApiError>;
+
+    /// 列出 Axiom 候选
+    async fn memory_list_candidates(&self, all: bool) -> Result<Vec<MemoryCandidate>, ApiError>;
+
+    /// 重建反向索引
+    async fn memory_rebuild_index(&self) -> Result<(), ApiError>;
+
+    /// 获取记忆统计
+    async fn memory_stats(&self) -> Result<MemoryStats, ApiError>;
+
+    /// 列出 Axiom
+    async fn memory_list_axioms(
+        &self,
+        include_deprecated: bool,
+    ) -> Result<Vec<MemoryAxiom>, ApiError>;
+
+    /// 获取 LLM 预算信息
+    async fn memory_budget(&self) -> Result<MemoryBudgetInfo, ApiError>;
 
     // ==================== Hook 管理 ====================
 

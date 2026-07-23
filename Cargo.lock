@@ -473,6 +473,7 @@ dependencies = [
  "caelix-api",
  "caelix-config",
  "caelix-llm",
+ "caelix-memory",
  "caelix-message",
  "caelix-runtime",
  "caelix-security",

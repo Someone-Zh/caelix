@@ -150,3 +150,82 @@ pub struct CommandInfo {
     pub command_type: String,
     pub description: String,
 }
+
+/// 工具执行请求
+#[derive(Debug, Deserialize, Clone)]
+pub struct ToolExecuteRequest {
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// 工具执行结果
+#[derive(Debug, Serialize, Clone)]
+pub struct ToolExecuteResult {
+    pub output: String,
+    pub error: Option<String>,
+}
+
+/// 记忆检索结果
+#[derive(Debug, Serialize, Clone)]
+pub struct MemoryRecallResult {
+    pub layer: String,
+    pub file: String,
+    pub heading: String,
+    pub preview: String,
+    pub confidence: Option<f64>,
+}
+
+/// 记忆统计信息
+#[derive(Debug, Serialize, Clone)]
+pub struct MemoryStats {
+    pub raw_files: usize,
+    pub wiki_entities: usize,
+    pub wiki_events: usize,
+    pub axioms: usize,
+    pub axioms_active: usize,
+    pub pending_conflicts: usize,
+    pub pending_candidates: usize,
+    pub pending_links: usize,
+    pub llm_budget_used: u32,
+    pub llm_budget_total: u32,
+}
+
+/// Axiom 信息
+#[derive(Debug, Serialize, Clone)]
+pub struct MemoryAxiom {
+    pub name: String,
+    pub category: String,
+    pub status: String,
+    pub confidence: f64,
+    pub created_at: String,
+    pub deprecated_reason: Option<String>,
+}
+
+/// 冲突信息
+#[derive(Debug, Serialize, Clone)]
+pub struct MemoryConflict {
+    pub id: String,
+    pub r#type: String,
+    pub entity: String,
+    pub field: Option<String>,
+    pub status: String,
+    pub values: Vec<String>,
+}
+
+/// 候选 Axiom 信息
+#[derive(Debug, Serialize, Clone)]
+pub struct MemoryCandidate {
+    pub id: String,
+    pub confidence: f64,
+    pub status: String,
+    pub preview: String,
+}
+
+/// LLM 预算信息
+#[derive(Debug, Serialize, Clone)]
+pub struct MemoryBudgetInfo {
+    pub used: u32,
+    pub budget: u32,
+    pub remaining: u32,
+    pub exhausted: bool,
+}

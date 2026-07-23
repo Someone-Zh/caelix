@@ -44,36 +44,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         signal_ctrl_c(session_manager_clone).await;
     });
 
-    if args.len() > 1 {
-        match args[1].as_str() {
-            "cli" => {
-                println!("💻 启动 CLI 后端...");
-                caelix_cli::run_cli(api).await?;
-            }
-            #[cfg(feature = "http-server")]
-            "http" => {
-                println!("🌐 启动 HTTP Server 后端...");
-                let port = if args.len() > 2 {
-                    args[2].parse::<u16>().unwrap_or(3000)
-                } else {
-                    3000
-                };
-                caelix_http::start_http_server(api, port).await?;
-            }
-            #[cfg(feature = "tui")]
-            "tui" => {
-                println!("🖥️  启动 TUI 后端...");
-                caelix_tui::run_tui(api).await?;
-            }
-            arg if arg.starts_with('-') => {
-                println!("💻 启动 CLI 后端...");
-                caelix_cli::run_cli(api).await?;
-            }
-            _ => {
-                eprintln!("❌ 未知的后端: {}", args[1]);
-                print_usage();
-                std::process::exit(1);
-            }
+    let has_tui = args.iter().any(|a| a == "--tui");
+    let has_http = args.iter().any(|a| a == "--http");
+
+    if has_tui && has_http {
+        eprintln!("❌ 不能同时指定 --tui 和 --http");
+        std::process::exit(1);
+    }
+
+    if has_http {
+        #[cfg(feature = "http-server")]
+        {
+            let port = args
+                .iter()
+                .position(|a| a == "--http")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(3000);
+
+            println!("🌐 启动 HTTP Server 后端...");
+            caelix_http::start_http_server(api, port).await?;
+        }
+        #[cfg(not(feature = "http-server"))]
+        {
+            eprintln!("❌ http-server feature 未启用，请使用 --features http-server 编译");
+            std::process::exit(1);
+        }
+    } else if has_tui {
+        #[cfg(feature = "tui")]
+        {
+            println!("🖥️  启动 TUI 后端...");
+            caelix_tui::run_tui(api).await?;
+        }
+        #[cfg(not(feature = "tui"))]
+        {
+            eprintln!("❌ tui feature 未启用，请使用 --features tui 编译");
+            std::process::exit(1);
         }
     } else {
         println!("💻 启动 CLI 后端...");
@@ -85,19 +91,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_usage() {
     println!("\n用法:");
-    println!("  caelix [options]       - 启动 CLI 界面 (默认)");
-    println!("  caelix cli [options]   - 启动 CLI 界面");
-    #[cfg(feature = "http-server")]
-    println!("  caelix http [port]     - 启动 HTTP 服务器 (默认端口 3000)");
-    #[cfg(feature = "tui")]
-    println!("  caelix tui             - 启动 TUI 界面");
-    println!("  caelix logs [sub]      - 日志管理");
-    println!("  caelix memory [sub]    - 记忆系统");
-    println!("\nCLI 选项:");
-    println!("  -s, --session <ID>     - 指定会话 ID");
-    println!("  -a, --agent <NAME>     - 指定使用的 Agent");
-    println!("  -p, --provider <NAME>  - 指定提供商");
-    println!("  -m, --model <NAME>     - 指定模型");
+    println!("  caelix [子命令] [选项]    - 启动 CLI 界面 (默认)");
+    println!("  caelix --tui              - 启动 TUI 界面");
+    println!("  caelix --http [port]      - 启动 HTTP 服务器 (默认端口 3000)");
+    println!("  caelix logs [sub]         - 日志管理");
+    println!("  caelix memory [sub]       - 记忆系统");
+    println!("\nCLI 子命令:");
+    println!("  chat    - 对话聊天");
+    println!("  tool    - 工具执行");
+    println!("  list    - 列表查询 (sessions, agents, tools, skills, commands, hooks, plugins, providers)");
+    println!("  session - 会话管理");
+    println!("  variable- 变量管理");
+    println!("  agent   - 智能体管理");
+    println!("  skill   - 技能管理");
+    println!("  command - 命令管理");
+    println!("  hook    - Hook 管理");
+    println!("  plugin  - 插件管理");
+    println!("  security- 安全管理");
+    println!("  provider- 提供商管理");
+    println!("  usage   - Token 用量");
+    println!("  task    - 任务管理");
+    println!("  memory  - 记忆管理");
     println!("\n可用的 features:");
     #[cfg(feature = "http-server")]
     println!("  - http-server");

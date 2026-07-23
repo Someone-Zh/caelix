@@ -3,6 +3,7 @@
 //! 提供基于命令行的用户交互界面
 
 pub mod commands;
+pub mod doc;
 pub mod input_handler;
 pub mod runner;
 
