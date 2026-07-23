@@ -3,27 +3,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "🚀 CLI - 默认模式",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=caelix"
-                ],
-                "filter": {
-                    "name": "caelix-bin",
-                    "kind": "bin"
-                }
-            },
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "debug"
-            },
-            "args": [],
-            "internalConsoleOptions": "openOnSessionStart"
-        },
-        {
             "name": "💬 CLI - 快速对话模式",
             "type": "lldb",
             "request": "launch",
@@ -34,7 +13,7 @@
                     "--",
                     "cli",
                     "-c",
-                    "你好，请介绍一下自己"
+                    "你好，请介绍一下自己,然后查看目录内都有什么文件。"
                 ],
                 "filter": {
                     "name": "caelix-bin",
@@ -46,6 +25,13 @@
                 "RUST_LOG": "info"
             },
             "args": [],
+               // 👇【关键配置】：告诉 CodeLLDB 启用 Rust 专属数据格式化
+            "initCommands": [
+                "type summary add --cascade true -s \"${var%s}\" String",
+                "type summary add --cascade true -s \"${var%s}\" str"
+            ],
+            // 👇【核心救命设置】：限制显示的元素数量，防止因为数组/Vec过长导致卡死
+            "expressions": "native",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
@@ -70,121 +56,6 @@
                     "kind": "bin"
                 }
             },
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "debug"
-            },
-            "args": [],
-            "internalConsoleOptions": "openOnSessionStart"
-        },
-        {
-            "name": "🌐 HTTP Server",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=caelix",
-                    "--features=http-server",
-                    "--",
-                    "http"
-                ],
-                "filter": {
-                    "name": "caelix-bin",
-                    "kind": "bin"
-                }
-            },
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "info",
-                "PORT": "3000"
-            },
-            "args": [],
-            "internalConsoleOptions": "openOnSessionStart"
-        },
-        {
-            "name": "🖥️ TUI Interface",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=caelix",
-                    "--features=tui",
-                    "--",
-                    "tui"
-                ],
-                "filter": {
-                    "name": "caelix-bin",
-                    "kind": "bin"
-                }
-            },
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "info"
-            },
-            "args": [],
-            "internalConsoleOptions": "openOnSessionStart"
-        },
-        {
-            "name": "🧪 Test - caelix-message",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=caelix-message",
-                    "--lib",
-                    "--",
-                    "--nocapture"
-                ],
-                "filter": {
-                    "name": "caelix-message",
-                    "kind": "lib"
-                }
-            },
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "debug"
-            },
-            "args": [],
-            "internalConsoleOptions": "openOnSessionStart"
-        },
-        {
-            "name": "🧪 Test - caelix-agent",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=caelix-agent",
-                    "--lib",
-                    "--",
-                    "--nocapture"
-                ],
-                "filter": {
-                    "name": "caelix-agent",
-                    "kind": "lib"
-                }
-            },
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "debug"
-            },
-            "args": [],
-            "internalConsoleOptions": "openOnSessionStart"
-        },
-        {
-            "name": "🔍 Debug Current Package",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--package=${input:packageName}"
-                ]
-            },
-            "program": "${workspaceFolder}/target/debug/${input:binaryName}",
             "env": {
                 "RUST_BACKTRACE": "1",
                 "RUST_LOG": "debug"

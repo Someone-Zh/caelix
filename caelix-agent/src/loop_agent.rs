@@ -330,6 +330,8 @@ fn call_llm_static<'a>(
         let mut cumulative_usage = caelix_api::provider::TokenUsage::default();
 
         while let Some(result) = stream.next().await {
+            print!("[DEBUG][LoopAgent] stream result: {:#?}", result);
+
             let chunk = match result {
                 Ok(c) => c,
                 Err(e) => {

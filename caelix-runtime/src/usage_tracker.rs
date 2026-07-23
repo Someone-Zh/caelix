@@ -38,52 +38,62 @@ impl UsageTracker {
         let _ = std::fs::create_dir_all(&dir);
         let file_path = dir.join("usage.jsonl");
 
-        let tracker = Self {
+        // 启动时同步从磁盘加载历史用量聚合。
+        // 此时 self 尚未构造，直接把加载结果作为 RwLock 的初始值即可——无需加锁，
+        // 也避免在 tokio runtime 线程内调用 RwLock::blocking_write 而触发
+        // “Cannot block the current thread from within a runtime” panic
+        // （#[tokio::main] 下 CaelixContext::new 是在 runtime 线程内同步执行的）。
+        let agg = match load_aggregates_from_disk(&file_path) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!(error = %e, "从 usage.jsonl 恢复历史用量失败，将从空开始");
+                Aggregates::default()
+            }
+        };
+
+        Self {
             file_path,
             file_lock: Mutex::new(()),
-            agg: RwLock::new(Aggregates::default()),
-        };
-
-        // 同步从磁盘恢复（程序启动时调用一次即可，IO 很小）
-        if let Err(e) = tracker.reload_from_disk_sync() {
-            tracing::warn!(error = %e, "从 usage.jsonl 恢复历史用量失败，将从空开始");
+            agg: RwLock::new(agg),
         }
-
-        tracker
     }
+}
 
-    /// 同步方式：将 usage.jsonl 中的全部记录重放到内存聚合
-    fn reload_from_disk_sync(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let file = match File::open(&self.file_path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-        let reader = BufReader::new(file);
-        let mut agg = Aggregates::default();
-        for (i, line_result) in reader.lines().enumerate() {
-            let line = match line_result {
-                Ok(l) => l,
-                Err(e) => {
-                    tracing::warn!(line = i, error = %e, "读取 usage.jsonl 行失败，跳过");
-                    continue;
-                }
-            };
-            if line.trim().is_empty() {
+/// 同步读取 usage.jsonl，将全部记录重放到内存聚合。
+///
+/// 作为自由函数实现：只负责“读文件 + 聚合”，不触碰任何锁，因此可以安全地
+/// 在启动阶段（含 tokio runtime 线程内）同步调用。返回值作为 RwLock 初始值注入。
+fn load_aggregates_from_disk(
+    file_path: &Path,
+) -> Result<Aggregates, Box<dyn std::error::Error + Send + Sync>> {
+    let file = match File::open(file_path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Aggregates::default()),
+        Err(e) => return Err(e.into()),
+    };
+    let reader = BufReader::new(file);
+    let mut agg = Aggregates::default();
+    for (i, line_result) in reader.lines().enumerate() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(line = i, error = %e, "读取 usage.jsonl 行失败，跳过");
                 continue;
             }
-            let record: UsageRecord = match serde_json::from_str(&line) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(line = i, error = %e, "usage.jsonl 行解析失败，跳过");
-                    continue;
-                }
-            };
-            apply_record(&mut agg, &record);
+        };
+        if line.trim().is_empty() {
+            continue;
         }
-        *self.agg.blocking_write() = agg;
-        Ok(())
+        let record: UsageRecord = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(line = i, error = %e, "usage.jsonl 行解析失败，跳过");
+                continue;
+            }
+        };
+        apply_record(&mut agg, &record);
     }
+    Ok(agg)
 }
 
 fn apply_record(agg: &mut Aggregates, record: &UsageRecord) {

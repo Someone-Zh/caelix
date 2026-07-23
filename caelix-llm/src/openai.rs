@@ -222,6 +222,8 @@ impl OpenAIProvider {
                 arguments: args,
             });
         }
+        print!("[DEBUG][openai] tool call buffer: {:#?}", buffer);
+
     }
 
     fn buffer_to_tool_calls(&self, buffer: &[ToolCallBuffer]) -> Vec<ToolCall> {
@@ -257,6 +259,7 @@ impl OpenAIProvider {
             None => {
                 // choices 缺失但存在 usage，仍然产出一个带 usage 的空 chunk
                 if usage.is_some() {
+                    print!("[DEBUG][openai] choices missing but usage found: {:#?}", usage);
                     return Ok(Some(ChatResponseChunk {
                         reasoning_content: None,
                         content: None,
@@ -274,6 +277,7 @@ impl OpenAIProvider {
             Some(c) => c,
             None => {
                 if usage.is_some() {
+                    print!("[DEBUG][openai] choices missing but usage found: {:#?}", usage);
                     return Ok(Some(ChatResponseChunk {
                         reasoning_content: None,
                         content: None,
@@ -292,6 +296,7 @@ impl OpenAIProvider {
 
         if let Some(tool_calls) = delta["tool_calls"].as_array() {
             for call in tool_calls {
+                print!("[DEBUG][openai] merge tool call: {:#?}", call);
                 self.merge_tool_call_chunk(tool_buffer, call);
             }
         }
@@ -312,7 +317,7 @@ impl OpenAIProvider {
             chunk.tool_calls = Some(self.buffer_to_tool_calls(tool_buffer));
             chunk.finish_reason = finish_reason;
         }
-
+        print!("[DEBUG][openai] chunk: {:#?}", chunk);
         Ok(Some(chunk))
     }
 
