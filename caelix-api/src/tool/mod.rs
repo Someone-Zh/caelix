@@ -2,6 +2,8 @@
 //!
 //! 包含 Tool trait、ToolDefinition、ToolResult 等定义
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -137,5 +139,116 @@ impl ToolCall {
                 arguments,
             },
         }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct ToolCallBuffer {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ToolCallAggregator {
+    buffers: HashMap<u32, ToolCallBuffer>,
+    done: bool,
+}
+
+impl ToolCallAggregator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn receive_delta(&mut self, delta: &ToolCall) {
+        let index = delta.index;
+        let args_delta = match &delta.arguments {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+
+        if let Some(buf) = self.buffers.get_mut(&index) {
+            buf.arguments.push_str(&args_delta);
+            if !delta.id.is_empty() && buf.id.is_empty() {
+                buf.id = delta.id.clone();
+            }
+            if !delta.name.is_empty() && buf.name.is_empty() {
+                buf.name = delta.name.clone();
+            }
+        } else {
+            let id = if delta.id.is_empty() {
+                format!("call_{}", index)
+            } else {
+                delta.id.clone()
+            };
+            self.buffers.insert(
+                index,
+                ToolCallBuffer {
+                    id,
+                    name: delta.name.clone(),
+                    arguments: args_delta,
+                },
+            );
+        }
+    }
+
+    pub fn receive_deltas(&mut self, deltas: &[ToolCall]) {
+        for d in deltas {
+            self.receive_delta(d);
+        }
+    }
+
+    pub fn mark_done(&mut self) {
+        self.done = true;
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
+    pub fn snapshot(&self) -> Vec<ToolCall> {
+        let mut entries: Vec<_> = self.buffers.iter().collect();
+        entries.sort_by_key(|(idx, _)| **idx);
+        entries
+            .into_iter()
+            .map(|(idx, buf)| ToolCall {
+                id: buf.id.clone(),
+                index: *idx,
+                name: buf.name.clone(),
+                arguments: serde_json::Value::String(buf.arguments.clone()),
+                approval_state: None,
+            })
+            .collect()
+    }
+
+    pub fn completed_tool_calls(&self) -> Vec<ToolCall> {
+        if !self.done {
+            return Vec::new();
+        }
+        self.snapshot()
+            .into_iter()
+            .filter(|tc| {
+                let args_str = match &tc.arguments {
+                    serde_json::Value::String(s) => s.trim(),
+                    other => return !other.is_null(),
+                };
+                if args_str.is_empty() {
+                    return false;
+                }
+                serde_json::from_str::<serde_json::Value>(args_str).is_ok()
+            })
+            .map(|mut tc| {
+                if let serde_json::Value::String(s) = &tc.arguments {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                        tc.arguments = parsed;
+                    }
+                }
+                tc
+            })
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffers.is_empty()
     }
 }

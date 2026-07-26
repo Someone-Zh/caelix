@@ -251,15 +251,12 @@ impl OpenAIProvider {
             *response_id = id.to_string();
         }
 
-        // 解析顶层 usage 字段（流式响应末尾的 usage 块，choices 可能为空）
         let usage = parse_usage(json);
 
         let choices = match json["choices"].as_array() {
             Some(c) => c,
             None => {
-                // choices 缺失但存在 usage，仍然产出一个带 usage 的空 chunk
                 if usage.is_some() {
-                    print!("[DEBUG][openai] choices missing but usage found: {:#?}", usage);
                     return Ok(Some(ChatResponseChunk {
                         reasoning_content: None,
                         content: None,
@@ -277,7 +274,6 @@ impl OpenAIProvider {
             Some(c) => c,
             None => {
                 if usage.is_some() {
-                    print!("[DEBUG][openai] choices missing but usage found: {:#?}", usage);
                     return Ok(Some(ChatResponseChunk {
                         reasoning_content: None,
                         content: None,
@@ -296,7 +292,6 @@ impl OpenAIProvider {
 
         if let Some(tool_calls) = delta["tool_calls"].as_array() {
             for call in tool_calls {
-                print!("[DEBUG][openai] merge tool call: {:#?}", call);
                 self.merge_tool_call_chunk(tool_buffer, call);
             }
         }
@@ -304,21 +299,30 @@ impl OpenAIProvider {
         let reasoning_content = delta["reasoning_content"].as_str().map(|s| s.to_string());
         let content = delta["content"].as_str().map(|s| s.to_string());
 
-        let mut chunk = ChatResponseChunk {
+        let tool_calls_delta = if !tool_buffer.is_empty() {
+            Some(self.buffer_to_tool_calls(tool_buffer))
+        } else {
+            None
+        };
+
+        let has_content = content.as_ref().is_some_and(|s| !s.is_empty());
+        let has_reasoning = reasoning_content.as_ref().is_some_and(|s| !s.is_empty());
+        let has_tools = tool_calls_delta.as_ref().is_some_and(|t| !t.is_empty());
+        let has_usage = usage.is_some();
+        let has_finish = finish_reason.is_some();
+
+        if !has_content && !has_reasoning && !has_tools && !has_usage && !has_finish {
+            return Ok(None);
+        }
+
+        Ok(Some(ChatResponseChunk {
             reasoning_content,
             content,
             id: response_id.clone(),
-            tool_calls: None,
-            finish_reason: None,
+            tool_calls: tool_calls_delta,
+            finish_reason,
             usage,
-        };
-
-        if finish_reason.is_some() && !tool_buffer.is_empty() {
-            chunk.tool_calls = Some(self.buffer_to_tool_calls(tool_buffer));
-            chunk.finish_reason = finish_reason;
-        }
-        print!("[DEBUG][openai] chunk: {:#?}", chunk);
-        Ok(Some(chunk))
+        }))
     }
 
     async fn send_chat_request(
