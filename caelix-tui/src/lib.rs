@@ -1,16 +1,43 @@
-//! Caelix TUI - 终端用户界面后端
-//!
-//! 提供基于 Ratatui 的终端用户界面
+pub mod domain;
+pub mod infrastructure;
+pub mod application;
+pub mod ui;
 
-/// 命令处理逻辑
-pub mod commands;
-/// 事件处理
-pub mod events;
-/// 主循环运行器
-pub mod runner;
-/// TUI 应用状态和核心逻辑
-pub mod state;
-/// 视图渲染逻辑
-pub mod views;
+use std::sync::Arc;
 
-pub use runner::run_tui;
+use caelix_service::CaelixApiImpl;
+
+pub async fn run_tui(_api: Arc<CaelixApiImpl>) -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::{
+        event::{DisableMouseCapture, EnableMouseCapture},
+        execute,
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    };
+    use ratatui::{Terminal, backend::CrosstermBackend};
+
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = ui::TuiApp::new().await;
+    let events = ui::EventHandler::new();
+
+    while app.is_running() {
+        terminal.draw(|f| ui::render(f, &mut app))?;
+
+        let event = events.next()?;
+        app.handle_event(event).await;
+    }
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
