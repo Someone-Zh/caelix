@@ -16,40 +16,96 @@ const LOGO_LINES: &[&str] = &[
 
 const SUBTITLE: &str = "~  Terminal AI Assistant  ~";
 
-pub fn render(f: &mut Frame, area: Rect, light_x: f32) {
-    let vertical = Layout::default()
+pub fn logo_height() -> u16 {
+    LOGO_LINES.len() as u16
+}
+
+pub fn logo_width() -> u16 {
+    LOGO_LINES[0].chars().count() as u16
+}
+
+pub fn render_logo(f: &mut Frame, area: Rect) {
+    if area.width < logo_width() || area.height < logo_height() {
+        return;
+    }
+    let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(8),
-            Constraint::Length(2),
-            Constraint::Length(1),
+            Constraint::Length(logo_height()),
             Constraint::Min(1),
         ])
         .split(area);
-
-    let logo_width = LOGO_LINES[0].len() as u16;
-    let logo_x = (area.width.saturating_sub(logo_width)) / 2;
-    let logo_area = Rect {
-        x: logo_x,
-        y: vertical[1].y,
-        width: logo_width.min(area.width.saturating_sub(4)),
-        height: LOGO_LINES.len() as u16,
-    };
+    let h = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(logo_width()),
+            Constraint::Min(1),
+        ])
+        .split(v[1]);
+    let logo_area = h[1];
 
     for (i, line) in LOGO_LINES.iter().enumerate() {
         let line_y = logo_area.y + i as u16;
-        if line_y >= area.height {
-            break;
-        }
-
         let line_area = Rect {
             x: logo_area.x,
             y: line_y,
             width: logo_area.width,
             height: 1,
         };
+        let p = Paragraph::new(line.to_string()).style(
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        );
+        f.render_widget(p, line_area);
+    }
+}
 
+pub fn render(f: &mut Frame, area: Rect, light_x: f32) {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(6),
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(area);
+
+    let logo_v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(logo_height()),
+            Constraint::Min(1),
+        ])
+        .split(vertical[1]);
+
+    let logo_h = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(logo_width()),
+            Constraint::Min(1),
+        ])
+        .split(logo_v[1]);
+
+    let logo_area = logo_h[1];
+
+    for (i, line) in LOGO_LINES.iter().enumerate() {
+        let line_y = logo_area.y + i as u16;
+        if line_y >= area.y + area.height {
+            break;
+        }
+        let line_area = Rect {
+            x: logo_area.x,
+            y: line_y,
+            width: logo_area.width,
+            height: 1,
+        };
         let styled_line = apply_light_effect(line, light_x, i);
         let p = Paragraph::new(styled_line).style(
             Style::default()

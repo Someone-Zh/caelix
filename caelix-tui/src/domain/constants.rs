@@ -1,6 +1,6 @@
 pub const TICK_RATE_MS: u64 = 25;
 
-pub const SPLASH_DURATION_MS: u64 = 3000;
+pub const SPLASH_DURATION_MS: u64 = 50000;
 pub const SPLASH_LIGHT_SPEED: f32 = 0.003;
 
 pub const TYPEWRITER_CHAR_DELAY_MS: u64 = 15;

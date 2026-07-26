@@ -8,6 +8,7 @@ use crate::domain::{UI_INPUT_AREA_HEIGHT, UI_SIDEBAR_WIDTH_PERCENT, UI_STATUS_BA
 use super::app::{AppMode, Focus, MenuItem, TuiApp};
 use super::theme::Theme;
 use super::widgets::{chat_area, input_area, sidebar, splash};
+use super::widgets::splash::render_logo;
 
 pub fn render(f: &mut Frame, app: &mut TuiApp) {
     let area = f.area();
@@ -47,36 +48,32 @@ fn render_input_mode(f: &mut Frame, area: Rect, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
+            Constraint::Length(7),
+            Constraint::Min(1),
             Constraint::Length(10),
-            Constraint::Length(2),
+            Constraint::Length(4),
             Constraint::Min(1),
         ])
         .split(main_area);
 
+    render_logo(f, outer[1]);
+
     let input_width = (main_area.width as f32 * 0.6) as u16;
-    let input_x = (main_area.width - input_width) / 2;
-    let input_area_rect = Rect {
-        x: input_x,
-        y: outer[1].y,
-        width: input_width,
-        height: outer[1].height,
-    };
+    let input_center = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(input_width),
+            Constraint::Min(1),
+        ])
+        .split(outer[3]);
 
-    let title = Paragraph::new("Caelix")
-        .style(
-            Style::default()
-                .fg(Theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )
-        .alignment(Alignment::Center);
-    f.render_widget(title, outer[0]);
-
-    input_area::render(f, input_area_rect, &app.input);
+    input_area::render(f, input_center[1], &app.input);
 
     let hint = Paragraph::new(" Enter 换行 · Ctrl+Enter 发送 · Esc 菜单 ")
         .style(Theme::muted())
         .alignment(Alignment::Center);
-    f.render_widget(hint, outer[2]);
+    f.render_widget(hint, outer[4]);
 
     render_status_bar(f, status_area, app);
 }

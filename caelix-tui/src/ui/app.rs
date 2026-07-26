@@ -172,7 +172,7 @@ impl<'a> TuiApp<'a> {
 
         match self.mode {
             AppMode::Splash => {
-                self.splash_light_x += 0.008;
+                self.splash_light_x += 0.1;
                 if self.splash_light_x > 1.5 {
                     self.splash_light_x = -0.5;
                 }
