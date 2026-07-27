@@ -51,6 +51,7 @@ pub enum CaelixCommand {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::CHAT_HELP)]
 pub struct ChatArgs {
     #[arg(short = 's', long = "session", help = "指定会话 ID（未提供则自动创建）")]
     pub session_id: Option<String>,
@@ -67,17 +68,14 @@ pub struct ChatArgs {
     #[arg(short = 'c', long = "content", help = "对话内容（必需）")]
     pub content: Option<String>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::TOOL_HELP)]
 pub struct ToolArgs {
     #[command(subcommand)]
     pub action: Option<ToolAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -99,21 +97,19 @@ pub enum ToolAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::LIST_HELP)]
 pub struct ListArgs {
     #[arg(help = "查询类型: sessions|agents|tools|skills|commands|hooks|plugins|providers")]
     pub list_type: Option<String>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::SESSION_HELP)]
 pub struct SessionArgs {
     #[command(subcommand)]
     pub action: Option<SessionAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -149,12 +145,11 @@ pub enum SessionAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::VARIABLE_HELP)]
 pub struct VariableArgs {
     #[command(subcommand)]
     pub action: Option<VariableAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -206,12 +201,11 @@ pub enum SpaceVariableAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::AGENT_HELP)]
 pub struct AgentArgs {
     #[command(subcommand)]
     pub action: Option<AgentAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -225,12 +219,11 @@ pub enum AgentAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::SKILL_HELP)]
 pub struct SkillArgs {
     #[command(subcommand)]
     pub action: Option<SkillAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -244,12 +237,11 @@ pub enum SkillAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::COMMAND_HELP)]
 pub struct CommandArgs {
     #[command(subcommand)]
     pub action: Option<CommandAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -263,12 +255,11 @@ pub enum CommandAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::HOOK_HELP)]
 pub struct HookArgs {
     #[command(subcommand)]
     pub action: Option<HookAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -282,12 +273,11 @@ pub enum HookAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::PLUGIN_HELP)]
 pub struct PluginArgs {
     #[command(subcommand)]
     pub action: Option<PluginAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -301,12 +291,11 @@ pub enum PluginAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::SECURITY_HELP)]
 pub struct SecurityArgs {
     #[command(subcommand)]
     pub action: Option<SecurityAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -363,12 +352,11 @@ pub enum IncludeExclude {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::PROVIDER_HELP)]
 pub struct ProviderArgs {
     #[command(subcommand)]
     pub action: Option<ProviderAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -382,6 +370,7 @@ pub enum ProviderAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::USAGE_HELP)]
 pub struct UsageArgs {
     #[arg(short = 's', long = "session", help = "查看指定会话的用量")]
     pub session_id: Option<String>,
@@ -389,17 +378,14 @@ pub struct UsageArgs {
     #[arg(short = 'g', long = "global", help = "查看全局用量（默认）")]
     pub global: bool,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::TASK_HELP)]
 pub struct TaskArgs {
     #[command(subcommand)]
     pub action: Option<TaskAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -412,12 +398,11 @@ pub enum TaskAction {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = doc::MEMORY_HELP)]
 pub struct MemoryArgs {
     #[command(subcommand)]
     pub action: Option<MemoryAction>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong)]
-    pub help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]

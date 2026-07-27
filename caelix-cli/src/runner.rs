@@ -281,7 +281,11 @@ async fn handle_tool(
     api: Arc<CaelixApiImpl>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match args.action {
-        None | Some(crate::commands::ToolAction::List) => {
+        None => {
+            println!("\n{}", crate::doc::TOOL_HELP);
+            return Ok(());
+        }
+        Some(crate::commands::ToolAction::List) => {
             match api.list_tools().await {
                 Ok(tools) => {
                     println!("\n🔧 工具列表 ({} 个):", tools.len());
@@ -393,7 +397,6 @@ async fn handle_list(
             handle_tool(
                 crate::commands::ToolArgs {
                     action: Some(crate::commands::ToolAction::List),
-                    help: None,
                 },
                 api,
             )
@@ -480,7 +483,6 @@ async fn handle_session(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("sessions".to_string()),
-                    help: None,
                 },
                 api,
             )
@@ -649,7 +651,6 @@ async fn handle_agent(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("agents".to_string()),
-                    help: None,
                 },
                 api,
             )
@@ -686,7 +687,6 @@ async fn handle_skill(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("skills".to_string()),
-                    help: None,
                 },
                 api,
             )
@@ -731,7 +731,6 @@ async fn handle_cmd(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("commands".to_string()),
-                    help: None,
                 },
                 api,
             )
@@ -766,7 +765,6 @@ async fn handle_hook(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("hooks".to_string()),
-                    help: None,
                 },
                 api,
             )
@@ -801,7 +799,6 @@ async fn handle_plugin(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("plugins".to_string()),
-                    help: None,
                 },
                 api,
             )
@@ -915,7 +912,6 @@ async fn handle_provider(
             handle_list(
                 crate::commands::ListArgs {
                     list_type: Some("providers".to_string()),
-                    help: None,
                 },
                 api,
             )
