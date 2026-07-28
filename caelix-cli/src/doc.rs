@@ -24,6 +24,7 @@ Caelix - AI Agent 命令行工具
   usage       Token 用量
   task        任务管理
   memory      记忆管理
+  logs        日志管理
   help        显示此帮助信息
 
 全局选项:
@@ -322,6 +323,27 @@ pub const MEMORY_HELP: &str = r#"
   caelix memory stats
 "#;
 
+pub const LOGS_HELP: &str = r#"
+日志管理
+
+用法:
+  caelix logs <操作>
+
+操作:
+  dir             显示日志目录路径
+  ls              列出所有日志文件
+  show [-n N]     显示当前日志最后 N 行 (默认 50)
+  follow          实时跟随当前日志 (Ctrl+C 退出)
+  clean           删除所有日志文件
+  -h, --help      显示帮助信息
+
+示例:
+  caelix logs dir
+  caelix logs ls
+  caelix logs show -n 100
+  caelix logs follow
+"#;
+
 pub fn get_command_help(cmd: &str) -> &'static str {
     match cmd {
         "chat" => CHAT_HELP,
@@ -339,6 +361,7 @@ pub fn get_command_help(cmd: &str) -> &'static str {
         "usage" => USAGE_HELP,
         "task" => TASK_HELP,
         "memory" => MEMORY_HELP,
+        "logs" => LOGS_HELP,
         _ => CLI_HELP,
     }
 }

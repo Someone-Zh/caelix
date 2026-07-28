@@ -333,6 +333,7 @@ name = "caelix-cli"
 version = "0.1.0"
 dependencies = [
  "caelix-api",
+ "caelix-config",
  "caelix-message",
  "caelix-service",
  "clap",

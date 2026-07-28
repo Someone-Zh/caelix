@@ -119,6 +119,7 @@ async fn execute_command(
         CaelixCommand::Usage(args) => handle_usage(args, api).await,
         CaelixCommand::Task(args) => handle_task(args, api).await,
         CaelixCommand::Memory(args) => handle_memory(args, api).await,
+        CaelixCommand::Logs(args) => handle_logs(args).await,
     }
 }
 
@@ -176,86 +177,136 @@ async fn handle_chat(
                     let mut active_spans: Vec<String> = Vec::new();
                     let mut completed_spans: Vec<String> = Vec::new();
                     let mut target_span_completed = false;
+                    let mut target_span_msg_received = false;
 
-                    while let Some(msg) = stream.next().await {
-                        match msg.r#type {
-                            AgentMessageType::Chunk => {
-                                if msg.session_id == result.session_id {
-                                    let span_id = msg.span_id.clone();
-                                    if !span_buffers.contains_key(&span_id) {
-                                        span_buffers.insert(span_id.clone(), String::new());
-                                        active_spans.push(span_id.clone());
+                    loop {
+                        let timeout_fut = tokio::time::sleep(std::time::Duration::from_secs(30));
+                        tokio::select! {
+                            msg_opt = stream.next() => {
+                                let Some(msg) = msg_opt else {
+                                    break;
+                                };
+                                match msg.r#type {
+                                    AgentMessageType::Chunk => {
+                                        if msg.session_id == result.session_id && !target_span_msg_received {
+                                            let span_id = msg.span_id.clone();
+                                            if !span_buffers.contains_key(&span_id) {
+                                                span_buffers.insert(span_id.clone(), String::new());
+                                                active_spans.push(span_id.clone());
+                                            }
+                                            if let Some(buffer) = span_buffers.get_mut(&span_id) {
+                                                buffer.push_str(&msg.content);
+                                            }
+                                        }
                                     }
-                                    if let Some(buffer) = span_buffers.get_mut(&span_id) {
-                                        buffer.push_str(&msg.content);
+                                    AgentMessageType::ChunkEnd => {
+                                        if msg.session_id == result.session_id {
+                                            let span_id = msg.span_id.clone();
+                                            if span_id == target_span_id {
+                                                target_span_completed = true;
+                                            }
+                                            if let Some(pos) =
+                                                active_spans.iter().position(|s| s == &span_id)
+                                            {
+                                                active_spans.remove(pos);
+                                                completed_spans.push(span_id.clone());
+                                                flush_completed_spans(
+                                                    &mut completed_spans,
+                                                    &mut span_buffers,
+                                                    &target_span_id,
+                                                );
+                                            }
+                                            if target_span_completed && active_spans.is_empty() {
+                                                println!();
+                                                api.session_manager()
+                                                    .wait_for_session_persistence(&result.session_id)
+                                                    .await;
+                                                break;
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                            AgentMessageType::ChunkEnd => {
-                                if msg.session_id == result.session_id {
-                                    let span_id = msg.span_id.clone();
-                                    if span_id == target_span_id {
-                                        target_span_completed = true;
+                                    AgentMessageType::Msg => {
+                                        if msg.span_id == target_span_id {
+                                            target_span_msg_received = true;
+                                            target_span_completed = true;
+                                            if let Some(pos) =
+                                                active_spans.iter().position(|s| s == &target_span_id)
+                                            {
+                                                active_spans.remove(pos);
+                                            }
+                                            span_buffers.remove(&target_span_id);
+                                            if let Ok(chat_msg) = serde_json::from_str::<
+                                                caelix_api::provider::ChatMessage,
+                                            >(
+                                                &msg.content
+                                            ) {
+                                                print!("{}", chat_msg.content);
+                                                let _ = std::io::stdout().flush();
+                                            } else {
+                                                print!("{}", msg.content);
+                                                let _ = std::io::stdout().flush();
+                                            }
+                                            if active_spans.is_empty() {
+                                                println!();
+                                                api.session_manager()
+                                                    .wait_for_session_persistence(&result.session_id)
+                                                    .await;
+                                                break;
+                                            }
+                                        } else {
+                                            let timestamp = msg.timestamp.format("%H:%M:%S");
+                                            if let Ok(chat_msg) = serde_json::from_str::<
+                                                caelix_api::provider::ChatMessage,
+                                            >(
+                                                &msg.content
+                                            ) {
+                                                println!(
+                                                    "\n[{}] 💬 [{}] {}",
+                                                    timestamp,
+                                                    msg.agent_name.as_deref().unwrap_or("AI"),
+                                                    chat_msg.content
+                                                );
+                                            } else {
+                                                println!(
+                                                    "\n[{}] 💬 [{}] {}",
+                                                    timestamp,
+                                                    msg.agent_name.as_deref().unwrap_or("AI"),
+                                                    msg.content
+                                                );
+                                            }
+                                            let _ = std::io::stdout().flush();
+                                        }
                                     }
-                                    if let Some(pos) =
-                                        active_spans.iter().position(|s| s == &span_id)
-                                    {
-                                        active_spans.remove(pos);
-                                        completed_spans.push(span_id.clone());
-                                        flush_completed_spans(
-                                            &mut completed_spans,
-                                            &mut span_buffers,
-                                            &target_span_id,
-                                        );
-                                    }
-                                    if target_span_completed && active_spans.is_empty() {
-                                        println!();
-                                        api.session_manager()
-                                            .wait_for_session_persistence(&result.session_id)
-                                            .await;
-                                        break;
-                                    }
-                                }
-                            }
-                            AgentMessageType::Msg => {
-                                if msg.span_id != target_span_id {
-                                    let timestamp = msg.timestamp.format("%H:%M:%S");
-                                    if let Ok(chat_msg) = serde_json::from_str::<
-                                        caelix_api::provider::ChatMessage,
-                                    >(
-                                        &msg.content
-                                    ) {
+                                    AgentMessageType::Event => {
+                                        let timestamp = msg.timestamp.format("%H:%M:%S");
                                         println!(
-                                            "\n[{}] 💬 [{}] {}",
-                                            timestamp,
-                                            msg.agent_name.as_deref().unwrap_or("AI"),
-                                            chat_msg.content
-                                        );
-                                    } else {
-                                        println!(
-                                            "\n[{}] 💬 [{}] {}",
+                                            "\n[{}] ⚡ [{}] {}",
                                             timestamp,
                                             msg.agent_name.as_deref().unwrap_or("AI"),
                                             msg.content
                                         );
+                                        let _ = std::io::stdout().flush();
                                     }
-                                    let _ = std::io::stdout().flush();
+                                    AgentMessageType::ManualApproval => {
+                                        let timestamp = msg.timestamp.format("%H:%M:%S");
+                                        println!("\n[{}] ⚠️ [需要审批] {}", timestamp, msg.content);
+                                        let _ = std::io::stdout().flush();
+                                    }
                                 }
                             }
-                            AgentMessageType::Event => {
-                                let timestamp = msg.timestamp.format("%H:%M:%S");
-                                println!(
-                                    "\n[{}] ⚡ [{}] {}",
-                                    timestamp,
-                                    msg.agent_name.as_deref().unwrap_or("AI"),
-                                    msg.content
-                                );
-                                let _ = std::io::stdout().flush();
-                            }
-                            AgentMessageType::ManualApproval => {
-                                let timestamp = msg.timestamp.format("%H:%M:%S");
-                                println!("\n[{}] ⚠️ [需要审批] {}", timestamp, msg.content);
-                                let _ = std::io::stdout().flush();
+                            _ = timeout_fut => {
+                                if target_span_completed && active_spans.is_empty() {
+                                    println!();
+                                    break;
+                                }
+                                let agent_running = caelix_api::context::try_caelix_context()
+                                    .and_then(|ctx| ctx.agent_run_manager())
+                                    .and_then(|mgr| mgr.get_cancel_token(&result.session_id))
+                                    .is_some();
+                                if !agent_running && active_spans.is_empty() {
+                                    println!();
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1262,4 +1313,236 @@ async fn handle_memory(
         }
     }
     Ok(())
+}
+
+async fn handle_logs(
+    args: crate::commands::LogsArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env_config = caelix_config::EnvConfig::new();
+    let log_config = &env_config.log;
+
+    match args.action {
+        None => {
+            println!("\n{}", crate::doc::LOGS_HELP);
+            return Ok(());
+        }
+        Some(crate::commands::LogsAction::Dir) => {
+            println!("日志目录: {}", log_config.dir.display());
+        }
+        Some(crate::commands::LogsAction::Ls) => {
+            list_logs(&log_config.dir);
+        }
+        Some(crate::commands::LogsAction::Show { n }) => {
+            show_current_log(&log_config.dir, n);
+        }
+        Some(crate::commands::LogsAction::Follow) => {
+            follow_log(&log_config.dir).await;
+        }
+        Some(crate::commands::LogsAction::Clean) => {
+            clean_logs(&log_config.dir);
+        }
+    }
+    Ok(())
+}
+
+fn list_logs(dir: &std::path::Path) {
+    use std::fs;
+
+    println!("日志目录: {}", dir.display());
+    println!();
+
+    if !dir.exists() {
+        println!("(目录不存在)");
+        return;
+    }
+
+    match fs::read_dir(dir) {
+        Ok(entries) => {
+            let mut files: Vec<(String, u64, String)> = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && let Some(name) = path.file_name().and_then(|s| s.to_str())
+                    && name.starts_with("caelix.")
+                    && name.ends_with(".log")
+                {
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let modified = entry
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .map(|t| format!("{:?}", t))
+                        .unwrap_or_else(|| "-".to_string());
+                    files.push((name.to_string(), size, modified));
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            if files.is_empty() {
+                println!("(暂无日志文件)");
+                return;
+            }
+            println!("{:<40} {:>12} 修改时间", "文件名", "大小");
+            println!("{}", "-".repeat(80));
+            for (name, size, modified) in &files {
+                println!("{:<40} {:>10}B  {}", name, size, modified);
+            }
+            let total: u64 = files.iter().map(|(_, s, _)| *s).sum();
+            println!();
+            println!("共 {} 个文件，合计 {} KB", files.len(), total / 1024);
+        }
+        Err(e) => {
+            eprintln!("❌ 读取日志目录失败: {}", e);
+        }
+    }
+}
+
+fn show_current_log(dir: &std::path::Path, n: usize) {
+    use std::fs;
+    use std::io::{BufRead, BufReader};
+
+    let current = dir.join("caelix.current.log");
+    if !current.exists() {
+        println!("(当前日志文件不存在)");
+        return;
+    }
+    println!("文件: {}", current.display());
+    println!("{}", "=".repeat(60));
+
+    match fs::File::open(&current) {
+        Ok(file) => {
+            let reader = BufReader::new(file);
+            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+            let start = if lines.len() > n { lines.len() - n } else { 0 };
+            for line in lines.iter().skip(start) {
+                if line.trim_start().starts_with('{')
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                {
+                    let ts = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                    let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
+                    let target = v.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                    let msg = v.get("message").and_then(|t| t.as_str()).unwrap_or("");
+                    let fields: Option<serde_json::Value> = v.get("fields").cloned();
+                    let span: Option<serde_json::Value> = v.get("span").cloned();
+                    let spans: Option<serde_json::Value> = v.get("spans").cloned();
+                    print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
+                    if let Some(f) = &fields
+                        && !f.is_null()
+                        && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
+                    {
+                        print!(" | {}", f);
+                    }
+                    if let Some(s) = &span
+                        && !s.is_null()
+                    {
+                        print!(" | span={}", s);
+                    }
+                    if let Some(s) = &spans
+                        && let Some(arr) = s.as_array()
+                        && !arr.is_empty()
+                    {
+                        print!(" | spans={}", s);
+                    }
+                    println!();
+                    continue;
+                }
+                println!("{}", line);
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ 打开日志文件失败: {}", e);
+        }
+    }
+}
+
+async fn follow_log(dir: &std::path::Path) {
+    use std::fs;
+    use std::io::{Seek, SeekFrom};
+
+    let current = dir.join("caelix.current.log");
+    if !current.exists() {
+        println!("(当前日志文件不存在，等待写入...)");
+    }
+    println!("跟随日志: {} (Ctrl+C 退出)", current.display());
+    println!("{}", "=".repeat(60));
+
+    let mut pos: u64 = 0;
+    if let Ok(file) = fs::File::open(&current)
+        && let Ok(meta) = file.metadata()
+    {
+        pos = meta.len();
+    }
+
+    loop {
+        if let Ok(mut file) = fs::File::open(&current)
+            && file.seek(SeekFrom::Start(pos)).is_ok()
+        {
+            use std::io::Read;
+            let mut buf = String::new();
+            if file.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
+                pos += buf.len() as u64;
+                for line in buf.lines() {
+                    if line.trim_start().starts_with('{')
+                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                    {
+                        let ts = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                        let lvl = v.get("level").and_then(|t| t.as_str()).unwrap_or("");
+                        let target = v.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                        let msg = v.get("message").and_then(|t| t.as_str()).unwrap_or("");
+                        let fields: Option<serde_json::Value> = v.get("fields").cloned();
+                        print!("[{}] {:<5} [{}] {}", ts, lvl, target, msg);
+                        if let Some(f) = &fields
+                            && !f.is_null()
+                            && !f.as_object().map(|o| o.is_empty()).unwrap_or(true)
+                        {
+                            print!(" | {}", f);
+                        }
+                        println!();
+                        continue;
+                    }
+                    println!("{}", line);
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+fn clean_logs(dir: &std::path::Path) {
+    use std::fs;
+    use std::io::{self, Write};
+
+    if !dir.exists() {
+        println!("(目录不存在)");
+        return;
+    }
+
+    print!("确认要删除 {} 下的所有日志文件吗？(y/N): ", dir.display());
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let answer = input.trim().to_lowercase();
+    if answer != "y" && answer != "yes" {
+        println!("已取消");
+        return;
+    }
+
+    let mut count: usize = 0;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && let Some(name) = path.file_name().and_then(|s| s.to_str())
+                && name.starts_with("caelix.")
+                && name.ends_with(".log")
+            {
+                if fs::remove_file(&path).is_ok() {
+                    count += 1;
+                    println!("已删除: {}", name);
+                } else {
+                    eprintln!("删除失败: {}", name);
+                }
+            }
+        }
+    }
+    println!("共删除 {} 个文件", count);
 }

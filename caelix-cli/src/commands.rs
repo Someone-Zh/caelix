@@ -48,6 +48,9 @@ pub enum CaelixCommand {
 
     #[command(about = "记忆管理")]
     Memory(MemoryArgs),
+
+    #[command(about = "日志管理")]
+    Logs(LogsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -444,6 +447,30 @@ pub enum MemoryAction {
     },
     #[command(about = "查看 LLM 预算使用情况")]
     Budget,
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = doc::LOGS_HELP)]
+pub struct LogsArgs {
+    #[command(subcommand)]
+    pub action: Option<LogsAction>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LogsAction {
+    #[command(about = "显示日志目录路径")]
+    Dir,
+    #[command(about = "列出所有日志文件")]
+    Ls,
+    #[command(about = "显示当前日志最后 N 行 (默认 50)")]
+    Show {
+        #[arg(short = 'n', default_value_t = 50, help = "显示的行数")]
+        n: usize,
+    },
+    #[command(about = "实时跟随当前日志 (Ctrl+C 退出)")]
+    Follow,
+    #[command(about = "删除所有日志文件")]
+    Clean,
 }
 
 pub fn print_help_for(cmd: &str) {

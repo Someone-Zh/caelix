@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 caelix-api = { path = "../caelix-api" }
+caelix-config = { path = "../caelix-config" }
 caelix-service = { path = "../caelix-service" }
 caelix-message = { path = "../caelix-message" }
 tokio.workspace = true
